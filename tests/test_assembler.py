@@ -35,6 +35,13 @@ def test_illegal_bytes():
     assert asm.assemble("ANC #$80") == [0x0B, 0x80]
 
 
+def test_legal_mnemonic_prefers_legal_opcode():
+    """A mnemonic shared by legal and illegal opcodes assembles to the legal one."""
+    asm = Assembler(MPU())
+    assert asm.assemble("NOP") == [0xEA]  # not the illegal 0x1A
+    assert asm.assemble("SBC #$10") == [0xE9, 0x10]  # not the illegal 0xEB
+
+
 def test_syntax_error():
     asm = Assembler(MPU())
     with pytest.raises(SyntaxError):

@@ -6,6 +6,7 @@ jennings every illegal mnemonic (SLO, LAX, ISC, ...) assembles like a legal one.
 
 import re
 
+from jennings.opcodes import ILLEGAL_OPCODES
 from jennings.utils.addressing import AddressParser
 
 
@@ -41,6 +42,12 @@ class Assembler:
             pat = pat.replace("00", "0{%d}" % numchars)
             pat = pat.replace("FF", "([0-9A-F]{%d})" % numchars)
             self._addressing.append([mode, re.compile(pat)])
+        # (mnemonic, mode) -> opcode, preferring the legal opcode (NOP -> 0xEA, not 0x1A).
+        self._encode = {}
+        for op, entry in enumerate(mpu.disassemble):
+            cur = self._encode.get(entry)
+            if cur is None or (cur in ILLEGAL_OPCODES and op not in ILLEGAL_OPCODES):
+                self._encode[entry] = op
 
     def assemble(self, statement, pc=0x0000):
         """Assemble ``statement`` to a list of bytes; raise on failure."""
@@ -49,10 +56,10 @@ class Assembler:
             match = pattern.match(operand)
             if not match:
                 continue
-            try:
-                result = [self._mpu.disassemble.index((opcode, mode))]
-            except ValueError:
+            op = self._encode.get((opcode, mode))
+            if op is None:
                 continue
+            result = [op]
             operands = match.groups()
             if mode == "rel":
                 absolute = int("".join(operands), 16)
