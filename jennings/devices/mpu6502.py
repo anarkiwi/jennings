@@ -203,7 +203,11 @@ class MPU:
     def step(self):
         pc = self.pc & self.addrMask
         if self._memory[pc] in _JAM:
+            # JAM/KIL: flag lock-up, skip a byte + charge cycles (py65-style) so drivers don't hang.
             self.jammed = True
+            self.pc = (pc + 1) & self.addrMask
+            self._vm.cycles += 2
+            self.processorCycles += 2
             return self
         before = self._vm.cycles
         self.pc = self._vm.step(pc, self._cache, lift)
