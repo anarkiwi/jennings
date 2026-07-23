@@ -1,0 +1,73 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jennings"
+version = "0.1.0"
+description = "py65-compatible 6502/6510 MPU, assembler, and disassembler with first-class NMOS illegal-opcode support."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Josh Bailey", email = "josh@overlyspecific.com" }]
+keywords = ["6502", "6510", "c64", "py65", "emulator", "assembler", "disassembler", "illegal-opcodes"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: POSIX :: Linux",
+    "License :: OSI Approved :: Apache Software License",
+    "Topic :: Software Development :: Assemblers",
+    "Topic :: Software Development :: Disassemblers",
+    "Topic :: System :: Emulators",
+]
+dependencies = ["deity-informant>=0.3.5"]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-xdist", "pytest-cov", "build", "black", "pylint", "py65", "numpy"]
+
+[project.urls]
+Homepage = "https://github.com/anarkiwi/jennings"
+Repository = "https://github.com/anarkiwi/jennings"
+
+[tool.setuptools.packages.find]
+include = ["jennings*"]
+
+[tool.coverage.run]
+source = ["jennings"]
+
+[tool.black]
+line-length = 100
+
+[tool.pylint.main]
+jobs = 0
+
+[tool.pylint.format]
+max-line-length = 100
+
+[tool.pylint.basic]
+good-names = ["a", "x", "y", "v", "p", "r", "d", "mn", "md", "op", "pc", "cb"]
+
+[tool.pylint."messages control"]
+disable = [
+    "missing-module-docstring",
+    "missing-class-docstring",
+    "missing-function-docstring",
+    "too-few-public-methods",
+    "too-many-locals",
+    "too-many-branches",
+    "too-many-statements",
+    "too-many-return-statements",
+    "invalid-name",
+    "consider-using-f-string",
+    "too-many-instance-attributes",
+    "too-many-arguments",
+    "too-many-positional-arguments",
+    "redefined-builtin",
+    "protected-access",
+    "unused-argument",
+    "duplicate-code",
+    "raise-missing-from",
+]

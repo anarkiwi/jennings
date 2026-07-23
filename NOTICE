@@ -1,0 +1,14 @@
+jennings
+Copyright 2026 Josh Bailey
+
+Licensed under the Apache License, Version 2.0 (the "LICENSE" file).
+
+This product is an independent, clean-room reimplementation of the public API of
+py65 (https://github.com/mnaberez/py65, BSD-3-Clause, Copyright Mike Naberezny
+and contributors). No py65 source code is included or derived; jennings only
+reproduces the observable API so callers can migrate by changing imports.
+
+Instruction execution is delegated to deity-informant
+(https://github.com/anarkiwi/deity-informant, Apache-2.0), whose lifter/VM
+implement 6510 semantics — including the illegal opcodes — per "No More Secrets —
+NMOS 6510 Unintended Opcodes" and validated byte-exact against sidplayfp.
