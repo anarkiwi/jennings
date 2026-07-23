@@ -28,8 +28,11 @@ semantics a third time — keeps jennings small and inherits that validation.
 
 ## JAM
 
-The 12 NMOS JAM/KIL opcodes lock the CPU. `MPU.step()` detects them, sets
-`mpu.jammed`, and leaves `pc` unchanged (a re-fetch loop), rather than raising.
+The 12 NMOS JAM/KIL opcodes lock up real hardware. `MPU.step()` detects them and
+sets `mpu.jammed`, but — matching py65 and keeping cycle-bounded drivers safe — it
+skips one byte and charges cycles rather than freezing `pc` (a frozen `pc` with a
+frozen cycle counter defeats cycle caps and hangs run-to-RTS loops). Callers that
+care about the lock-up can inspect `mpu.jammed`.
 
 ## Non-goals
 

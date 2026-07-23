@@ -134,12 +134,14 @@ def test_sh_group_high_byte_and():
     assert mpu.memory[0x2004] == (0xFF & 0xFF & 0x21)
 
 
-def test_jam_freezes_pc():
+def test_jam_flags_and_advances():
     mpu = MPU()
     mpu.memory[0x1000] = 0x02  # JAM
     mpu.pc = 0x1000
+    c = mpu.processorCycles
     mpu.step()
-    assert mpu.jammed and mpu.pc == 0x1000
+    # Flags the lock-up but advances (py65-style) so cycle-bounded drivers don't hang.
+    assert mpu.jammed and mpu.pc == 0x1001 and mpu.processorCycles > c
 
 
 def test_all_illegals_execute():
