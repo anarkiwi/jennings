@@ -5,36 +5,22 @@ A py65-compatible ``MPU`` over deity-informant's hardware-validated ``lift`` +
 execute byte- and cycle-exact. Drop-in for ``py65.devices.mpu6502.MPU``.
 """
 
-from deity_informant import lift, PcodeVM, OPS, CYCLETIME, EXTRACYCLES, ILLEGAL_OPCODES
+from deity_informant import lift, PcodeVM, CYCLETIME, EXTRACYCLES
+from jennings.opcodes import OPCODES, ILLEGAL_OPCODES, MODE_TOKEN
 
-# deity-informant addressing-mode name -> py65 disassembler mode token.
-_MODE_TOKEN = {
-    "imm": "imm",
-    "zp": "zpg",
-    "zpx": "zpx",
-    "zpy": "zpy",
-    "abs": "abs",
-    "absx": "abx",
-    "absy": "aby",
-    "indx": "inx",
-    "indy": "iny",
-    "acc": "acc",
-    "impl": "imp",
-    "rel": "rel",
-    "ind": "ind",
-}
+__all__ = ["MPU", "ILLEGAL_OPCODES"]
 
 # PcodeVM.reg indices: 0-3 A/X/Y/SP; flags C/Z/I/D/B/V/N at 8-14.
 _A, _X, _Y, _SP = 0, 1, 2, 3
 _FC, _FZ, _FI, _FD, _FB, _FV, _FN = 8, 9, 10, 11, 12, 13, 14
 
-_JAM = frozenset(op for op, (mn, _md) in OPS.items() if mn == "JAM")
+_JAM = frozenset(op for op, (mn, _md) in OPCODES.items() if mn == "JAM")
 
 
 def _disassemble_table():
     tbl = [("???", "imp")] * 256
-    for op, (mn, mode) in OPS.items():
-        tbl[op] = (mn, _MODE_TOKEN[mode])
+    for op, (mn, mode) in OPCODES.items():
+        tbl[op] = (mn, MODE_TOKEN[mode])
     return tbl
 
 
@@ -240,6 +226,3 @@ class MPU:
             self.sp,
             flags,
         )
-
-
-ILLEGAL_OPCODES = frozenset(ILLEGAL_OPCODES)
