@@ -9,12 +9,19 @@ import numpy as np
 import pytest
 
 from jennings.devices.mpu6502 import MPU
+from jennings.opcodes import OPCODES, MODE_LEN
 
 py65 = pytest.importorskip("py65.devices.mpu6502")
 
 PC = 0x0800
 ITERS = 60
 NAMES = ("A", "X", "Y", "SP", "C", "Z", "I", "D", "V", "N", "PC")
+
+# py65 charges $CE DEC abs 3; the NMOS 6510 takes 6, like every RMW absolute.
+PY65_CYCLE_DEFECT = {0xCE: 3}
+
+RMW_MN = {"ASL", "ROL", "LSR", "ROR", "DEC", "INC", "SLO", "RLA", "SRE", "RRA", "DCP", "ISC"}
+RMW_COST = {"zp": 5, "zpx": 6, "abs": 6, "absx": 7, "absy": 7, "indx": 8, "indy": 8}
 
 
 def _flags(p):
@@ -64,6 +71,7 @@ def test_legal_opcodes_match_py65():
             except IndexError:
                 continue  # py65 cannot index the top-of-memory wrap; skip both
             vst, vcyc, vmem = _run(vm, bytearray(mem), a, x, y, sp, p)
+            rcyc += PY65_CYCLE_DEFECT.get(op, 0)
             if rst == vst and rmem == vmem and rcyc == vcyc:
                 continue
             if op not in bad:
@@ -79,6 +87,37 @@ def test_legal_opcodes_match_py65():
                     diffs.append("cyc ref=%d vm=%d" % (rcyc, vcyc))
                 bad[op] = "op %02X: %s" % (op, "; ".join(diffs))
     assert not bad, "mismatches:\n" + "\n".join(bad[o] for o in sorted(bad))
+
+
+def _step_cost(mpu, prog, org=PC):
+    """Cycles the MPU charges for a single step of ``prog`` at ``org``."""
+    mpu.memory[:] = bytearray(0x10000)
+    mpu.memory[org : org + len(prog)] = prog
+    mpu.a = mpu.x = mpu.y = 0
+    mpu.pc, mpu.processorCycles = org, 0
+    mpu.step()
+    return mpu.processorCycles
+
+
+def test_dec_abs_costs_six():
+    """$CE was 3, inherited from py65; MOS Programming Manual App. B says 6."""
+    assert _step_cost(MPU(memory=bytearray(0x10000)), [0xCE, 0x34, 0x12]) == 6
+
+
+def test_rmw_costs_by_addressing_mode():
+    """Every RMW opcode, legal and illegal, executed: cost is the mode's alone."""
+    mpu = MPU(memory=bytearray(0x10000))
+    got = {
+        "$%02X %s %s"
+        % (op, mn, md): (
+            _step_cost(mpu, [op, 0x34, 0x12][: MODE_LEN[md]]),
+            RMW_COST[md],
+        )
+        for op, (mn, md) in sorted(OPCODES.items())
+        if mn in RMW_MN and md in RMW_COST
+    }
+    assert len(got) == 66
+    assert not {k: v for k, v in got.items() if v[0] != v[1]}
 
 
 def test_reset_and_registers():
