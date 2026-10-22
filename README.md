@@ -30,7 +30,14 @@ mpu.step()                               # a, x <- mem[$10]; cycle-exact
 
 Assembler(MPU()).assemble("SLO $20")     # [0x07, 0x20]
 Disassembler(MPU()).instruction_at(pc)   # (len, "SLO $20")
+
+from jennings import dataflow
+dataflow.flow(mem, pc, loads=[0x1236])   # ADC $1234,X: {"A": {"A", "C", "X", 0x1236}, ...}
 ```
+
+`jennings.dataflow.flow` reads each instruction's output-to-input dependencies
+(registers, flags, memory bytes, a branch's condition) off the same lifted pcode the
+MPU executes, given the addresses an observed run accessed.
 
 ## Compatibility
 
