@@ -26,7 +26,9 @@ classifiers = [
 dependencies = ["deity-informant>=0.4.1"]
 
 [project.optional-dependencies]
-dev = ["pytest", "pytest-xdist", "pytest-cov", "build", "black", "pylint", "py65", "numpy"]
+superopt = ["z3-solver>=4.12", "numpy>=1.23"]
+cuda = ["z3-solver>=4.12", "numpy>=1.23", "cupy-cuda12x>=13"]
+dev = ["pytest", "pytest-xdist", "pytest-cov", "build", "black", "pylint", "py65", "numpy", "z3-solver>=4.12"]
 
 [project.urls]
 Homepage = "https://github.com/anarkiwi/jennings"
@@ -37,6 +39,7 @@ include = ["jennings*"]
 
 [tool.coverage.run]
 source = ["jennings"]
+omit = ["jennings/superopt/cuda.py"]
 
 [tool.black]
 line-length = 100
