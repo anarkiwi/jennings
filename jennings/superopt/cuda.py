@@ -5,7 +5,7 @@ the same pruning and semantics as :meth:`~.search.Search.candidates`."""
 
 import functools
 
-import cupy as cp
+import cupy as cp  # pylint: disable=import-error
 import numpy as np
 
 from jennings.superopt.alphabet import MNEMONICS

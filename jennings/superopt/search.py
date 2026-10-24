@@ -312,7 +312,7 @@ def search(problem: Problem, *, backend="auto", max_bytes=None, max_length=8, **
 def cuda_available() -> bool:
     """Whether CuPy and a CUDA device are present."""
     try:
-        import cupy  # pylint: disable=import-outside-toplevel
+        import cupy  # pylint: disable=import-outside-toplevel,import-error
 
         return cupy.cuda.runtime.getDeviceCount() > 0  # pylint: disable=c-extension-no-member
     except Exception:  # pylint: disable=broad-exception-caught
