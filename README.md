@@ -35,6 +35,11 @@ from jennings import dataflow
 dataflow.flow(mem, pc, loads=[0x1236])   # ADC $1234,X: {"A": {"A", "C", "X", 0x1236}, ...}
 ```
 
+`jennings.superopt` finds the minimal equivalent of straight-line code for a given spec
+(live-in variables, tables and parameters, live-out locations): z3 semantics from the same
+p-code, an enumerative search on test vectors (numpy, or CUDA with `pip install
+jennings[cuda]`), and a z3 proof of the result. See [docs/superopt.md](docs/superopt.md).
+
 `jennings.dataflow.flow` reads each instruction's output-to-input dependencies
 (registers, flags, memory bytes, a branch's condition) off the same lifted pcode the
 MPU executes, given the addresses an observed run accessed.

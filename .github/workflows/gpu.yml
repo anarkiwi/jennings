@@ -1,0 +1,12 @@
+name: gpu
+
+on:
+  workflow_dispatch:
+
+jobs:
+  cuda:
+    runs-on: [self-hosted, gpu]
+    steps:
+      - uses: actions/checkout@v7
+      - run: docker build -f docker/cuda.Dockerfile -t jennings-cuda .
+      - run: docker run --rm --gpus all jennings-cuda
