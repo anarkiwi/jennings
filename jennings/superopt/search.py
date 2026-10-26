@@ -274,9 +274,14 @@ def search(problem: Problem, *, backend="auto", max_bytes=None, max_length=8, **
     if backend == "auto":
         backend = "cuda" if cuda_available() else "numpy"
     if backend == "cuda":
-        from jennings.superopt.cuda import (  # pylint: disable=import-outside-toplevel
-            candidates as gpu_candidates,
-        )
+        try:
+            from jennings.superopt.cuda import (  # pylint: disable=import-outside-toplevel
+                candidates as gpu_candidates,
+            )
+        except ImportError as err:
+            raise RuntimeError(
+                "backend 'cuda' needs CuPy: pip install jennings[cuda] (or use backend='numpy')"
+            ) from err
 
         def find(n, budget):
             return gpu_candidates(state, n, budget)
