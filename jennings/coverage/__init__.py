@@ -46,6 +46,13 @@ def _unpairs(arr):
     return set(map(tuple, arr.tolist()))
 
 
+def _mark_vector(cov, ptr):
+    """Flag the two pointer bytes an indirect jump or interrupt entry reads (NMOS page wrap)."""
+    f = cov._fv
+    f[ptr] |= READ
+    f[(ptr & 0xFF00) | ((ptr + 1) & 0xFF)] |= READ
+
+
 class CoverageMap:
     """Per-address ``flags`` (uint8) and ``hits`` (uint32), dynamic ``edges`` and
     interrupt ``entries`` as ``(source, target)`` / ``(vector, target)`` sets."""
@@ -127,7 +134,14 @@ class CoverageVM(PcodeVM):
 
     def step(self, pc, cache, lifter):
         self.cur_pc = pc
-        n, br, dyn = _INFO[self.mem[pc]]
+        mem = self.mem
+        op = mem[pc]
+        n, br, dyn = _INFO[op]
+        if op == 0x6C:
+            ptr = mem[(pc + 1) & 0xFFFF] | (mem[(pc + 2) & 0xFFFF] << 8)
+            _mark_vector(self.cov, ptr)
+        elif op == 0x00:
+            _mark_vector(self.cov, 0xFFFE)
         nxt = PcodeVM.step(self, pc, cache, lifter)
         cov = self.cov
         f = cov._fv
@@ -166,8 +180,10 @@ class CoverageMPU(MPU):
     def irq(self):
         if not self.p & self.INTERRUPT:
             super().irq()
+            _mark_vector(self.cov, self.IRQ)
             self.cov.entries.add((self.IRQ, self.pc))
 
     def nmi(self):
         super().nmi()
+        _mark_vector(self.cov, self.NMI)
         self.cov.entries.add((self.NMI, self.pc))

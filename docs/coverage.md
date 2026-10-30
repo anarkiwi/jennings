@@ -50,6 +50,7 @@ vm.cov
 
 Branch direction comes from the opcode's tested flag, so a zero-offset branch is still
 classified. `READ`/`WRITE` cover the instruction's own data accesses (including `PHA`/`PHP`
-pushes and `PLA`/`PLP` pulls); opcode fetch, `JMP (ind)` pointer reads, and the stack
-traffic of `JSR`/`RTS`/`RTI`/`BRK` and interrupt entry are not flagged.
+pushes and `PLA`/`PLP` pulls) and the pointer bytes read by `JMP (ind)` (with the NMOS
+page wrap), `BRK`, and taken IRQ/NMI entries; opcode fetch and the return-address/status
+stack traffic of `JSR`/`RTS`/`RTI`/`BRK` and interrupt entry are not flagged.
 `save` writes one `.npz`; `CoverageMap.load` reads it back.

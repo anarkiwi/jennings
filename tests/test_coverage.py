@@ -124,6 +124,17 @@ def test_jmp_indirect_edge():
     assert mpu.pc == 0x0900
     assert mpu.cov.edges == {(ORG, 0x0900)}
     assert mpu.cov.flags[ORG + 1] == OPERAND and mpu.cov.flags[ORG + 2] == OPERAND
+    assert mpu.cov.flags[0x3000] == READ and mpu.cov.flags[0x3001] == READ
+
+
+def test_jmp_indirect_page_wrap_pointer_read():
+    mpu, _ = _mpu(["JMP ($30FF)"])
+    mpu.memory[0x30FF] = 0x00
+    mpu.memory[0x3000] = 0x09
+    mpu.step()
+    assert mpu.pc == 0x0900
+    assert mpu.cov.flags[0x30FF] == READ and mpu.cov.flags[0x3000] == READ
+    assert not mpu.cov.flags[0x3100]
 
 
 def test_jsr_rts():
@@ -161,6 +172,7 @@ def test_irq_taken_and_masked():
     mpu.irq()
     assert mpu.pc == 0x0A00
     assert mpu.cov.entries == {(MPU.IRQ, 0x0A00)}
+    assert mpu.cov.flags[0xFFFE] == READ and mpu.cov.flags[0xFFFF] == READ
     mpu.step()
     assert mpu.pc == ORG
     assert mpu.cov.edges == {(0x0A00, ORG)}
@@ -173,6 +185,7 @@ def test_nmi():
     mpu.nmi()
     mpu.step()
     assert mpu.cov.entries == {(MPU.NMI, 0x0B00)}
+    assert mpu.cov.flags[0xFFFA] & READ and mpu.cov.flags[0xFFFB] & READ
     assert mpu.cov.edges == {(0x0B00, ORG)}
 
 
@@ -182,6 +195,7 @@ def test_brk_edge():
     mpu.memory[ORG] = 0x00
     mpu.step()
     assert mpu.cov.edges == {(ORG, 0x0A00)}
+    assert mpu.cov.flags[0xFFFE] & READ and mpu.cov.flags[0xFFFF] & READ
 
 
 def test_jam_and_reset_keeps_map():
