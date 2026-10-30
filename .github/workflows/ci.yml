@@ -21,3 +21,14 @@ jobs:
         run: pylint jennings/
       - name: Test
         run: pytest tests/ -n auto --cov=jennings --cov-fail-under=85
+
+  sidplayer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build fixture
+        run: >-
+          docker build --target artifacts
+          --output type=local,dest=tests/fixtures/sidplayer tests/fixtures/sidplayer
+      - name: Check committed fixture is current
+        run: git diff --exit-code tests/fixtures/sidplayer

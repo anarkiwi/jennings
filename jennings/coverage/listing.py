@@ -3,18 +3,15 @@ points and observed execution, one instruction per source line, with a ``.jcov``
 
 import numpy as np
 
-from jennings.coverage import EXEC, FALLTHRU, TAKEN
+from jennings.coverage import EXEC
+from jennings.coverage.cfg import LEN, successors
 from jennings.coverage.plugin import save_sidecar
-from jennings.devices.mpu6502 import MPU, _JAM
+from jennings.devices.mpu6502 import MPU
 from jennings.disassembler import Disassembler
-from jennings.isa import is_branch, length, s8
 from jennings.utils.addressing import AddressParser
 
 __all__ = ["Listing"]
 
-_LEN = np.array([length(op) for op in range(256)], np.int64)
-_EXIT = frozenset((0x00, 0x40, 0x60, 0x6C)) | _JAM
-_JMP, _JSR = 0x4C, 0x20
 _DATA_ROW = 8
 
 
@@ -25,22 +22,6 @@ class _Labels(AddressParser):
 
     def label_for(self, address, default=None):
         return self._names.get(address, default)
-
-
-def _successors(m, a):
-    """``([(flag, target)], jump_target, callee)`` static flow of the instruction at ``a``."""
-    op = int(m[a])
-    nxt = (a + int(_LEN[op])) & 0xFFFF
-    lo = int(m[(a + 1) & 0xFFFF])
-    word = lo | int(m[(a + 2) & 0xFFFF]) << 8
-    if is_branch(op):
-        t = (nxt + s8(lo)) & 0xFFFF
-        return [(FALLTHRU, nxt), (TAKEN, t)], t, None
-    if op == _JMP:
-        return [(EXEC, word)], word, None
-    if op in _EXIT:
-        return [], None, None
-    return [(EXEC, nxt)], None, word if op == _JSR else None
 
 
 class Listing:
@@ -76,7 +57,7 @@ class Listing:
             roots |= {t for _, t in cov.entries}
             seeds = {t for _, t in cov.edges}
         owned = np.zeros(0x10000, bool)
-        span = _LEN[m[execd]]
+        span = LEN[m[execd]]
         for k in range(3):
             owned[(execd[span > k] + k) & 0xFFFF] = True
         forced = set(execd.tolist())
@@ -87,11 +68,11 @@ class Listing:
             if a in succ:
                 continue
             if a not in forced:
-                cells = (a + np.arange(_LEN[m[a]])) & 0xFFFF
+                cells = (a + np.arange(LEN[m[a]])) & 0xFFFF
                 if owned[cells].any():
                     continue
                 owned[cells] = True
-            out, jump, callee = _successors(m, a)
+            out, jump, callee = successors(m, a)
             succ[a] = out
             stack.extend(t for _, t in reversed(out))
             jumps.add(jump)

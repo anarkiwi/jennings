@@ -12,3 +12,7 @@ updates:
     directory: "/docker"
     schedule:
       interval: weekly
+  - package-ecosystem: docker
+    directory: "/tests/fixtures/sidplayer"
+    schedule:
+      interval: weekly

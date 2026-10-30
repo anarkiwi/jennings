@@ -18,12 +18,15 @@ __all__ = [
     "FALLTHRU",
     "READ",
     "WRITE",
+    "RETURN",
     "CoverageMap",
     "CoverageVM",
     "CoverageMPU",
+    "call",
 ]
 
 EXEC, OPERAND, TAKEN, FALLTHRU, READ, WRITE = 1, 2, 4, 8, 16, 32
+RETURN = 0x0000
 
 # Branch opcode bits 7-6 select the flag (N, V, C, Z reg index); bit 5 is the value that branches.
 _BRANCH_FLAG = (14, 13, 8, 9)
@@ -187,3 +190,16 @@ class CoverageMPU(MPU):
         super().nmi()
         _mark_vector(self.cov, self.NMI)
         self.cov.entries.add((self.NMI, self.pc))
+
+
+def call(mpu, addr, a=0, x=0, y=0, max_steps=1_000_000):
+    """Run the subroutine at ``addr`` with registers ``a``/``x``/``y`` until it returns to the
+    sentinel return address ``RETURN`` it pushed; ``RuntimeError`` after ``max_steps``."""
+    sp = mpu.sp
+    mpu._push_word((RETURN - 1) & 0xFFFF)
+    mpu.a, mpu.x, mpu.y, mpu.pc = a, x, y, addr
+    for _ in range(max_steps):
+        mpu.step()
+        if mpu.pc == RETURN and mpu.sp == sp:
+            return mpu
+    raise RuntimeError("$%04X did not return within %d steps" % (addr, max_steps))
