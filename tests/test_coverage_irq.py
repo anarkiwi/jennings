@@ -100,6 +100,32 @@ def test_raster_obligations_need_every_interrupt(raster):
     assert (lb["h3"] + 2, 0xFFFE, lb["h1"]) in cov.defuse
 
 
+def test_stack_pushes_attributed(raster):
+    mem, lb, smc = raster
+    assert smc.writers[0xFFFE].targets == {0x01FE, 0x01FF, 0x0100}
+    mem = mem.copy()
+    mem[0x0C00:0x0C04] = [0x20, 0x10, 0x0C, 0x00]
+    mem[0x0C10] = 0x60
+    mem[0xFFFE:] = [lb["h1"] & 0xFF, lb["h1"] >> 8]
+    mpu = CoverageMPU(memory=mem.tolist(), pc=0x0C00)
+    lw = mpu._vm.last_writer
+
+    def frame(n):
+        return [0x100 | ((mpu.sp + k) & 0xFF) for k in range(1, n + 1)]
+
+    mpu.step()
+    assert (lw[frame(2)] == 0x0C00).all()
+    mpu.step()
+    mpu.step()
+    assert mpu.pc == lb["h1"] and (lw[frame(3)] == 0x0C03).all()
+    mpu.nmi()
+    assert (lw[frame(3)] == 0xFFFA).all()
+    mpu.p &= ~mpu.INTERRUPT
+    mpu.irq()
+    assert (lw[frame(3)] == 0xFFFE).all()
+    assert not mpu.cov.flags[frame(3)].any()
+
+
 def test_raster_listing(raster, tmp_path):
     _, lb, smc = raster
     text = write_obligations(smc, tmp_path / "smc.txt", {0xFFFE: "irqlo"}).read_text()

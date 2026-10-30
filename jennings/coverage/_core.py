@@ -25,7 +25,7 @@ RETURN = 0x0000
 
 # Branch opcode bits 7-6 select the flag (N, V, C, Z reg index); bit 5 is the value that branches.
 _BRANCH_FLAG = (14, 13, 8, 9)
-_DYNAMIC = frozenset((0x00, 0x40, 0x60, 0x6C))  # BRK, RTI, RTS, JMP (ind)
+_DYNAMIC = frozenset((0x00, 0x20, 0x40, 0x60, 0x6C))  # BRK, JSR, RTI, RTS, JMP (ind)
 _INFO = tuple(
     (
         length(op),
@@ -127,7 +127,8 @@ class CoverageMap:
 
 class CoverageVM(PcodeVM):
     """``PcodeVM`` recording into ``cov``; ``cur_pc`` is the executing instruction and
-    ``last_writer`` (int32 per address, -1 for the image) the last instruction to store there;
+    ``last_writer`` (int32 per address, -1 for the image) the last instruction to store there
+    (the JSR or BRK for its stack pushes, the vector for an interrupt frame);
     ``vector_target`` ``{pointer: target}`` the last target consumed through each pointer."""
 
     __slots__ = ("cov", "cur_pc", "last_writer", "vector_target", "_lw")
@@ -161,6 +162,12 @@ class CoverageVM(PcodeVM):
         cells = [(pc + i) & 0xFFFF for i in range(n)]
         cov.variants.add((pc, sum(mem[c] << (8 * i) for i, c in enumerate(cells))))
         cov.defuse.update((lw[c], c, pc) for c in cells if lw[c] >= 0)
+
+    def pushed(self, writer, n):
+        """Attribute the ``n`` bytes just pushed below the stack pointer to ``writer``."""
+        sp, lw = self.reg[3], self._lw
+        for k in range(1, n + 1):
+            lw[0x100 | ((sp + k) & 0xFF)] = writer
 
     def consume(self, ptr, pc, target):
         """Record the instruction or interrupt at ``pc`` taking ``target`` from the pointer at
@@ -197,11 +204,15 @@ class CoverageVM(PcodeVM):
         if br:
             f[pc] |= TAKEN if self.reg[br[0]] == br[1] else FALLTHRU
         elif dyn:
+            if op == 0x20:
+                self.pushed(pc, 2)
+                return nxt
             cov.edges.add((pc, nxt))
             if op == 0x6C:
                 self.consume(mem[(pc + 1) & 0xFFFF] | (mem[(pc + 2) & 0xFFFF] << 8), pc, nxt)
             elif op == 0x00:
                 self.consume(0xFFFE, pc, nxt)
+                self.pushed(pc, 3)
         return nxt
 
 
@@ -229,11 +240,13 @@ class CoverageMPU(MPU):
     def irq(self):
         if not self.p & self.INTERRUPT:
             super().irq()
+            self._vm.pushed(self.IRQ, 3)
             self._vm.consume(self.IRQ, self.pc, self.pc)
             self.cov.entries.add((self.IRQ, self.pc))
 
     def nmi(self):
         super().nmi()
+        self._vm.pushed(self.NMI, 3)
         self._vm.consume(self.NMI, self.pc, self.pc)
         self.cov.entries.add((self.NMI, self.pc))
 

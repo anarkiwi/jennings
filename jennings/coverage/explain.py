@@ -256,6 +256,7 @@ def explain(run, cov, smcmap=None, symbols=None, progress=False):
     bt = cov.flags & (TAKEN | FALLTHRU)
     half = set(np.flatnonzero((bt == TAKEN) | (bt == FALLTHRU)).tolist())
     last = {rec[0]: i for i, rec in enumerate(trace) if rec[0] in half}
+    taken = {v for v, _ in cov.entries}
     out = []
     for pc in tqdm(sorted(last), desc="explain", unit="branch", disable=not progress):
         inputs, consts, pcs, writers = slice_of(trace, last[pc], initial=mpu._vm.initial)
@@ -263,7 +264,7 @@ def explain(run, cov, smcmap=None, symbols=None, progress=False):
         if smcmap is not None:
             mem = writers.keys() | {a for a in inputs if isinstance(a, int)}
             for w, wr in smcmap.writers.items():
-                if not cov.flags[w] & EXEC:
+                if not cov.flags[w] & EXEC and w not in taken:
                     for a in mem & wr.targets:
                         alts.setdefault(a, set()).add(w)
         alts = {a: frozenset(w) for a, w in alts.items()}
