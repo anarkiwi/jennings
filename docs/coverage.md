@@ -150,3 +150,47 @@ and CI fails if they differ:
 docker build --target artifacts --output type=local,dest=tests/fixtures/sidplayer \
     tests/fixtures/sidplayer
 ```
+
+## Static SMC analysis
+
+`jennings.coverage.smc.analyze` finds, without running the program, every instruction that can
+write each code byte and the values the byte can hold.
+
+```python
+from jennings.coverage.smc import analyze
+
+smc = analyze(mem, {syms["init"]: {"a": {0, 1}}, syms["play"]: {}}, cov=mpu.cov)
+smc.cells[syms["seq_rd"] + 1]     # Cell(writers={pc: exact}, values, classes, insns, data_dependent)
+smc.unresolved_transfers          # {pc: candidate targets} not followed (e.g. PHA/PHA/RTS tables)
+```
+
+Entries are addresses or `{addr: {"a": values, ..., "irq": bool}}`; unlisted registers and
+flags may hold anything. Each entry runs with SP `sp` (default `$FD`, as `call` leaves a fresh
+MPU) under a `call` frame (or an interrupt frame), and its return to `RETURN` is an exit.
+`cov` adds a `CoverageMap`'s executed addresses and edge/interrupt targets as entries in an
+unknown context (any registers, SP and stack), as `Listing.disassemble` seeds its walk.
+
+**Domain** (`jennings.coverage.vsa`). A value of `w` bytes is the exact set of integers it may
+hold (a `256**w`-bit mask); each pcode op is evaluated over the product of its input sets with
+the semantics of `PcodeVM`, and `step` adds the JSR/RTS/RTI/BRK stack traffic, so on singleton
+sets it is the concrete machine. Operand bytes enter through the lifter's `prov` tags, so a
+self-modified operand contributes every value its bytes may hold.
+
+**Fixpoint.** One joined state per instruction address: register sets, the bytes written along
+the paths since entry (others read the global set `VS(m)` = image byte ∪ every value any store
+may put at `m`), and the return addresses pushed by JSR/BRK/entry, tracked by offset above SP
+through pushes and pulls. A key absent on either side of a join is dropped. Growth of `VS`
+re-evaluates the instructions that read it; flags are sets, so a branch on a singleton flag
+has one feasible direction (`branches`).
+
+**Control flow** never follows computed data. Successors are static targets, RTS/RTI returns to
+addresses pushed by JSR/BRK/entry (to every call site), and the variants of code bytes that the
+image or constant stores put there. Any other target or opcode is recorded in
+`unresolved_transfers`/`unresolved_opcodes` with its candidates; a store whose address set is
+all of 64K is in `unresolved_stores` and changes no value set.
+
+**Cells.** For every written code byte: its writers (`exact` when the byte is the store's only
+target), `values` = `VS`, `classes` (`var` opcode, `ctrl` operand of JMP/JSR/branch/JMP (ind),
+`addr` operand of a memory-mode instruction, `imm` immediate) and the instructions it belongs
+to. `values` is exact unless `data_dependent` (a writer stores a computed value), where it is a
+sound superset.

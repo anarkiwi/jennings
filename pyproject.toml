@@ -27,9 +27,9 @@ dependencies = ["deity-informant>=0.4.1"]
 
 [project.optional-dependencies]
 superopt = ["z3-solver>=4.12", "numpy>=1.23"]
-coverage = ["numpy>=1.23", "coverage>=7.4", "pyelftools>=0.31"]
+coverage = ["numpy>=1.23", "coverage>=7.4", "pyelftools>=0.31", "tqdm>=4.60"]
 cuda = ["z3-solver>=4.12", "numpy>=1.23", "cupy-cuda12x>=13"]
-dev = ["pytest", "pytest-xdist", "pytest-cov", "coverage>=7.4", "pyelftools>=0.31", "build", "black", "pylint", "py65", "numpy", "z3-solver>=4.12"]
+dev = ["pytest", "pytest-xdist", "pytest-cov", "coverage>=7.4", "pyelftools>=0.31", "tqdm>=4.60", "build", "black", "pylint", "py65", "numpy", "z3-solver>=4.12"]
 
 [project.urls]
 Homepage = "https://github.com/anarkiwi/jennings"
