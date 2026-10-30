@@ -45,7 +45,8 @@ jennings[cuda]`), and a z3 proof of the result. See [docs/superopt.md](docs/supe
 MPU executes, given the addresses an observed run accessed.
 
 `jennings.coverage.CoverageMPU` records executed bytes, branch directions, data reads and
-writes, and dynamic control-flow edges. See [docs/coverage.md](docs/coverage.md).
+writes, and dynamic control-flow edges, reportable through coverage.py. See
+[docs/coverage.md](docs/coverage.md).
 
 ## Compatibility
 
