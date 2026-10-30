@@ -38,6 +38,9 @@ vm.cov
 | `hits` | `uint32[65536]`, executions of the instruction starting at each address |
 | `edges` | `{(src, dst)}` dynamic control transfers: `JMP (ind)`, `RTS`, `RTI`, `BRK` |
 | `entries` | `{(vector, target)}` interrupts taken through `CoverageMPU.irq`/`nmi` |
+| `variants` | `{(pc, bytes)}` instructions run with a written byte (bytes little-endian) |
+| `defuse` | `{(writer, cell, pc)}` code bytes run at `pc` whose last store was at `writer` |
+| `image` | `uint8[65536]`, 1 where an instruction ran with none of its bytes written |
 
 | flag | value | set on |
 |---|---|---|
@@ -53,7 +56,9 @@ classified. `READ`/`WRITE` cover the instruction's own data accesses (including 
 pushes and `PLA`/`PLP` pulls) and the pointer bytes read by `JMP (ind)` (with the NMOS
 page wrap), `BRK`, and taken IRQ/NMI entries; opcode fetch and the return-address/status
 stack traffic of `JSR`/`RTS`/`RTI`/`BRK` and interrupt entry are not flagged.
-`save` writes one `.npz`; `CoverageMap.load` reads it back.
+`CoverageVM.last_writer` (`int32[65536]`, -1 for the image) tracks the last instruction to
+store each byte, which `variants`, `defuse` and `image` are built from. `save` writes one
+`.npz`; `CoverageMap.load` reads it back (files without the newer keys load with them empty).
 
 ## Reporting
 
@@ -149,4 +154,68 @@ and CI fails if they differ:
 ```bash
 docker build --target artifacts --output type=local,dest=tests/fixtures/sidplayer \
     tests/fixtures/sidplayer
+```
+
+## Static SMC analysis
+
+`jennings.coverage.smc.analyze` finds, without running the program, every instruction that can
+write each code byte and the values the byte can hold.
+
+```python
+from jennings.coverage.smc import analyze
+
+smc = analyze(mem, {syms["init"]: {"a": {0, 1}}, syms["play"]: {}}, cov=mpu.cov)
+smc.cells[syms["seq_rd"] + 1]     # Cell(writers={pc: exact}, values, classes, insns, data_dependent)
+smc.unresolved_transfers          # {pc: candidate targets} not followed (e.g. PHA/PHA/RTS tables)
+```
+
+Entries are addresses or `{addr: {"a": values, ..., "irq": bool}}`; unlisted registers and
+flags may hold anything. Each entry runs with SP `sp` (default `$FD`, as `call` leaves a fresh
+MPU) under a `call` frame (or an interrupt frame), and its return to `RETURN` is an exit.
+`cov` adds a `CoverageMap`'s executed addresses and edge/interrupt targets as entries in an
+unknown context (any registers, SP and stack), as `Listing.disassemble` seeds its walk.
+
+**Domain** (`jennings.coverage.vsa`). A value of `w` bytes is the exact set of integers it may
+hold (a `256**w`-bit mask); each pcode op is evaluated over the product of its input sets with
+the semantics of `PcodeVM`, and `step` adds the JSR/RTS/RTI/BRK stack traffic, so on singleton
+sets it is the concrete machine. Operand bytes enter through the lifter's `prov` tags, so a
+self-modified operand contributes every value its bytes may hold.
+
+**Fixpoint.** One joined state per instruction address: register sets, the bytes written along
+the paths since entry (others read the global set `VS(m)` = image byte ∪ every value any store
+may put at `m`), and the return addresses pushed by JSR/BRK/entry, tracked by offset above SP
+through pushes and pulls. A key absent on either side of a join is dropped. Growth of `VS`
+re-evaluates the instructions that read it; flags are sets, so a branch on a singleton flag
+has one feasible direction (`branches`).
+
+**Control flow** never follows computed data. Successors are static targets, RTS/RTI returns to
+addresses pushed by JSR/BRK/entry (to every call site), and the variants of code bytes that the
+image or constant stores put there. Any other target or opcode is recorded in
+`unresolved_transfers`/`unresolved_opcodes` with its candidates; a store whose address set is
+all of 64K is in `unresolved_stores` and changes no value set.
+
+**Cells.** For every written code byte: its writers (`exact` when the byte is the store's only
+target), `values` = `VS`, `classes` (`var` opcode, `ctrl` operand of JMP/JSR/branch/JMP (ind),
+`addr` operand of a memory-mode instruction, `imm` immediate) and the instructions it belongs
+to. `values` is exact unless `data_dependent` (a writer stores a computed value), where it is a
+sound superset.
+
+### SMC obligations
+
+`obligations(smc)` turns the cells into test obligations: for every cell and writer, the
+writer's value was executed (a `defuse` record); for cells that are not `data_dependent`,
+every executable variant was executed (`variants`, or for the image byte an `image` run of an
+instruction covering the cell). `write_obligations(smc, "smc.txt", labels)` writes one line per
+obligation and a sidecar whose `obligations` table (`[line, kind, cell, a, b]`, kinds as in
+`report.held`) `write_data` evaluates against a `CoverageMap`, so `coverage report
+--fail-under` gates SMC obligations alongside code. `check(smc, cov)` lists dynamic code writes
+the analysis did not predict (a writer outside W(cell), or an executed byte outside Var(cell)).
+
+```python
+from jennings.coverage.smc import analyze, check, write_obligations
+from jennings.coverage.report import write_data
+
+smc = analyze(mem, entries, cov=mpu.cov)
+assert not check(smc, mpu.cov)
+write_data(mpu.cov, [write_obligations(smc, "smc.txt", {0x1064: "seq_rd+1"}), "player.s"])
 ```
