@@ -1,6 +1,7 @@
 """coverage.py plugin reporting 6502 sources from their ``<source>.jcov`` sidecars
 (``lines`` [[line, address]], static ``arcs`` [[from, to]] and ``transitions``
-[[address, flag mask, from, to]]; see docs/coverage.md). Enable with
+[[address, flag mask, from, to]], ``obligations`` [[line, kind, cell, a, b]]; see
+docs/coverage.md). Enable with
 ``[run] plugins = jennings.coverage.plugin``."""
 
 import json
@@ -21,20 +22,21 @@ __all__ = [
 ]
 
 SIDECAR = ".jcov"
-_WIDTH = {"lines": 2, "arcs": 2, "transitions": 4}
+_WIDTH = {"lines": 2, "arcs": 2, "transitions": 4, "obligations": 5}
 
 
 def save_sidecar(source, **tables):
-    """Write ``tables`` (``lines``, ``arcs``, ``transitions``) next to ``source``."""
+    """Write ``tables`` (``lines``, ``arcs``, ``transitions``, optional ``obligations``)
+    next to ``source``."""
     with open(str(source) + SIDECAR, "w", encoding="utf-8") as f:
-        json.dump({k: np.asarray(tables[k]).tolist() for k in _WIDTH}, f)
+        json.dump({k: np.asarray(tables.get(k, [])).tolist() for k in _WIDTH}, f)
 
 
 def load_sidecar(source):
-    """Read the sidecar of ``source`` as ``{name: int64 array}``."""
+    """Read the sidecar of ``source`` as ``{name: int64 array}`` (absent tables empty)."""
     with open(str(source) + SIDECAR, encoding="utf-8") as f:
         raw = json.load(f)
-    return {k: np.array(raw[k], np.int64).reshape(-1, w) for k, w in _WIDTH.items()}
+    return {k: np.array(raw.get(k, []), np.int64).reshape(-1, w) for k, w in _WIDTH.items()}
 
 
 class FileReporter6502(coverage.FileReporter):

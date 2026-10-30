@@ -1,6 +1,8 @@
+import io
 from collections import defaultdict
 from pathlib import Path
 
+import coverage
 import numpy as np
 import pytest
 from deity_informant import PcodeVM, lift
@@ -18,7 +20,15 @@ from jennings.coverage import (
     vsa,
 )
 from jennings.coverage.elf import line_starts, load_elf
-from jennings.coverage.smc import Writer, analyze
+from jennings.coverage.report import held, write_data
+from jennings.coverage.smc import (
+    Writer,
+    analyze,
+    check,
+    obligation_rows,
+    obligations,
+    write_obligations,
+)
 from jennings.devices.mpu6502 import MPU
 
 ELF = Path(__file__).parent / "fixtures" / "sidplayer" / "sidplayer.prg.elf"
@@ -272,11 +282,11 @@ def _fixture():
         runs.append(mpu._vm)
         cov |= mpu.cov
     smc = analyze(mem, {syms["init"]: {"a": {0, 1}}, syms["play"]: {}}, cov=cov)
-    return mem, syms, smc, runs
+    return mem, syms, smc, runs, cov
 
 
 def test_fixture_dynamic_within_static(fixture):
-    _, _, smc, runs = fixture
+    _, _, smc, runs, _ = fixture
     names = {"a": 0, "x": 1, "y": 2, "sp": 3, "c": 8, "z": 9, "i": 10, "d": 11, "v": 13, "n": 14}
     code = {
         (pc + k) & 0xFFFF
@@ -298,7 +308,7 @@ def test_fixture_dynamic_within_static(fixture):
 
 
 def test_fixture_cells(fixture):
-    mem, syms, smc, runs = fixture
+    mem, syms, smc, runs, _ = fixture
     observed = defaultdict(set)
     for vm in runs:
         for _, addr, val in vm.writes:
@@ -320,3 +330,110 @@ def test_fixture_cells(fixture):
     assert not smc.unresolved_stores and not smc.unresolved_opcodes
     lines = line_starts(ELF, mem)
     assert set(smc.starts) <= set(lines)
+
+
+def _held(smc, cov):
+    return [(ob, held(rows, cov).any()) for ob, rows in obligation_rows(smc)]
+
+
+def _percent(path, cov, work):
+    data = work / ".cov6502"
+    write_data(cov, str(path), data_file=str(data))
+    rc = work / "rc"
+    rc.write_text("[run]\nplugins = jennings.coverage.plugin\nbranch = True\n")
+    c = coverage.Coverage(data_file=str(data), config_file=str(rc))
+    c.load()
+    return c.report(morfs=[str(path)], file=io.StringIO())
+
+
+def test_fixture_obligations(fixture, tmp_path):
+    mem, syms, smc, _, cov = fixture
+    obs = obligations(smc)
+    assert {(o.kind, o.cell) for o in obs} == {("def", a) for a in smc.cells}
+    assert all(h for _, h in _held(smc, cov))
+    labels = {syms[n] + k: "%s+%d" % (n, k) for n in ("seq_rd", "pat_rd", "sidw") for k in (1, 2)}
+    path = write_obligations(smc, tmp_path / "smc.txt", labels)
+    text = path.read_text()
+    assert "seq_rd+1" in text and "written by $%04X" % (syms["voice"] + 3) in text
+    assert _percent(path, cov, tmp_path) == 100.0
+    init = CoverageMap()
+    for song in (0, 1):
+        mpu = CoverageMPU(memory=mem.tolist())
+        call(mpu, syms["init"], a=song)
+        init |= mpu.cov
+    missing = {ob.writer for ob, h in _held(smc, init) if not h}
+    assert missing == {syms["fetch"] + 3, syms["fetch"] + 9, syms["voice"] + 3}
+    assert _percent(path, init, tmp_path) == 40.0
+
+
+def test_fixture_check_and_roundtrip(fixture, tmp_path):
+    _, syms, smc, _, cov = fixture
+    assert check(smc, cov) == []
+    cell = syms["sidw"] + 1
+    wrong = smc.cells[cell]._replace(writers={}, values=frozenset({0}))
+    bad = smc._replace(cells={**smc.cells, cell: wrong})
+    found = check(bad, cov)
+    assert ("writer", syms["voice"] + 3, cell) in found
+    assert {f[3] for f in found if f[0] == "value"} == {7, 14}
+    cov.save(tmp_path / "run")
+    loaded = CoverageMap.load(tmp_path / "run.npz")
+    assert loaded == cov and loaded.variants and loaded.defuse and loaded.image.any()
+    np.savez(
+        tmp_path / "old",
+        flags=cov.flags,
+        hits=cov.hits,
+        edges=np.zeros((0, 2)),
+        entries=np.zeros((0, 2)),
+    )
+    old = CoverageMap.load(tmp_path / "old.npz")
+    assert not old.variants and not old.defuse and not old.image.any()
+
+
+def _toggle():
+    mem, _ = _prog(
+        [
+            "CMP #$00",
+            "BEQ $080B",
+            "LDA #$20",
+            "STA $0811",
+            "BNE $0810",
+            "LDA #$28",
+            "STA $0811",
+            "JMP $0830",
+        ]
+    )
+    mem[0x0820] = mem[0x0828] = 0x60
+    return mem
+
+
+def test_toggle_variant_obligations(tmp_path):
+    mem = _toggle()
+    smc = analyze(mem, [ORG])
+    obs = obligations(smc)
+    assert [(o.kind, o.writer, o.value) for o in obs] == [
+        ("def", 0x0806, -1),
+        ("def", 0x080D, -1),
+        ("value", -1, 0x20),
+        ("value", -1, 0x28),
+    ]
+    mpu = CoverageMPU(memory=mem.tolist())
+    call(mpu, ORG, a=1)
+    one = [h for _, h in _held(smc, mpu.cov)]
+    assert one == [True, False, True, False]
+    path = write_obligations(smc, tmp_path / "toggle.txt")
+    assert _percent(path, mpu.cov, tmp_path) == 50.0
+    call(mpu, ORG, a=0)
+    assert all(h for _, h in _held(smc, mpu.cov)) and check(smc, mpu.cov) == []
+    assert _percent(path, mpu.cov, tmp_path) == 100.0
+
+
+def test_image_variant_obligation():
+    mem, _ = _prog(["LDA #$40", "STA $0807", "RTS", "LDA #$07", "RTS"])
+    smc = analyze(mem, [ORG, 0x0806])
+    assert smc.cells[0x0807].variants == {0x07, 0x40}
+    mpu = CoverageMPU(memory=mem.tolist())
+    call(mpu, 0x0806)
+    assert [h for _, h in _held(smc, mpu.cov)] == [False, True, False]
+    call(mpu, ORG)
+    call(mpu, 0x0806)
+    assert all(h for _, h in _held(smc, mpu.cov))

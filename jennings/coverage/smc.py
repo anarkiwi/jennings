@@ -12,11 +12,22 @@ from typing import NamedTuple
 import numpy as np
 
 from jennings.coverage import EXEC, RETURN, TAKEN
+from jennings.coverage.plugin import save_sidecar
 from jennings.coverage.vsa import TOP8, TOP16, bits, from_bool, from_values, is_single
 from jennings.coverage.vsa import rot, step, template, word
 from jennings.opcodes import MEM_MODES, MODE_LEN, OPCODES
 
-__all__ = ["Writer", "Cell", "SmcMap", "analyze"]
+__all__ = [
+    "Writer",
+    "Cell",
+    "SmcMap",
+    "Obligation",
+    "analyze",
+    "obligations",
+    "obligation_rows",
+    "write_obligations",
+    "check",
+]
 
 _REGS = {"a": 0, "x": 1, "y": 2, "c": 8, "z": 9, "i": 10, "d": 11, "v": 13, "n": 14}
 _CTRL = frozenset((0x20, 0x4C, 0x6C))
@@ -35,14 +46,16 @@ class Writer(NamedTuple):
 
 class Cell(NamedTuple):
     """A written code byte: ``writers`` ``{pc: exact}`` (``exact``: the cell is the store's
-    only target), ``values`` it may hold (exact unless ``data_dependent``: a writer stores
-    a computed value), ``classes`` and the ``(start, opcode)`` instructions it is part of."""
+    only target), ``values`` it may hold (exact unless ``data_dependent``: a writer stores a
+    computed value), ``variants`` it may hold when executed, ``image`` byte, ``classes``."""
 
     writers: dict
     values: frozenset
     classes: frozenset
     insns: frozenset
     data_dependent: bool
+    variants: frozenset
+    image: int
 
 
 class SmcMap(NamedTuple):
@@ -174,6 +187,7 @@ class _Analysis:
         self.unresolved = set()
         self.transfers = defaultdict(int)
         self.opcodes = defaultdict(int)
+        self.executed = defaultdict(int)
 
     def vs(self, a):
         return (1 << int(self.image[a])) | self.written.get(a, 0)
@@ -289,6 +303,9 @@ class _Analysis:
         for op in bits(ok).tolist():
             mem = _Mem(self, pc, st)
             kind = template(op).ctrl[0]
+            self.executed[pc] |= 1 << op
+            for k in range(1, _LEN[op]):
+                self.executed[(pc + k) & 0xFFFF] |= mem.byte((pc + k) & 0xFFFF)
             succ = step(op, pc, list(st.regs), mem)
             if kind == "next":
                 d = _PUSH.get(_MN[op], 0)
@@ -342,6 +359,8 @@ class _Analysis:
                     frozenset(_class(op, k) for _, op, k in ins),
                     frozenset((pc, op) for pc, op, _ in ins),
                     bool(self.data[a]),
+                    frozenset(bits(self.executed[a]).tolist()),
+                    int(self.image[a]),
                 )
         names = dict(_REGS, sp=3)
         return SmcMap(
@@ -381,3 +400,80 @@ def analyze(mem, entries, cov=None, sp=0xFD, progress=False):
         an.entry(addr, opts or {})
     an.run(progress)
     return an.result()
+
+
+class Obligation(NamedTuple):
+    """Something a run must show: ``kind`` ``"def"`` (``writer``'s value at ``cell`` was
+    executed) or ``"value"`` (``cell`` was executed holding ``value``); unused fields -1."""
+
+    kind: str
+    cell: int
+    writer: int
+    value: int
+
+
+def obligations(smc):
+    """All-defs obligations for every written code byte, and executed-variant obligations
+    for those whose writers store constants only."""
+    out = []
+    for a, cell in sorted(smc.cells.items()):
+        out += [Obligation("def", a, w, -1) for w in sorted(cell.writers)]
+        if not cell.data_dependent:
+            out += [Obligation("value", a, -1, v) for v in sorted(cell.variants)]
+    return out
+
+
+def obligation_rows(smc):
+    """``(Obligation, rows)``: sidecar rows ``[kind, cell, a, b]`` any of which satisfies it
+    (see ``jennings.coverage.report.held``); an image-byte variant also holds when an
+    instruction ``b`` covering the cell ran unwritten."""
+    for ob in obligations(smc):
+        if ob.kind == "def":
+            yield ob, [[0, ob.cell, ob.writer, -1]]
+            continue
+        rows = [[1, ob.cell, ob.value, -1]]
+        cell = smc.cells[ob.cell]
+        if ob.value == cell.image:
+            rows += [[2, ob.cell, ob.value, s] for s, _ in sorted(cell.insns)]
+        yield ob, rows
+
+
+def write_obligations(smc, path, labels=None):
+    """Write an obligation listing to ``path`` (one line per obligation, ``labels``
+    ``{address: name}`` naming cells) and its ``.jcov`` sidecar for the coverage.py plugin."""
+    labels = labels or {}
+    text, lines, table = [], [], []
+    for n, (ob, rows) in enumerate(obligation_rows(smc), 1):
+        cell = smc.cells[ob.cell]
+        what = (
+            "written by $%04X" % ob.writer if ob.kind == "def" else "executed as $%02X" % ob.value
+        )
+        text.append(
+            "$%04X  %-16s %-5s %s"
+            % (ob.cell, labels.get(ob.cell, ""), "/".join(sorted(cell.classes)), what)
+        )
+        lines.append([n, ob.cell])
+        table += [[n] + r for r in rows]
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(text) + "\n")
+    arcs = [[-n, n] for n, _ in lines] + [[n, -n] for n, _ in lines]
+    save_sidecar(path, lines=lines, arcs=arcs, transitions=[], obligations=table)
+    return path
+
+
+def check(smc, cov):
+    """Dynamic writes to static code bytes that ``smc`` did not predict: ``("writer", pc,
+    cell)`` for a writer outside W(cell), ``("value", pc, cell, byte)`` outside Var(cell)."""
+    code = {
+        (pc + k) & 0xFFFF for pc, ops in smc.starts.items() for op in ops for k in range(_LEN[op])
+    }
+    out = []
+    for w, c, _ in sorted(cov.defuse):
+        if c in code and (c not in smc.cells or w not in smc.cells[c].writers):
+            out.append(("writer", w, c))
+    for pc, packed in sorted(cov.variants):
+        for i in range(_LEN[packed & 0xFF]):
+            c, v = (pc + i) & 0xFFFF, (packed >> (8 * i)) & 0xFF
+            if c in smc.cells and v not in smc.cells[c].values:
+                out.append(("value", pc, c, v))
+    return out

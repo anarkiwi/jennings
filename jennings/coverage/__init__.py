@@ -41,12 +41,11 @@ _INFO = tuple(
 )
 
 
-def _pairs(s):
-    return np.array(sorted(s), dtype=np.uint16).reshape(-1, 2)
+_SETS = {"edges": 2, "entries": 2, "variants": 2, "defuse": 3}
 
 
-def _unpairs(arr):
-    return set(map(tuple, arr.tolist()))
+def _rows(s, w):
+    return np.array(sorted(s), dtype=np.int64).reshape(-1, w)
 
 
 def _mark_vector(cov, ptr):
@@ -58,24 +57,43 @@ def _mark_vector(cov, ptr):
 
 class CoverageMap:
     """Per-address ``flags`` (uint8) and ``hits`` (uint32), dynamic ``edges`` and
-    interrupt ``entries`` as ``(source, target)`` / ``(vector, target)`` sets."""
+    interrupt ``entries`` as ``(source, target)`` / ``(vector, target)`` sets, and for
+    self-modified code the executed ``variants`` ``(pc, bytes)`` (little-endian instruction
+    bytes, run with a written byte), ``defuse`` ``(writer, cell, pc)`` uses of written code
+    bytes and ``image`` (uint8, 1 where an instruction ran with none of its bytes written)."""
 
-    __slots__ = ("flags", "hits", "edges", "entries", "_fv", "_hv")
+    __slots__ = (
+        "flags",
+        "hits",
+        "image",
+        "edges",
+        "entries",
+        "variants",
+        "defuse",
+        "_fv",
+        "_hv",
+        "_iv",
+    )
 
     def __init__(self):
         self.flags = np.zeros(0x10000, np.uint8)
         self.hits = np.zeros(0x10000, np.uint32)
+        self.image = np.zeros(0x10000, np.uint8)
         self.edges = set()
         self.entries = set()
+        self.variants = set()
+        self.defuse = set()
         self._fv = memoryview(self.flags)
         self._hv = memoryview(self.hits)
+        self._iv = memoryview(self.image)
 
     def merge(self, other):
         """Accumulate ``other`` in place (OR flags, add hits, union sets)."""
         np.bitwise_or(self.flags, other.flags, out=self.flags)
         np.add(self.hits, other.hits, out=self.hits)
-        self.edges |= other.edges
-        self.entries |= other.entries
+        np.bitwise_or(self.image, other.image, out=self.image)
+        for k in _SETS:
+            getattr(self, k).update(getattr(other, k))
         return self
 
     __ior__ = merge
@@ -86,8 +104,8 @@ class CoverageMap:
             path,
             flags=self.flags,
             hits=self.hits,
-            edges=_pairs(self.edges),
-            entries=_pairs(self.entries),
+            image=self.image,
+            **{k: _rows(getattr(self, k), w) for k, w in _SETS.items()},
         )
 
     @classmethod
@@ -96,8 +114,11 @@ class CoverageMap:
         with np.load(path) as z:
             cov.flags[:] = z["flags"]
             cov.hits[:] = z["hits"]
-            cov.edges = _unpairs(z["edges"])
-            cov.entries = _unpairs(z["entries"])
+            if "image" in z:
+                cov.image[:] = z["image"]
+            for k in _SETS:
+                if k in z:
+                    setattr(cov, k, set(map(tuple, z[k].tolist())))
         return cov
 
     def __eq__(self, other):
@@ -106,22 +127,25 @@ class CoverageMap:
         return (
             np.array_equal(self.flags, other.flags)
             and np.array_equal(self.hits, other.hits)
-            and self.edges == other.edges
-            and self.entries == other.entries
+            and np.array_equal(self.image, other.image)
+            and all(getattr(self, k) == getattr(other, k) for k in _SETS)
         )
 
     __hash__ = None
 
 
 class CoverageVM(PcodeVM):
-    """``PcodeVM`` recording into ``cov``; ``cur_pc`` is the executing instruction."""
+    """``PcodeVM`` recording into ``cov``; ``cur_pc`` is the executing instruction and
+    ``last_writer`` (int32 per address, -1 for the image) the last instruction to store there."""
 
-    __slots__ = ("cov", "cur_pc")
+    __slots__ = ("cov", "cur_pc", "last_writer", "_lw")
 
     def __init__(self, mem_bytes, cov=None):
         super().__init__(mem_bytes)
         self.cov = CoverageMap() if cov is None else cov
         self.cur_pc = None
+        self.last_writer = np.full(0x10000, -1, np.int32)
+        self._lw = memoryview(self.last_writer)
 
     def _rd(self, addr, sz):
         f = self.cov._fv
@@ -130,16 +154,35 @@ class CoverageVM(PcodeVM):
         return PcodeVM._rd(self, addr, sz)
 
     def _wr(self, addr, val, sz):
-        f = self.cov._fv
+        f, lw = self.cov._fv, self._lw
+        pc = -1 if self.cur_pc is None else self.cur_pc
         for i in range(sz):
             f[(addr + i) & 0xFFFF] |= WRITE
+            lw[(addr + i) & 0xFFFF] = pc
         PcodeVM._wr(self, addr, val, sz)
+
+    def _uses(self, pc, n):
+        """Record the instruction at ``pc`` (``n`` bytes) as a variant and its written bytes'
+        def-use pairs."""
+        mem, lw, cov = self.mem, self._lw, self.cov
+        cells = [(pc + i) & 0xFFFF for i in range(n)]
+        cov.variants.add((pc, sum(mem[c] << (8 * i) for i, c in enumerate(cells))))
+        cov.defuse.update((lw[c], c, pc) for c in cells if lw[c] >= 0)
 
     def step(self, pc, cache, lifter):
         self.cur_pc = pc
         mem = self.mem
         op = mem[pc]
         n, br, dyn = _INFO[op]
+        lw = self._lw
+        if (
+            lw[pc] >= 0
+            or n > 1
+            and (lw[(pc + 1) & 0xFFFF] >= 0 or n > 2 and lw[(pc + 2) & 0xFFFF] >= 0)
+        ):
+            self._uses(pc, n)
+        else:
+            self.cov._iv[pc] = 1
         if op == 0x6C:
             ptr = mem[(pc + 1) & 0xFFFF] | (mem[(pc + 2) & 0xFFFF] << 8)
             _mark_vector(self.cov, ptr)

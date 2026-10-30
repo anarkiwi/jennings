@@ -38,6 +38,9 @@ vm.cov
 | `hits` | `uint32[65536]`, executions of the instruction starting at each address |
 | `edges` | `{(src, dst)}` dynamic control transfers: `JMP (ind)`, `RTS`, `RTI`, `BRK` |
 | `entries` | `{(vector, target)}` interrupts taken through `CoverageMPU.irq`/`nmi` |
+| `variants` | `{(pc, bytes)}` instructions run with a written byte (bytes little-endian) |
+| `defuse` | `{(writer, cell, pc)}` code bytes run at `pc` whose last store was at `writer` |
+| `image` | `uint8[65536]`, 1 where an instruction ran with none of its bytes written |
 
 | flag | value | set on |
 |---|---|---|
@@ -53,7 +56,9 @@ classified. `READ`/`WRITE` cover the instruction's own data accesses (including 
 pushes and `PLA`/`PLP` pulls) and the pointer bytes read by `JMP (ind)` (with the NMOS
 page wrap), `BRK`, and taken IRQ/NMI entries; opcode fetch and the return-address/status
 stack traffic of `JSR`/`RTS`/`RTI`/`BRK` and interrupt entry are not flagged.
-`save` writes one `.npz`; `CoverageMap.load` reads it back.
+`CoverageVM.last_writer` (`int32[65536]`, -1 for the image) tracks the last instruction to
+store each byte, which `variants`, `defuse` and `image` are built from. `save` writes one
+`.npz`; `CoverageMap.load` reads it back (files without the newer keys load with them empty).
 
 ## Reporting
 
@@ -194,3 +199,23 @@ target), `values` = `VS`, `classes` (`var` opcode, `ctrl` operand of JMP/JSR/bra
 `addr` operand of a memory-mode instruction, `imm` immediate) and the instructions it belongs
 to. `values` is exact unless `data_dependent` (a writer stores a computed value), where it is a
 sound superset.
+
+### SMC obligations
+
+`obligations(smc)` turns the cells into test obligations: for every cell and writer, the
+writer's value was executed (a `defuse` record); for cells that are not `data_dependent`,
+every executable variant was executed (`variants`, or for the image byte an `image` run of an
+instruction covering the cell). `write_obligations(smc, "smc.txt", labels)` writes one line per
+obligation and a sidecar whose `obligations` table (`[line, kind, cell, a, b]`, kinds as in
+`report.held`) `write_data` evaluates against a `CoverageMap`, so `coverage report
+--fail-under` gates SMC obligations alongside code. `check(smc, cov)` lists dynamic code writes
+the analysis did not predict (a writer outside W(cell), or an executed byte outside Var(cell)).
+
+```python
+from jennings.coverage.smc import analyze, check, write_obligations
+from jennings.coverage.report import write_data
+
+smc = analyze(mem, entries, cov=mpu.cov)
+assert not check(smc, mpu.cov)
+write_data(mpu.cov, [write_obligations(smc, "smc.txt", {0x1064: "seq_rd+1"}), "player.s"])
+```
