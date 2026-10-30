@@ -2,7 +2,8 @@
 the values it can hold, by a flow-sensitive value-set fixpoint over :mod:`.vsa`.
 
 One joined state per instruction address; control flow follows static targets, JSR/BRK
-return addresses and constant-written code bytes only (see ``docs/coverage.md``).
+return addresses, constant-written code bytes and constant-installed interrupt vectors only
+(see ``docs/coverage.md``).
 """
 
 import heapq
@@ -11,13 +12,14 @@ from typing import NamedTuple
 
 import numpy as np
 
-from jennings.coverage import EXEC, RETURN, TAKEN
+from jennings.coverage._core import EXEC, RETURN, TAKEN
 from jennings.coverage.plugin import save_sidecar
 from jennings.coverage.vsa import TOP8, TOP16, bits, from_bool, from_values, is_single
 from jennings.coverage.vsa import rot, step, template, word
 from jennings.opcodes import MEM_MODES, MODE_LEN, OPCODES
 
 __all__ = [
+    "VECTORS",
     "Writer",
     "Cell",
     "SmcMap",
@@ -35,6 +37,7 @@ _MN = tuple(OPCODES[op][0] for op in range(256))
 _MODE = tuple(OPCODES[op][1] for op in range(256))
 _LEN = tuple(MODE_LEN[m] for m in _MODE)
 _PUSH = {"PHA": 1, "PHP": 1, "PLA": -1, "PLP": -1}
+VECTORS = (0xFFFE, 0xFFFA, 0x0314, 0x0316, 0x0318)
 
 
 class Writer(NamedTuple):
@@ -61,7 +64,10 @@ class Cell(NamedTuple):
 class SmcMap(NamedTuple):
     """``starts`` ``{pc: opcodes}``, ``edges``, feasible ``branches``, ``writers``, and the
     unfollowed ``unresolved_stores`` ``[pc]``, ``unresolved_transfers`` ``{pc: targets}``,
-    ``unresolved_opcodes`` ``{pc: opcodes}``; ``cells`` ``{addr: Cell}``, ``regs`` per pc."""
+    ``unresolved_opcodes`` ``{pc: opcodes}``; ``cells`` ``{addr: Cell}``, ``regs`` per pc;
+    ``vectors``, interrupt ``handlers`` ``{entry: vectors}``, the handler ``chain``
+    ``{(source entry, vector, handler)}`` and torn-vector ``hazards``
+    ``[(first writer, vector, partner writer or None)]``."""
 
     starts: dict
     edges: set
@@ -72,29 +78,47 @@ class SmcMap(NamedTuple):
     unresolved_opcodes: dict
     cells: dict
     regs: dict
+    vectors: tuple
+    handlers: dict
+    chain: set
+    hazards: list
 
 
 class _State:
-    """Register value sets, bytes written since entry ``ov``, and the return addresses
-    ``rets`` ``{offset above SP: 16-bit set}`` pushed by JSR/BRK/entry and not yet popped."""
+    """Register value sets, bytes written since entry ``ov``, the return addresses ``rets``
+    ``{offset above SP: 16-bit set}`` pushed by JSR/BRK/entry and not yet popped, the vector
+    bytes ``pend`` ``{(vector, byte): first writers}`` written without their partner, and the
+    entries ``ctx`` that reach the state."""
 
-    __slots__ = ("regs", "ov", "rets")
+    __slots__ = ("regs", "ov", "rets", "pend", "ctx")
 
-    def __init__(self, regs, ov, rets):
-        self.regs, self.ov, self.rets = regs, ov, rets
+    def __init__(self, regs, ov, rets, pend, ctx):
+        self.regs, self.ov, self.rets, self.pend, self.ctx = regs, ov, rets, pend, ctx
 
     def __eq__(self, other):
-        return (self.regs, self.ov, self.rets) == (other.regs, other.ov, other.rets)
+        return (self.regs, self.ov, self.rets, self.pend, self.ctx) == (
+            other.regs,
+            other.ov,
+            other.rets,
+            other.pend,
+            other.ctx,
+        )
 
     __hash__ = None
 
 
 def _join(s, t):
-    """Pointwise union; a byte or return address absent on either side is dropped."""
+    """Pointwise union; a byte or return address absent on either side is dropped, pending
+    vector bytes and entries are kept from both."""
+    pend = dict(s.pend)
+    for k, v in t.pend.items():
+        pend[k] = pend.get(k, frozenset()) | v
     return _State(
         tuple(x | y for x, y in zip(s.regs, t.regs)),
         {a: v | t.ov[a] for a, v in s.ov.items() if a in t.ov},
         {o: v | t.rets[o] for o, v in s.rets.items() if o in t.rets},
+        pend,
+        s.ctx | t.ctx,
     )
 
 
@@ -108,10 +132,11 @@ def _shift(rets, k, new=None):
 class _Mem:
     """One instruction's view of memory: the state's overlay, else the global value set."""
 
-    __slots__ = ("an", "pc", "ov", "own", "stack")
+    __slots__ = ("an", "pc", "ov", "own", "stack", "pend", "ctx", "i0")
 
     def __init__(self, an, pc, st):
         self.an, self.pc, self.ov, self.own, self.stack = an, pc, st.ov, False, False
+        self.pend, self.ctx, self.i0 = st.pend, st.ctx, bool(st.regs[10] & 1)
 
     def byte(self, a):
         v = self.ov.get(a)
@@ -152,6 +177,9 @@ class _Mem:
         else:
             for a in [a for a in self.ov if addrs >> a & 1]:
                 self.ov[a] |= vals
+        if addrs & an.vmask:
+            for a in bits(addrs & an.vmask).tolist():
+                an.vector_store(self, a)
 
 
 def _class(op, k):
@@ -167,9 +195,16 @@ def _sets(d):
 
 
 class _Analysis:
-    def __init__(self, mem, sp):
+    def __init__(self, mem, sp, vectors):
         self.image = np.asarray(mem, np.uint8)
         self.sp = sp
+        self.vectors = tuple(vectors)
+        self.vbase = {(v + k) & 0xFFFF: v for v in self.vectors for k in (0, 1)}
+        self.vmask = from_values(set(self.vbase), 2) if self.vbase else 0
+        self.handlers = defaultdict(set)
+        self.chain = set()
+        self.pairs = defaultdict(set)
+        self.exposed = set()
         self.written = {}
         self.readers = defaultdict(set)
         self.wide = defaultdict(set)
@@ -240,7 +275,7 @@ class _Analysis:
         for i in _REGS.values():
             regs[i] = TOP8 if i < 3 else 3
         regs[3] = TOP8
-        self.add(addr, _State(tuple(regs), {}, {}))
+        self.add(addr, _State(tuple(regs), {}, {}, {}, frozenset()))
 
     def entry(self, addr, opts):
         regs = [1] * 16
@@ -258,7 +293,51 @@ class _Analysis:
             self.scatter(np.array([a]), v)
         if irq:
             regs[10] = 2
-        self.add(addr, _State(tuple(regs), ov, {1 + irq: 1 << ret}))
+        self.add(addr, _State(tuple(regs), ov, {1 + irq: 1 << ret}, {}, frozenset((addr,))))
+
+    def install(self, mem, v, sites):
+        """Install the vector at ``v`` as ``mem`` sees it: constant pairs become interrupt
+        entries and chain edges from ``mem``'s entries, data-dependent ones unresolved
+        transfers of the writers ``sites``."""
+        lo, hi = v, (v + 1) & 0xFFFF
+        targets = mem.word(lo, hi)
+        if self.data[lo] or self.data[hi]:
+            for pc in sites:
+                self.transfers[pc] |= targets
+            return
+        for h in bits(targets).tolist():
+            self.chain.update((e, v, h) for e in mem.ctx)
+            self.handler(h, v)
+
+    def handler(self, h, v):
+        if h not in self.handlers:
+            self.entry(h, {"irq": True})
+        self.handlers[h].add(v)
+
+    def vector_store(self, mem, a):
+        """A store to vector byte ``a``: completes a pending pair, updates a pair whose partner
+        was written on the path, or leaves the byte pending its partner."""
+        v = self.vbase[a]
+        k = a - v & 0xFFFF
+        mem.pend = dict(mem.pend)
+        firsts = mem.pend.pop((v, 1 - k), None)
+        if firsts is not None:
+            for f in firsts:
+                self.pairs[(f, v)].add(mem.pc)
+        elif (v + 1 - k) & 0xFFFF not in mem.ov:
+            mem.pend[(v, k)] = mem.pend.get((v, k), frozenset()) | {mem.pc}
+            if not mem.i0:
+                return
+            self.exposed.add((mem.pc, v))
+        self.install(mem, v, (mem.pc,))
+
+    def release(self, mem, exposed):
+        """Install the pending vectors of ``mem`` where an interrupt may be taken (``exposed``)
+        or at an exit."""
+        for (v, _), firsts in mem.pend.items():
+            if exposed:
+                self.exposed.update((f, v) for f in firsts)
+            self.install(mem, v, firsts)
 
     def const(self, mem, a, pc):
         """Values of byte ``a`` from the image or constant stores; none once a computed
@@ -295,6 +374,8 @@ class _Analysis:
     def process(self, pc):
         st = self.states[pc]
         mem = _Mem(self, pc, st)
+        if st.pend and mem.i0:
+            self.release(mem, True)
         ops = mem.byte(pc)
         self.starts[pc] |= ops
         ok = self.const(mem, pc, pc)
@@ -315,6 +396,10 @@ class _Analysis:
                     rets = {}
             else:
                 follow, rets = self._follow(kind, pc, st, mem)
+            vjmp = kind == "jmpind" and any(
+                p in self.vectors
+                for p in bits(self._word(mem, (pc + 1) & 0xFFFF, (pc + 2) & 0xFFFF, pc)).tolist()
+            )
             for flag, targets, regs in succ:
                 if flag != EXEC:
                     self.branches[pc] |= flag
@@ -325,10 +410,14 @@ class _Analysis:
                 if kind in ("rts", "rti") and targets >> RETURN & 1:
                     self.edges.add((pc, RETURN))
                     targets &= ~(1 << RETURN)
-                out = _State(tuple(regs), mem.ov, rets)
+                    self.release(mem, False)
+                out = _State(tuple(regs), mem.ov, rets, mem.pend, mem.ctx)
                 for t in bits(targets).tolist():
                     self.edges.add((pc, t))
-                    self.add(t, out)
+                    self.add(
+                        t,
+                        _State(out.regs, out.ov, rets, out.pend, frozenset((t,))) if vjmp else out,
+                    )
 
     def run(self, progress):
         from tqdm import tqdm  # pylint: disable=import-outside-toplevel
@@ -348,6 +437,8 @@ class _Analysis:
             for op in ops:
                 for k in range(_LEN[op]):
                     cover[(pc + k) & 0xFFFF].add((pc, op, k))
+        for a in self.vbase:
+            cover[a].add((-1, -1, -1))
         stores = {pc: tv for pc, tv in self.stores.items() if tv[0] != TOP16}
         cells = {}
         for a, ins in cover.items():
@@ -356,8 +447,8 @@ class _Analysis:
                 cells[a] = Cell(
                     w,
                     frozenset(bits(self.vs(a)).tolist()),
-                    frozenset(_class(op, k) for _, op, k in ins),
-                    frozenset((pc, op) for pc, op, _ in ins),
+                    frozenset("ctrl" if k < 0 else _class(op, k) for _, op, k in ins),
+                    frozenset((pc, op) for pc, op, k in ins if k >= 0),
                     bool(self.data[a]),
                     frozenset(bits(self.executed[a]).tolist()),
                     int(self.image[a]),
@@ -379,17 +470,37 @@ class _Analysis:
                 pc: {n: frozenset(bits(st.regs[i]).tolist()) for n, i in names.items()}
                 for pc, st in self.states.items()
             },
+            self.vectors,
+            {h: frozenset(v) for h, v in self.handlers.items()},
+            self.chain,
+            sorted(
+                (f, v, p)
+                for f, v in self.exposed
+                for p in sorted(self.pairs.get((f, v), ())) or [None]
+            ),
         )
 
+    def image_handlers(self):
+        """Make each vector's image value an interrupt entry once it is analysed code."""
+        new = False
+        for v in self.vectors:
+            h = int(self.image[v]) | int(self.image[(v + 1) & 0xFFFF]) << 8
+            if h in self.starts and v not in self.handlers.get(h, ()):
+                self.handler(h, v)
+                new = True
+        return new
 
-def analyze(mem, entries, cov=None, sp=0xFD, progress=False):
+
+def analyze(mem, entries, cov=None, sp=0xFD, vectors=VECTORS, progress=False):
     """:class:`SmcMap` of the program in 64K ``mem`` entered at ``entries``.
 
     ``entries``: addresses or ``{addr: {"a": values, ..., "irq": bool}}`` (unlisted registers
     may hold anything), run with SP ``sp`` under a ``call`` (or interrupt) frame whose return
-    exits. ``cov`` adds its executed addresses and edge/interrupt targets as entries.
+    exits. ``cov`` adds its executed addresses and edge/interrupt targets as entries in an
+    unknown context. Handlers that constant pairs install at ``vectors``, and image vector
+    values that are code, are entered in interrupt context.
     """
-    an = _Analysis(mem, sp)
+    an = _Analysis(mem, sp, vectors)
     items = dict(entries) if isinstance(entries, dict) else dict.fromkeys(entries)
     if cov is not None:
         seeds = set(np.flatnonzero(cov.flags & EXEC).tolist())
@@ -399,12 +510,16 @@ def analyze(mem, entries, cov=None, sp=0xFD, progress=False):
     for addr, opts in items.items():
         an.entry(addr, opts or {})
     an.run(progress)
+    while an.image_handlers():
+        an.run(progress)
     return an.result()
 
 
 class Obligation(NamedTuple):
     """Something a run must show: ``kind`` ``"def"`` (``writer``'s value at ``cell`` was
-    executed) or ``"value"`` (``cell`` was executed holding ``value``); unused fields -1."""
+    executed, or consumed from a vector), ``"value"`` (``cell`` was executed holding ``value``),
+    ``"entry"`` (handler ``value`` was entered through vector ``cell``) or ``"chain"`` (after
+    ``writer`` installed it, handler ``value`` was entered through ``cell``); unused fields -1."""
 
     kind: str
     cell: int
@@ -413,23 +528,37 @@ class Obligation(NamedTuple):
 
 
 def obligations(smc):
-    """All-defs obligations for every written code byte, and executed-variant obligations
-    for those whose writers store constants only."""
+    """All-defs obligations for every written code and vector byte, executed-variant
+    obligations for code bytes whose writers store constants only, an entry obligation for
+    every static interrupt handler and a chain obligation for every handler chain edge."""
     out = []
     for a, cell in sorted(smc.cells.items()):
         out += [Obligation("def", a, w, -1) for w in sorted(cell.writers)]
         if not cell.data_dependent:
             out += [Obligation("value", a, -1, v) for v in sorted(cell.variants)]
+    out += [Obligation("entry", v, -1, h) for h, vs in sorted(smc.handlers.items()) for v in vs]
+    out += [Obligation("chain", v, src, h) for src, v, h in sorted(smc.chain)]
     return out
 
 
 def obligation_rows(smc):
     """``(Obligation, rows)``: sidecar rows ``[kind, cell, a, b]`` any of which satisfies it
     (see ``jennings.coverage.report.held``); an image-byte variant also holds when an
-    instruction ``b`` covering the cell ran unwritten."""
+    instruction ``b`` covering the cell ran unwritten, and a chain edge from a source that is
+    not a handler on its vector when the handler follows no target or any of that vector's."""
     for ob in obligations(smc):
         if ob.kind == "def":
             yield ob, [[0, ob.cell, ob.writer, -1]]
+            continue
+        if ob.kind == "entry":
+            yield ob, [[3, ob.cell, ob.value, -1]]
+            continue
+        if ob.kind == "chain":
+            if ob.cell in smc.handlers.get(ob.writer, ()):
+                prev = [ob.writer]
+            else:
+                prev = [-1] + sorted(h for h, vs in smc.handlers.items() if ob.cell in vs)
+            yield ob, [[4, ob.cell, p, ob.value] for p in prev]
             continue
         rows = [[1, ob.cell, ob.value, -1]]
         cell = smc.cells[ob.cell]
@@ -444,14 +573,15 @@ def write_obligations(smc, path, labels=None):
     labels = labels or {}
     text, lines, table = [], [], []
     for n, (ob, rows) in enumerate(obligation_rows(smc), 1):
-        cell = smc.cells[ob.cell]
-        what = (
-            "written by $%04X" % ob.writer if ob.kind == "def" else "executed as $%02X" % ob.value
-        )
-        text.append(
-            "$%04X  %-16s %-5s %s"
-            % (ob.cell, labels.get(ob.cell, ""), "/".join(sorted(cell.classes)), what)
-        )
+        cell = smc.cells.get(ob.cell)
+        what = {
+            "def": "written by $%04X" % ob.writer,
+            "value": "executed as $%02X" % ob.value,
+            "entry": "enters $%04X" % ob.value,
+            "chain": "$%04X installs $%04X" % (ob.writer, ob.value),
+        }[ob.kind]
+        kind = "/".join(sorted(cell.classes)) if ob.kind in ("def", "value") else ob.kind
+        text.append("$%04X  %-16s %-5s %s" % (ob.cell, labels.get(ob.cell, ""), kind, what))
         lines.append([n, ob.cell])
         table += [[n] + r for r in rows]
     with open(path, "w", encoding="utf-8") as f:
@@ -462,11 +592,13 @@ def write_obligations(smc, path, labels=None):
 
 
 def check(smc, cov):
-    """Dynamic writes to static code bytes that ``smc`` did not predict: ``("writer", pc,
-    cell)`` for a writer outside W(cell), ``("value", pc, cell, byte)`` outside Var(cell)."""
+    """Dynamic writes to static code and vector bytes that ``smc`` did not predict:
+    ``("writer", pc, cell)`` for a writer outside W(cell), ``("value", pc, cell, byte)``
+    outside Var(cell)."""
     code = {
         (pc + k) & 0xFFFF for pc, ops in smc.starts.items() for op in ops for k in range(_LEN[op])
     }
+    code.update((v + k) & 0xFFFF for v in smc.vectors for k in (0, 1))
     out = []
     for w, c, _ in sorted(cov.defuse):
         if c in code and (c not in smc.cells or w not in smc.cells[c].writers):

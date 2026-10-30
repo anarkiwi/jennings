@@ -3,7 +3,7 @@ points and observed execution, one instruction per source line, with a ``.jcov``
 
 import numpy as np
 
-from jennings.coverage import EXEC
+from jennings.coverage._core import EXEC
 from jennings.coverage.cfg import LEN, successors
 from jennings.coverage.plugin import save_sidecar
 from jennings.devices.mpu6502 import MPU

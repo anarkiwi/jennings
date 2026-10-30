@@ -16,33 +16,40 @@ REGISTERS = {
 }
 
 
-def flow(mem, pc, loads=(), stores=()):
+def flow(mem, pc, loads=(), stores=(), operands=None):
     """``{output: frozenset(inputs)}`` of the instruction at ``pc`` in ``mem``.
 
     Locations are :data:`REGISTERS` names and memory addresses. ``loads``/``stores`` are
     the byte addresses it read and wrote, in access order (as an observed run reports
     them); a load depends on its address, a store's byte only on the value stored.
+    ``operands`` ``{offset: location}`` makes constants built from those operand bytes
+    depend on the given locations (e.g. self-modified operands).
     """
     rec = lift(mem, pc)
     loads, stores = iter(loads), iter(stores)
     regs, uniq, out = {}, {}, {}
+    operands = operands or {}
+    prov = {
+        k: frozenset(operands[o] for o in offs if o in operands)
+        for k, (offs, _fn) in rec["prov"]["ops"].items()
+    }
 
-    def src(vn):
+    def src(vn, at=None):
         space, off, _size = vn
         if space == "c":
-            return frozenset()
+            return prov.get(at, frozenset())
         if space == "u":
             return uniq.get(off, frozenset())
         return regs.get(off, frozenset((REGISTERS.get(off, "r%d" % off),)))
 
-    for mn, dst, ins in rec["ops"]:
+    for i, (mn, dst, ins) in enumerate(rec["ops"]):
         if mn == "STORE":
             for _ in range(ins[1][2]):
                 addr = next(stores, None)
                 if addr is not None:
-                    out[addr] = src(ins[1])
+                    out[addr] = src(ins[1], (i, 1))
             continue
-        deps = frozenset().union(*map(src, ins))
+        deps = frozenset().union(*(src(vn, (i, j)) for j, vn in enumerate(ins)))
         if mn == "LOAD":
             deps |= frozenset(
                 a for a in (next(loads, None) for _ in range(dst[2])) if a is not None

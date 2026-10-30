@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from jennings.coverage import EXEC, FALLTHRU, TAKEN
+from jennings.coverage._core import EXEC, FALLTHRU, TAKEN
 from jennings.devices.mpu6502 import _JAM
 from jennings.isa import is_branch, length, s8
 
