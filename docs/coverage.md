@@ -121,7 +121,8 @@ pushes and `PLA`/`PLP` pulls) and the pointer bytes read by `JMP (ind)` (with th
 page wrap), `BRK`, and taken IRQ/NMI entries; opcode fetch and the return-address/status
 stack traffic of `JSR`/`RTS`/`RTI`/`BRK` and interrupt entry are not flagged.
 `CoverageVM.last_writer` (`int32[65536]`, -1 for the image) tracks the last instruction to
-store each byte, which `variants`, `defuse` and `image` are built from; a consumed pointer
+store each byte (the `JSR` or `BRK` for the return address and status it pushes, and the
+vector address, e.g. `$FFFE`, for an IRQ/NMI frame), which `variants`, `defuse` and `image` are built from; a consumed pointer
 byte that was written adds a `defuse` record whose `pc` is the `JMP (ind)` or `BRK`, or the
 handler for IRQ/NMI. `CoverageVM.vector_target` holds the last target taken through each
 pointer, the previous target of the next `chains` record. `save` writes one `.npz`;
@@ -243,8 +244,14 @@ smc.handlers, smc.chain, smc.hazards   # interrupt vectors, see Interrupts
 Entries are addresses or `{addr: {"a": values, ..., "irq": bool}}`; unlisted registers and
 flags may hold anything. Each entry runs with SP `sp` (default `$FD`, as `call` leaves a fresh
 MPU) under a `call` frame (or an interrupt frame), and its return to `RETURN` is an exit.
-`cov` adds a `CoverageMap`'s executed addresses and edge/interrupt targets as entries in an
-unknown context (any registers, SP and stack), as `Listing.disassemble` seeds its walk.
+`cov` resolves transfers from a `CoverageMap`: each observed edge `(src, dst)` in `cov.edges`
+whose `dst` is a candidate of the unresolved transfer at `src` is followed with the state
+propagated from `src` (for RTS the state at `src` with SP+2 and its return addresses popped,
+likewise for RTI and `JMP (ind)`), and each interrupt in `cov.entries` enters its target in
+interrupt context with the frame attributed to the vector. This runs inside the fixpoint, so
+transfers in newly reached code resolve too. Only executed addresses and edge/interrupt
+targets that remain unreached afterwards are entered in an unknown context (any registers, SP
+and stack); their stores and loads are correspondingly imprecise.
 
 **Domain** (`jennings.coverage.vsa`). A value of `w` bytes is the exact set of integers it may
 hold (a `256**w`-bit mask); each pcode op is evaluated over the product of its input sets with
@@ -252,18 +259,28 @@ the semantics of `PcodeVM`, and `step` adds the JSR/RTS/RTI/BRK stack traffic, s
 sets it is the concrete machine. Operand bytes enter through the lifter's `prov` tags, so a
 self-modified operand contributes every value its bytes may hold.
 
-**Fixpoint.** One joined state per instruction address: register sets, the bytes written along
-the paths since entry (others read the global set `VS(m)` = image byte ∪ every value any store
-may put at `m`), and the return addresses pushed by JSR/BRK/entry, tracked by offset above SP
-through pushes and pulls. A key absent on either side of a join is dropped. Growth of `VS`
-re-evaluates the instructions that read it; flags are sets, so a branch on a singleton flag
-has one feasible direction (`branches`).
+**Fixpoint.** One joined state per instruction address and innermost pending return address,
+so a subroutine's states stay apart per call site: register sets, the bytes written along the
+paths since entry (others read the global set `VS(m)` = image byte ∪ every value any store may
+put at `m`), the return addresses pushed by JSR/BRK/entry, tracked by offset above SP through
+pushes and pulls, and flag origins. A flag origin records, for a branch flag set as a function
+of one A/X/Y register value with scalar operands (`CPX #3`, `DEX`, `LDA mem`, ...), the
+register values that give 0 and 1; a branch on the flag narrows the register on each side, so
+`X` stays `{0, 1, 2}` in a `DEX`/`BPL` voice loop. A key absent on either side of a join is
+dropped. Growth of `VS` re-evaluates the instructions that read it; flags are sets, so a branch
+on a singleton flag has one feasible direction (`branches`).
 
 **Control flow** never follows computed data. Successors are static targets, RTS/RTI returns to
-addresses pushed by JSR/BRK/entry (to every call site), and the variants of code bytes that the
-image or constant stores put there. Any other target or opcode is recorded in
-`unresolved_transfers`/`unresolved_opcodes` with its candidates; a store whose address set is
-all of 64K is in `unresolved_stores` and changes no value set.
+addresses pushed by JSR/BRK/entry (the calling site of the state), the variants of code bytes
+that the image or constant stores put there, and observed edges from `cov`. Any other target or
+opcode is recorded in `unresolved_transfers`/`unresolved_opcodes` with its candidates (observed
+targets stay listed there); a store whose address set is all of 64K is in `unresolved_stores`
+and changes no value set.
+
+**Stack pushes** are store sites: JSR and BRK push their return address (and status) at the SP
+set, and an interrupt handler's frame is a store site of its vector address (any byte), the
+writers `CoverageVM.last_writer` records, so code in the stack page stays consistent under
+`check`.
 
 **Cells.** For every written code byte: its writers (`exact` when the byte is the store's only
 target), `values` = `VS`, `classes` (`var` opcode, `ctrl` operand of JMP/JSR/branch/JMP (ind),
@@ -351,8 +368,8 @@ assert not missing and not check(smc, mpu.cov) and not smc.hazards
 
 `CoverageMPU.irq()`/`nmi()` always enter through the current vector. To make
 deity-informant's `run_irq`/`run_irq_driven` follow a rewritten vector, pass
-`handler=vector(0xFFFE)` (`from deity_informant import vector`, deity-informant newer than
-0.6.0), which reads the vector from `vm.mem` at each entry.
+`handler=vector(0xFFFE)` (`from deity_informant import vector`, deity-informant >= 0.6.1),
+which reads the vector from `vm.mem` at each entry.
 
 ## Explaining partial branches
 
@@ -384,8 +401,10 @@ entry pushed), and registers a driver sets between steps (constants at `None`, "
 (`format_explanations`, addresses as `label+offset` from `symbols`, e.g. `load_elf`'s).
 `slice_of(trace, index, roots=("PC",), initial=None)` slices any record of a `TraceMPU.trace`.
 Bytes the driver writes directly into memory between steps count as inputs with the value
-read. Alternatives are as precise as the `SmcMap`: entries seeded from `cov` run in an
-unknown context, so indexed stores reachable from them list every address their index can
+read. Alternatives are as precise as the `SmcMap`: code reached through observed transfers
+keeps its register values (on the fixture only `fx_slide` is listed for `slide`), while
+executed code that `analyze` still had to seed runs in an unknown context, so indexed stores
+reachable only from such seeds list every address their index can
 reach.
 
 ## pytest plugin

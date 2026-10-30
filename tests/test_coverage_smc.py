@@ -75,10 +75,13 @@ def test_singletons_match_pcode_vm(op):
         except RuntimeError:
             nxt = None
         cm = _Concrete(bytearray(mem))
-        out = vsa.step(op, pc, [1 << r for r in reg], cm)
+        origins = {}
+        out = vsa.step(op, pc, [1 << r for r in reg], cm, origins)
         if nxt is None:
             assert out == []
             continue
+        for f, (r, m0, m1) in origins.items():
+            assert (m1 if vm.reg[f] else m0) == 1 << vm.reg[r] and not m0 & m1
         assert len(out) == 1
         _, targets, regs = out[0]
         assert targets == 1 << nxt
@@ -245,6 +248,70 @@ def test_return_dispatch_unresolved_and_seeded():
     cov.flags[0x0810] = EXEC
     smc = analyze(mem, [ORG], cov=cov)
     assert 0x0810 in smc.starts and 0x0810 in smc.unresolved_transfers
+    assert smc.regs[0x0810]["a"] == set(range(256)) and len(smc.regs[0x0810]["sp"]) == 256
+    cov.edges.add((0x0806, 0x0810))
+    smc = analyze(mem, [ORG], cov=cov)
+    assert smc.regs[0x0810]["a"] == {0x0F} and smc.regs[0x0810]["sp"] == {0xFD}
+    assert (0x0810, RETURN) in smc.edges and smc.unresolved_transfers == {0x0806: {0x0810}}
+
+
+def test_observed_transfers_iterate():
+    push = ["LDA #$08", "PHA", "LDA #$%02X", "PHA", "RTS"]
+    mem, _ = _prog(["LDX #$02"] + [st.replace("%02X", "0F") for st in push])
+    second, _ = _prog(["INX"] + [st.replace("%02X", "1F") for st in push], org=0x0810)
+    third, _ = _prog(["STA $0900,X", "RTS"], org=0x0820)
+    mem |= second | third
+    cov = CoverageMap()
+    cov.edges |= {(0x0808, 0x0810), (0x0817, 0x0820)}
+    smc = analyze(mem, [ORG], cov=cov)
+    assert smc.writers[0x0820].targets == {0x0903} and smc.regs[0x0820]["sp"] == {0xFD}
+    assert (0x0823, RETURN) in smc.edges
+    assert smc.unresolved_transfers == {0x0808: {0x0810}, 0x0817: {0x0820}}
+
+
+def test_branch_refines_origin_register():
+    mem, _ = _prog(["LDX #$00", "INX", "CPX #$03", "BNE $0802", "LDY #$02", "DEY", "BPL $0809"])
+    mem[0x080C] = 0x60
+    smc = analyze(mem, [ORG])
+    assert smc.regs[0x0802]["x"] == {0, 1, 2} and smc.regs[0x0807]["x"] == {3}
+    assert smc.regs[0x0809]["y"] == {0, 1, 2} and smc.regs[0x080C]["y"] == {0xFF}
+    mem, _ = _prog(["LDX #$00", "INX", "CPX #$03", "STA $10", "BNE $0802", "RTS"])
+    assert analyze(mem, [ORG]).regs[0x0802]["x"] == {0, 1, 2}
+    mem, _ = _prog(["LDX #$00", "INX", "CPX #$03", "TXA", "BNE $0802", "RTS"])
+    assert analyze(mem, [ORG]).regs[0x0802]["x"] == set(range(256))
+
+
+def test_flag_origin_needs_scalar_operands():
+    mem, _ = _prog(["STA $10", "LDX #$00", "INX", "CPX $10", "BNE $0804", "RTS"])
+    assert analyze(mem, [ORG]).regs[0x0804]["x"] == set(range(256))
+    mem, _ = _prog(["LDX #$00", "INX", "CPX $10", "BNE $0802", "RTS"], _0010=2)
+    assert analyze(mem, [ORG]).regs[0x0802]["x"] == {0, 1}
+
+
+def test_return_to_matching_call_site():
+    mem, _ = _prog(["LDX #$01", "JSR $0820", "STX $10", "LDX #$02", "JSR $0820", "STX $11", "RTS"])
+    mem[0x0820] = 0x60
+    smc = analyze(mem, [ORG])
+    assert smc.regs[0x0805]["x"] == {1} and smc.regs[0x080C]["x"] == {2}
+    assert smc.writers[0x0805].values == {1} and smc.regs[0x0820]["x"] == {1, 2}
+
+
+@pytest.mark.parametrize("width", [1, 2])
+def test_apply_matches_elementwise(width):
+    rng = np.random.default_rng(width)
+    n = 1 << (8 * width)
+    ops = ["INT_ADD", "INT_SUB", "INT_AND", "INT_OR", "INT_XOR", "INT_EQUAL", "INT_NOTEQUAL"]
+    ops += ["INT_LESS", "INT_LESSEQUAL", "INT_CARRY"]
+    for _ in range(40):
+        a, b = (rng.choice(n, int(rng.integers(1, 40)), replace=False) for _ in range(2))
+        for mn in ops:
+            cmp = mn in vsa._COMPARE
+            want = {int(vsa._concrete(mn, int(x), int(y), n - 1, n - 1)) for x in a for y in b}
+            masks = [vsa.from_values(a, width), vsa.from_values(b, width)]
+            got = vsa.apply(mn, 1 if cmp else width, [width, width], masks)
+            assert got == vsa.from_values(want, 1 if cmp else width), mn
+    full = vsa.from_values(np.arange(n), width)
+    assert vsa.apply("INT_ADD", width, [width] * 2, [full, 0b110]) == full
 
 
 class _RecVM(CoverageVM):
@@ -330,6 +397,44 @@ def test_fixture_cells(fixture):
     assert not smc.unresolved_stores and not smc.unresolved_opcodes
     lines = line_starts(ELF, mem)
     assert set(smc.starts) <= set(lines)
+
+
+def test_fixture_indexed_stores_per_voice(fixture):
+    _, syms, smc, _, _ = fixture
+    voices = {syms["frq_lo"] + k for k in range(3)}
+    stores = [pc for pc, w in smc.writers.items() if w.targets == voices]
+    assert {syms["voice"] + 32, syms["snap"] + 3} <= set(stores)
+    for h, cell in (("fx_slide", "slide"), ("fx_pulse", "pulse"), ("fx_vibrato", "vib_depth")):
+        assert smc.writers[syms[h]].targets == {syms[cell] + k for k in range(3)}
+    assert smc.writers[syms["sidw"]].targets == {
+        0xD400 + r + y for r in (0, 7, 14) for y in (0, 1, 3, 4, 5, 6)
+    }
+
+
+def test_fixture_unseeded(fixture):
+    mem, syms, smc, _, _ = fixture
+    entries = {syms["init"]: {"a": {0, 1}}, syms["play"]: {}}
+    unseeded = analyze(mem, entries | {syms[h]: {} for h in HANDLERS})
+    lines = set(line_starts(ELF, mem))
+    after = syms["dispatch"] - 6
+    assert set(smc.starts) == lines and set(unseeded.starts) == lines - {after, after + 3}
+    assert {syms[h] for h in HANDLERS} <= unseeded.unresolved_transfers[syms["dispatch"] + 14]
+
+
+def test_jsr_push_overwrites_stack_code():
+    mem, lb = _prog(["LDX #$81", "TXS", "jsr:", "JSR $0900", "JMP $0180"])
+    mem[0x0900] = 0x60
+    mem[0x0182:0x0185] = [0x4C, 0x85, 0x01]
+    mem[0x0185:0x0188] = [0x4C, 0x85, 0x01]
+    smc = analyze(mem, [ORG])
+    jsr = lb["jsr"]
+    assert smc.writers[jsr] == Writer(frozenset({0x0180, 0x0181}), frozenset({0x05, 0x08}))
+    assert smc.starts[0x0180] == {0x05} and smc.cells[0x0180].writers == {jsr: False}
+    mpu = CoverageMPU(memory=mem.tolist(), pc=ORG)
+    while mpu.pc != 0x0185:
+        mpu.step()
+    assert {(jsr, 0x0180, 0x0180), (jsr, 0x0181, 0x0180)} <= mpu.cov.defuse
+    assert (0x0180, 0x0805) in mpu.cov.variants and check(smc, mpu.cov) == []
 
 
 def _held(smc, cov):

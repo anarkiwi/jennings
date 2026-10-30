@@ -63,8 +63,7 @@ def test_slide_branch_ends_in_init_constant(song0):
     assert cov.flags[beq] & (TAKEN | FALLTHRU) == TAKEN == e.direction
     assert Constant(zero, "A") in e.constants and e.writers[slide] == {store}
     assert Constant(syms["voices"], "X") in e.constants and not e.inputs
-    assert syms["fx_slide"] in e.alternatives[slide]
-    assert store not in e.alternatives[slide]
+    assert e.alternatives[slide] == {syms["fx_slide"]}
     text = str(out)
     assert (
         "voice+9: only taken" in text

@@ -1,9 +1,9 @@
 """Static self-modifying-code analysis: which instructions can write each code byte, and
 the values it can hold, by a flow-sensitive value-set fixpoint over :mod:`.vsa`.
 
-One joined state per instruction address; control flow follows static targets, JSR/BRK
-return addresses, constant-written code bytes and constant-installed interrupt vectors only
-(see ``docs/coverage.md``).
+One joined state per instruction address and innermost pending return address; control flow
+follows static targets, JSR/BRK return addresses, constant-written code bytes,
+constant-installed interrupt vectors and observed dynamic transfers (see ``docs/coverage.md``).
 """
 
 import heapq
@@ -87,39 +87,75 @@ class SmcMap(NamedTuple):
 class _State:
     """Register value sets, bytes written since entry ``ov``, the return addresses ``rets``
     ``{offset above SP: 16-bit set}`` pushed by JSR/BRK/entry and not yet popped, the vector
-    bytes ``pend`` ``{(vector, byte): first writers}`` written without their partner, and the
-    entries ``ctx`` that reach the state."""
+    bytes ``pend`` ``{(vector, byte): first writers}`` written without their partner, the
+    entries ``ctx`` that reach the state and the flag origins ``fo`` ``{flag: (r, m0, m1)}``:
+    the values of register ``r`` with which the flag may be 0 and 1."""
 
-    __slots__ = ("regs", "ov", "rets", "pend", "ctx")
+    __slots__ = ("regs", "ov", "rets", "pend", "ctx", "fo")
 
-    def __init__(self, regs, ov, rets, pend, ctx):
+    def __init__(self, regs, ov, rets, pend, ctx, fo=None):
         self.regs, self.ov, self.rets, self.pend, self.ctx = regs, ov, rets, pend, ctx
+        self.fo = fo or {}
 
     def __eq__(self, other):
-        return (self.regs, self.ov, self.rets, self.pend, self.ctx) == (
+        return (self.regs, self.ov, self.rets, self.pend, self.ctx, self.fo) == (
             other.regs,
             other.ov,
             other.rets,
             other.pend,
             other.ctx,
+            other.fo,
         )
 
     __hash__ = None
 
 
 def _join(s, t):
-    """Pointwise union; a byte or return address absent on either side is dropped, pending
-    vector bytes and entries are kept from both."""
+    """Pointwise union; a byte, return address or flag origin absent (or on another register)
+    on either side is dropped, pending vector bytes and entries are kept from both."""
     pend = dict(s.pend)
     for k, v in t.pend.items():
         pend[k] = pend.get(k, frozenset()) | v
+    fo = {}
+    for f, (r, m0, m1) in s.fo.items():
+        o = t.fo.get(f)
+        if o is not None and o[0] == r:
+            fo[f] = (r, m0 | o[1], m1 | o[2])
     return _State(
         tuple(x | y for x, y in zip(s.regs, t.regs)),
         {a: v | t.ov[a] for a, v in s.ov.items() if a in t.ov},
         {o: v | t.rets[o] for o, v in s.rets.items() if o in t.rets},
         pend,
         s.ctx | t.ctx,
+        fo,
     )
+
+
+def _refine(regs, fo, flag, value):
+    """``(regs, fo)`` restricted to ``flag == value``: the origin register keeps the values
+    giving ``value``, and the other flags of that register the values it still allows;
+    ``None`` when no value remains."""
+    o = fo.get(flag)
+    if o is None:
+        return regs, fo
+    r, keep = o[0], o[1 + value]
+    regs = list(regs)
+    regs[r] &= keep
+    if not regs[r]:
+        return None
+    out = dict(fo)
+    for f, (q, m0, m1) in fo.items():
+        if q == r:
+            out[f] = (q, m0 & keep, m1 & keep)
+            regs[f] &= bool(m0 & keep) | bool(m1 & keep) << 1
+    return tuple(regs), out
+
+
+def _carry(fo, writes, new):
+    """Flag origins after an instruction writing registers ``writes`` with ``new`` origins."""
+    out = {f: o for f, o in fo.items() if f not in writes and o[0] not in writes}
+    out.update(new)
+    return out
 
 
 def _shift(rets, k, new=None):
@@ -132,16 +168,17 @@ def _shift(rets, k, new=None):
 class _Mem:
     """One instruction's view of memory: the state's overlay, else the global value set."""
 
-    __slots__ = ("an", "pc", "ov", "own", "stack", "pend", "ctx", "i0")
+    __slots__ = ("an", "pc", "node", "ov", "own", "stack", "pend", "ctx", "i0")
 
-    def __init__(self, an, pc, st):
-        self.an, self.pc, self.ov, self.own, self.stack = an, pc, st.ov, False, False
+    def __init__(self, an, node, st):
+        self.an, self.node, self.pc, self.ov = an, node, node[0], st.ov
+        self.own, self.stack = False, False
         self.pend, self.ctx, self.i0 = st.pend, st.ctx, bool(st.regs[10] & 1)
 
     def byte(self, a):
         v = self.ov.get(a)
         if v is None:
-            self.an.readers[a].add(self.pc)
+            self.an.readers[a].add(self.node)
             return self.an.vs(a)
         return v
 
@@ -156,7 +193,7 @@ class _Mem:
             if addrs >> a & 1:
                 out |= v
                 addrs &= ~(1 << a)
-        return out | self.an.gather(bits(addrs), self.pc) if addrs else out
+        return out | self.an.gather(addrs, self.node) if addrs else out
 
     def store(self, addrs, vals):
         an = self.an
@@ -202,15 +239,17 @@ class _Analysis:
         self.vbase = {(v + k) & 0xFFFF: v for v in self.vectors for k in (0, 1)}
         self.vmask = from_values(set(self.vbase), 2) if self.vbase else 0
         self.handlers = defaultdict(set)
+        self.taken = set()
         self.chain = set()
         self.pairs = defaultdict(set)
         self.exposed = set()
         self.written = {}
         self.readers = defaultdict(set)
-        self.wide = defaultdict(set)
+        self.wide = {}
         self.vsm = np.zeros((0x10000, 0x100), bool)
         self.vsm[np.arange(0x10000), self.image] = True
         self.trust = self.vsm.copy()
+        self.page = self.vsm.reshape((0x100, 0x100, 0x100)).any(1)
         self.data = np.zeros(0x10000, bool)
         self.states = {}
         self.work = []
@@ -223,15 +262,23 @@ class _Analysis:
         self.transfers = defaultdict(int)
         self.opcodes = defaultdict(int)
         self.executed = defaultdict(int)
+        self.observed = defaultdict(int)
 
     def vs(self, a):
         return (1 << int(self.image[a])) | self.written.get(a, 0)
 
-    def gather(self, arr, pc):
-        """Union of the global value sets at addresses ``arr``, read by ``pc``."""
-        for page in np.unique(arr >> 8).tolist():
-            self.wide[page].add(pc)
-        return from_bool(self.vsm[arr].any(0))
+    def gather(self, addrs, node):
+        """Union of the global value sets at the addresses in 16-bit set ``addrs``, read by
+        ``node``: whole pages from the page summaries, the rest address by address."""
+        raw = np.frombuffer(addrs.to_bytes(0x2000, "little"), np.uint8).reshape(0x100, 0x20)
+        used, full = raw.any(1), (raw == 0xFF).all(1)
+        self.wide[node] = self.wide.get(node, 0) | addrs
+        out = self.page[full].any(0)
+        part = np.flatnonzero(used & ~full)
+        if part.size:
+            offs = np.unpackbits(raw[part], axis=1, bitorder="little")
+            out |= self.vsm[((part << 8)[:, None] + np.arange(0x100))[offs.astype(bool)]].any(0)
+        return from_bool(out)
 
     def scatter(self, arr, vals):
         """Add ``vals`` to the global value sets at addresses ``arr``."""
@@ -247,27 +294,31 @@ class _Analysis:
         if not grown.size:
             return
         self.vsm[grown[:, None], vb] = True
+        self.page[(grown >> 8)[:, None], vb] = True
         for a in grown.tolist():
             self.written[a] = self.written.get(a, 0) | vals
             for k in self.readers[a]:
                 self._enqueue(k)
-        for page in np.unique(grown >> 8).tolist():
-            for k in self.wide[page]:
+        grown = from_values(grown, 2)
+        for k, addrs in self.wide.items():
+            if addrs & grown:
                 self._enqueue(k)
 
-    def _enqueue(self, pc):
-        if pc not in self.queued:
-            self.queued.add(pc)
-            heapq.heappush(self.work, pc)
+    def _enqueue(self, node):
+        if node not in self.queued:
+            self.queued.add(node)
+            heapq.heappush(self.work, node)
 
     def add(self, pc, st):
-        old = self.states.get(pc)
+        """Join ``st`` into the state of ``pc`` for its innermost pending return address."""
+        node = (pc, st.rets[min(st.rets)] if st.rets else -1)
+        old = self.states.get(node)
         if old is not None:
             st = _join(old, st)
             if st == old:
                 return
-        self.states[pc] = st
-        self._enqueue(pc)
+        self.states[node] = st
+        self._enqueue(node)
 
     def seed(self, addr):
         """Enter ``addr`` in an unknown context: any registers, stack pointer and stack."""
@@ -277,7 +328,9 @@ class _Analysis:
         regs[3] = TOP8
         self.add(addr, _State(tuple(regs), {}, {}, {}, frozenset()))
 
-    def entry(self, addr, opts):
+    def entry(self, addr, opts, vector=None):
+        """Enter ``addr`` with registers ``opts`` under a ``call`` frame, or an interrupt
+        frame whose pushes are a store site of ``vector`` (when given) of any byte."""
         regs = [1] * 16
         for name, i in _REGS.items():
             v = opts.get(name)
@@ -293,6 +346,12 @@ class _Analysis:
             self.scatter(np.array([a]), v)
         if irq:
             regs[10] = 2
+        if vector is not None:
+            addrs = from_values([0x100 | ((sp + k) & 0xFF) for k in (1, 2, 3)], 2)
+            rec = self.stores.setdefault(vector, [0, 0, set()])
+            rec[0] |= addrs
+            rec[1] |= TOP8
+            self.scatter(bits(addrs), TOP8)
         self.add(addr, _State(tuple(regs), ov, {1 + irq: 1 << ret}, {}, frozenset((addr,))))
 
     def install(self, mem, v, sites):
@@ -310,9 +369,14 @@ class _Analysis:
             self.handler(h, v)
 
     def handler(self, h, v):
-        if h not in self.handlers:
-            self.entry(h, {"irq": True})
+        self.interrupt(h, v)
         self.handlers[h].add(v)
+
+    def interrupt(self, h, v):
+        """Enter ``h`` in interrupt context through vector ``v``."""
+        if (h, v) not in self.taken:
+            self.taken.add((h, v))
+            self.entry(h, {"irq": True}, v)
 
     def vector_store(self, mem, a):
         """A store to vector byte ``a``: completes a pending pair, updates a pair whose partner
@@ -339,55 +403,57 @@ class _Analysis:
                 self.exposed.update((f, v) for f in firsts)
             self.install(mem, v, firsts)
 
-    def const(self, mem, a, pc):
+    def const(self, mem, a):
         """Values of byte ``a`` from the image or constant stores; none once a computed
         value may be stored there."""
-        self.readers[a].add(pc)
+        self.readers[a].add(mem.node)
         return 0 if self.data[a] else mem.byte(a) & from_bool(self.trust[a])
 
-    def _word(self, mem, lo, hi, pc):
-        return word(self.const(mem, lo, pc), self.const(mem, hi, pc))
+    def _word(self, mem, lo, hi):
+        return word(self.const(mem, lo), self.const(mem, hi))
 
     def _follow(self, kind, pc, st, mem):
         """Targets of a ``kind`` transfer built from constants only, and the new ``rets``."""
         rets, a1, a2 = st.rets, (pc + 1) & 0xFFFF, (pc + 2) & 0xFFFF
         if kind == "br":
-            offs = (bits(self.const(mem, a1, pc)) ^ 0x80) - 0x80
+            offs = (bits(self.const(mem, a1)) ^ 0x80) - 0x80
             return from_values((pc + 2 + offs) & 0xFFFF, 2), rets
         if kind == "jmp":
-            return self._word(mem, a1, a2, pc), rets
+            return self._word(mem, a1, a2), rets
         if kind == "jsr":
-            return self._word(mem, a1, a2, pc), _shift(rets, 2, {1: 1 << a2})
+            return self._word(mem, a1, a2), _shift(rets, 2, {1: 1 << a2})
         if kind == "jmpind":
             out = 0
-            for p in bits(self._word(mem, a1, a2, pc)).tolist():
-                out |= self._word(mem, p, (p & 0xFF00) | ((p + 1) & 0xFF), pc)
+            for p in bits(self._word(mem, a1, a2)).tolist():
+                out |= self._word(mem, p, (p & 0xFF00) | ((p + 1) & 0xFF))
             return out, rets
         if kind == "brk":
-            return self._word(mem, 0xFFFE, 0xFFFF, pc), _shift(rets, 3, {2: 1 << a2})
+            return self._word(mem, 0xFFFE, 0xFFFF), _shift(rets, 3, {2: 1 << a2})
         if kind == "rts":
             return rot(rets.get(1, 0), 1, 2), _shift(rets, -2)
         if kind == "rti":
             return rets.get(2, 0), _shift(rets, -3)
         return 0, rets
 
-    def process(self, pc):
-        st = self.states[pc]
-        mem = _Mem(self, pc, st)
+    def process(self, node):
+        pc, st = node[0], self.states[node]
+        mem = _Mem(self, node, st)
         if st.pend and mem.i0:
             self.release(mem, True)
         ops = mem.byte(pc)
         self.starts[pc] |= ops
-        ok = self.const(mem, pc, pc)
+        ok = self.const(mem, pc)
         if ops & ~ok:
             self.opcodes[pc] |= ops & ~ok
         for op in bits(ok).tolist():
-            mem = _Mem(self, pc, st)
+            mem = _Mem(self, node, st)
             kind = template(op).ctrl[0]
             self.executed[pc] |= 1 << op
             for k in range(1, _LEN[op]):
                 self.executed[(pc + k) & 0xFFFF] |= mem.byte((pc + k) & 0xFFFF)
-            succ = step(op, pc, list(st.regs), mem)
+            origins = {}
+            succ = step(op, pc, list(st.regs), mem, origins)
+            fo = _carry(st.fo, template(op).writes, origins)
             if kind == "next":
                 d = _PUSH.get(_MN[op], 0)
                 follow = None
@@ -398,25 +464,36 @@ class _Analysis:
                 follow, rets = self._follow(kind, pc, st, mem)
             vjmp = kind == "jmpind" and any(
                 p in self.vectors
-                for p in bits(self._word(mem, (pc + 1) & 0xFFFF, (pc + 2) & 0xFFFF, pc)).tolist()
+                for p in bits(self._word(mem, (pc + 1) & 0xFFFF, (pc + 2) & 0xFFFF)).tolist()
             )
             for flag, targets, regs in succ:
                 if flag != EXEC:
+                    ctrl = template(op).ctrl
+                    cut = _refine(regs, fo, ctrl[1][1], ctrl[2] ^ (flag != TAKEN))
+                    if cut is None:
+                        continue
+                    regs, sfo = cut
                     self.branches[pc] |= flag
+                else:
+                    sfo = fo
                 if follow is not None and (kind != "br" or flag == TAKEN):
                     if targets & ~follow:
                         self.transfers[pc] |= targets & ~follow
-                    targets &= follow
+                    targets &= follow | self.observed.get(pc, 0)
                 if kind in ("rts", "rti") and targets >> RETURN & 1:
                     self.edges.add((pc, RETURN))
                     targets &= ~(1 << RETURN)
                     self.release(mem, False)
-                out = _State(tuple(regs), mem.ov, rets, mem.pend, mem.ctx)
+                out = _State(tuple(regs), mem.ov, rets, mem.pend, mem.ctx, sfo)
                 for t in bits(targets).tolist():
                     self.edges.add((pc, t))
                     self.add(
                         t,
-                        _State(out.regs, out.ov, rets, out.pend, frozenset((t,))) if vjmp else out,
+                        (
+                            _State(out.regs, out.ov, rets, out.pend, frozenset((t,)), sfo)
+                            if vjmp
+                            else out
+                        ),
                     )
 
     def run(self, progress):
@@ -424,9 +501,9 @@ class _Analysis:
 
         with tqdm(desc="smc", unit="insn", disable=not progress) as pbar:
             while self.work:
-                pc = heapq.heappop(self.work)
-                self.queued.discard(pc)
-                self.process(pc)
+                node = heapq.heappop(self.work)
+                self.queued.discard(node)
+                self.process(node)
                 pbar.total = pbar.n + 1 + len(self.work)
                 pbar.update(1)
 
@@ -454,6 +531,10 @@ class _Analysis:
                     int(self.image[a]),
                 )
         names = dict(_REGS, sp=3)
+        regs = {}
+        for (pc, _), st in self.states.items():
+            old = regs.get(pc)
+            regs[pc] = st.regs if old is None else tuple(x | y for x, y in zip(old, st.regs))
         return SmcMap(
             starts,
             self.edges,
@@ -467,8 +548,8 @@ class _Analysis:
             _sets(self.opcodes),
             cells,
             {
-                pc: {n: frozenset(bits(st.regs[i]).tolist()) for n, i in names.items()}
-                for pc, st in self.states.items()
+                pc: {n: frozenset(bits(r[i]).tolist()) for n, i in names.items()}
+                for pc, r in regs.items()
             },
             self.vectors,
             {h: frozenset(v) for h, v in self.handlers.items()},
@@ -479,6 +560,11 @@ class _Analysis:
                 for p in sorted(self.pairs.get((f, v), ())) or [None]
             ),
         )
+
+    def fixpoint(self, progress):
+        self.run(progress)
+        while self.image_handlers():
+            self.run(progress)
 
     def image_handlers(self):
         """Make each vector's image value an interrupt entry once it is analysed code."""
@@ -496,22 +582,28 @@ def analyze(mem, entries, cov=None, sp=0xFD, vectors=VECTORS, progress=False):
 
     ``entries``: addresses or ``{addr: {"a": values, ..., "irq": bool}}`` (unlisted registers
     may hold anything), run with SP ``sp`` under a ``call`` (or interrupt) frame whose return
-    exits. ``cov`` adds its executed addresses and edge/interrupt targets as entries in an
+    exits. ``cov`` resolves unresolved transfers by its observed ``edges`` (each followed with
+    the state at its source) and enters its interrupt ``entries`` in interrupt context; only
+    executed addresses and edge/interrupt targets still unreached are then entered in an
     unknown context. Handlers that constant pairs install at ``vectors``, and image vector
     values that are code, are entered in interrupt context.
     """
     an = _Analysis(mem, sp, vectors)
     items = dict(entries) if isinstance(entries, dict) else dict.fromkeys(entries)
+    for addr, opts in items.items():
+        an.entry(addr, opts or {})
+    if cov is not None:
+        for src, dst in cov.edges:
+            an.observed[src] |= 1 << dst
+        for v, h in sorted(cov.entries):
+            an.interrupt(h, v)
+    an.fixpoint(progress)
     if cov is not None:
         seeds = set(np.flatnonzero(cov.flags & EXEC).tolist())
         seeds |= {t for _, t in cov.edges | cov.entries if t != RETURN}
-        for a in seeds - items.keys():
+        for a in sorted(seeds - an.starts.keys()):
             an.seed(a)
-    for addr, opts in items.items():
-        an.entry(addr, opts or {})
-    an.run(progress)
-    while an.image_handlers():
-        an.run(progress)
+        an.fixpoint(progress)
     return an.result()
 
 
