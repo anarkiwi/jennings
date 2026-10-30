@@ -44,6 +44,9 @@ jennings[cuda]`), and a z3 proof of the result. See [docs/superopt.md](docs/supe
 (registers, flags, memory bytes, a branch's condition) off the same lifted pcode the
 MPU executes, given the addresses an observed run accessed.
 
+`jennings.coverage.CoverageMPU` records executed bytes, branch directions, data reads and
+writes, and dynamic control-flow edges. See [docs/coverage.md](docs/coverage.md).
+
 ## Compatibility
 
 Mirrors the py65 API surface used in practice: `devices.mpu6502.MPU`

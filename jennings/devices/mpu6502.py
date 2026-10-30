@@ -60,6 +60,8 @@ class MPU:
     ADDR_WIDTH = 16
     ADDR_FORMAT = "%04x"
 
+    VM = PcodeVM
+
     disassemble = _disassemble_table()
     instruct = _instruct_table()
     cycletime = list(CYCLETIME)
@@ -79,7 +81,7 @@ class MPU:
         self.pc = 0
 
         # Engine runs on the caller's memory so ObservableMemory observers fire.
-        self._vm = PcodeVM(b"")
+        self._vm = self.VM(b"")
         self._cache = {}
         if memory is None:
             memory = 0x10000 * [0x00]
