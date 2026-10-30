@@ -5,7 +5,7 @@ import os
 import numpy as np
 from coverage import CoverageData
 
-from jennings.coverage import EXEC
+from jennings.coverage._core import EXEC
 from jennings.coverage.cfg import LEN
 from jennings.coverage.plugin import PLUGIN_NAME, load_sidecar
 
@@ -14,9 +14,11 @@ __all__ = ["executed_arcs", "held", "write_data"]
 
 def held(rows, cov):
     """Which obligation ``rows`` ``[kind, cell, a, b]`` hold in ``cov``: ``0`` writer ``a``'s
-    value at ``cell`` was executed, ``1`` ``cell`` was executed holding byte ``a`` after a code
-    write, ``2`` the instruction at ``b`` ran with none of its bytes written."""
+    value at ``cell`` was executed or consumed, ``1`` ``cell`` was executed holding byte ``a``
+    after a code write, ``2`` the instruction at ``b`` ran with none of its bytes written, ``3``
+    target ``a`` was taken through pointer ``cell``, ``4`` target ``b`` followed ``a`` there."""
     defs = {(w, c) for w, c, _ in cov.defuse}
+    taken = {(p, t) for p, _, t in cov.chains}
     execd = {
         ((pc + i) & 0xFFFF, (packed >> (8 * i)) & 0xFF)
         for pc, packed in cov.variants
@@ -28,6 +30,8 @@ def held(rows, cov):
             (k == 0 and (a, c) in defs)
             or (k == 1 and (c, a) in execd)
             or bool(k == 2 and cov.image[b])
+            or (k == 3 and (c, a) in taken)
+            or (k == 4 and (c, a, b) in cov.chains)
             for k, c, a, b in rows.tolist()
         ],
         bool,
@@ -55,13 +59,15 @@ def executed_arcs(cov, source):
     return set(map(tuple, arcs[(to < 0) | ran[np.maximum(to, 0)]].tolist()))
 
 
-def write_data(cov, sources, data_file=".coverage-6502", context=None, suffix=None):
+def write_data(cov, sources, data_file=".coverage-6502", context=None, suffix=None, data=None):
     """Add ``cov``'s executed arcs for ``sources`` (a path or iterable of paths) to the
-    coverage.py data file; ``suffix=True`` writes a per-process file for ``coverage combine``."""
+    coverage.py data file; ``suffix=True`` writes a per-process file for ``coverage combine``.
+    A new file is erased on first write; pass an open ``CoverageData`` as ``data`` to append."""
     if isinstance(sources, (str, os.PathLike)):
         sources = [sources]
     arcs = {os.path.abspath(s): executed_arcs(cov, s) for s in sources}
-    data = CoverageData(basename=data_file, suffix=suffix)
+    if data is None:
+        data = CoverageData(basename=data_file, suffix=suffix)
     data.set_context(context)
     data.add_arcs(arcs)
     data.touch_files(list(arcs), PLUGIN_NAME)

@@ -268,3 +268,13 @@ def test_run_sub_driver():
 def test_core_does_not_import_numpy():
     code = "import sys, jennings.devices.mpu6502; assert 'numpy' not in sys.modules"
     subprocess.run([sys.executable, "-c", code], check=True)
+
+
+def test_coverage_plugin_import_is_light():
+    code = "import sys, jennings.coverage.pytest_plugin; assert 'numpy' not in sys.modules"
+    subprocess.run([sys.executable, "-c", code], check=True)
+    import jennings.coverage as package  # pylint: disable=import-outside-toplevel
+
+    assert package.CoverageMap is CoverageMap
+    with pytest.raises(AttributeError):
+        package.missing  # pylint: disable=pointless-statement

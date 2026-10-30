@@ -10,7 +10,7 @@ from collections import Counter
 import coverage
 import numpy as np
 
-from jennings.coverage import FALLTHRU, TAKEN
+from jennings.coverage._core import FALLTHRU, TAKEN
 
 __all__ = [
     "PLUGIN_NAME",

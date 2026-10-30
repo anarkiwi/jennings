@@ -9,7 +9,7 @@ from collections import defaultdict
 import numpy as np
 from elftools.elf.elffile import ELFFile
 
-from jennings.coverage import EXEC
+from jennings.coverage._core import EXEC
 from jennings.coverage.cfg import LEN, is_jump, successors
 from jennings.coverage.plugin import save_sidecar
 

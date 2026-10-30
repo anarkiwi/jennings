@@ -11,7 +11,7 @@ import numpy as np
 from deity_informant import lift
 from deity_informant.lifter import STATUS_BITS
 
-from jennings.coverage import EXEC, FALLTHRU, TAKEN
+from jennings.coverage._core import EXEC, FALLTHRU, TAKEN
 
 __all__ = [
     "TOP8",
