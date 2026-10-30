@@ -349,8 +349,10 @@ missing = [ob for ob, rows in obligation_rows(smc) if not held(rows, mpu.cov).an
 assert not missing and not check(smc, mpu.cov) and not smc.hazards
 ```
 
-deity-informant's `run_irq`/`run_irq_driven` enter a fixed handler address and so do not
-follow vectors a program rewrites; drive interrupt chains with `CoverageMPU.irq()`/`nmi()`.
+`CoverageMPU.irq()`/`nmi()` always enter through the current vector. To make
+deity-informant's `run_irq`/`run_irq_driven` follow a rewritten vector, pass
+`handler=vector(0xFFFE)` (`from deity_informant import vector`, deity-informant newer than
+0.6.0), which reads the vector from `vm.mem` at each entry.
 
 ## Explaining partial branches
 
