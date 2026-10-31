@@ -642,9 +642,23 @@ fn columns<'py>(py: Python<'py>, t: Trace) -> Columns<'py> {
     (PyBytes::new(py, &pc), PyBytes::new(py, &cycles), regs)
 }
 
-fn pc_set(pcs: Option<&Bound<'_, PyAny>>) -> PyResult<Option<AddrSet>> {
-    pcs.map(|p| addrs(p).map(|v| v.into_iter().collect()))
-        .transpose()
+fn pc_set(
+    pcs: Option<&Bound<'_, PyAny>>,
+    ranges: Option<Vec<(u32, u32)>>,
+) -> PyResult<Option<AddrSet>> {
+    let mut set = pcs
+        .map(|p| addrs(p).map(|v| v.into_iter().collect::<AddrSet>()))
+        .transpose()?;
+    for (lo, hi) in ranges.unwrap_or_default() {
+        if lo > hi || hi > 0x10000 {
+            return Err(PyValueError::new_err(
+                "stop_ranges need 0 <= lo <= hi <= 0x10000",
+            ));
+        }
+        set.get_or_insert_with(AddrSet::default)
+            .insert_range(lo, hi);
+    }
+    Ok(set)
 }
 
 #[pymethods]
@@ -816,7 +830,7 @@ impl Core {
     ///
     /// `irq_period` takes an IRQ (dropped if masked) after the instruction that
     /// reaches `irq_due`, which then advances by the period and persists across runs.
-    #[pyo3(signature = (max_cycles=None, stop_pcs=None, sp_above=None, stop_on_jam=true, irq_period=None, trace=None))]
+    #[pyo3(signature = (max_cycles=None, stop_pcs=None, sp_above=None, stop_on_jam=true, irq_period=None, trace=None, stop_ranges=None))]
     #[allow(clippy::too_many_arguments)]
     fn run_until<'py>(
         &self,
@@ -827,11 +841,12 @@ impl Core {
         stop_on_jam: bool,
         irq_period: Option<u64>,
         trace: Option<bool>,
+        stop_ranges: Option<Vec<(u32, u32)>>,
     ) -> PyResult<(&'static str, Option<Columns<'py>>)> {
         if irq_period == Some(0) {
             return Err(PyValueError::new_err("irq_period must be positive"));
         }
-        let pcs = pc_set(stop_pcs)?;
+        let pcs = pc_set(stop_pcs, stop_ranges)?;
         let due = &self.irq_due;
         let mut tr = trace.map(Trace::new);
         let r = self.drive(py, true, |cpu, bus, stop| {
@@ -904,7 +919,7 @@ impl Core {
         pcs: &Bound<'_, PyAny>,
         max_cycles: u64,
     ) -> PyResult<bool> {
-        let set = pc_set(Some(pcs))?;
+        let set = pc_set(Some(pcs), None)?;
         self.drive(py, true, move |cpu, bus, stop| {
             let r = run_to_rts(
                 cpu,

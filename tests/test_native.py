@@ -92,6 +92,10 @@ def test_run_until_reasons():
     mpu = MPU(memory=mem, pc=0x1000)
     assert mpu.run_until(max_cycles=300) == "cycles" and mpu.processorCycles == 303
     assert mpu.run_until(stop_pcs=[0x1000]) == "pc"
+    assert mpu.run_until(stop_ranges=[(0x0FF0, 0x1001)]) == "pc"
+    assert mpu.run_until(stop_ranges=[(0x1001, 0x2000)], max_cycles=9) == "cycles"
+    with pytest.raises(ValueError):
+        mpu.run_until(stop_ranges=[(0, 0x10001)])
     mem[0x1000] = 0x02
     assert mpu.run_until() == "jam" and mpu.jammed and mpu.pc == 0x1001
     mem[0x1000:0x1002] = [0x68, 0x02]  # PLA; JAM
