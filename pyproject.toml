@@ -41,6 +41,15 @@ Repository = "https://github.com/anarkiwi/jennings"
 [tool.setuptools.packages.find]
 include = ["jennings*"]
 
+# Wheels carry the native core: `maturin build --release` (CI) or `maturin develop`.
+# The sdist builds with setuptools above and installs the pure-Python engine only.
+[tool.maturin]
+manifest-path = "crates/jennings-py/Cargo.toml"
+module-name = "jennings._core"
+python-source = "."
+python-packages = ["jennings"]
+features = ["pyo3/extension-module"]
+
 [tool.coverage.run]
 source = ["jennings"]
 omit = ["jennings/superopt/cuda.py"]
