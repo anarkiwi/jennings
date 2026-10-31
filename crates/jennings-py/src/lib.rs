@@ -761,7 +761,7 @@ impl Core {
                 stop_on_jam,
             };
             reason(run_until(cpu, bus, &until, || {
-                stop.swap(false, Ordering::Relaxed)
+                stop.load(Ordering::Relaxed) && stop.swap(false, Ordering::Relaxed)
             }))
         })
     }
@@ -770,7 +770,7 @@ impl Core {
     fn run_to_rts(&self, py: Python<'_>, pc: u16, acc: i64, max_cycles: u64) -> PyResult<()> {
         self.drive(py, true, move |cpu, bus, stop| {
             run_to_rts(cpu, bus, pc, acc as u8, None, max_cycles, || {
-                stop.swap(false, Ordering::Relaxed)
+                stop.load(Ordering::Relaxed) && stop.swap(false, Ordering::Relaxed)
             });
         })
     }
@@ -787,7 +787,7 @@ impl Core {
         let set = pc_set(Some(pcs))?;
         self.drive(py, true, move |cpu, bus, stop| {
             let r = run_to_rts(cpu, bus, pc, acc as u8, set.as_ref(), max_cycles, || {
-                stop.swap(false, Ordering::Relaxed)
+                stop.load(Ordering::Relaxed) && stop.swap(false, Ordering::Relaxed)
             });
             r == Stop::Pc
         })

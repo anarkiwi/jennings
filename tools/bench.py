@@ -180,6 +180,7 @@ def main(argv=None) -> int:
     ap.add_argument("--cycles", type=int, default=20_000_000)
     ap.add_argument("--irq", type=int, default=20_000, help="cycles between IRQs")
     ap.add_argument("--threads", type=int, default=8)
+    ap.add_argument("--thread-cycles", type=int, default=500_000_000)
     ap.add_argument("--only", nargs="*", default=None, help="backend name prefixes, e.g. (c) (d)")
     args = ap.parse_args(argv)
     names = [n for n in BACKENDS if not args.only or any(n.startswith(p) for p in args.only)]
@@ -197,11 +198,11 @@ def main(argv=None) -> int:
         print("backends disagree on the final state: %r" % states, file=sys.stderr)
         return 1
     if args.threads:
-        one = threaded(1, args.cycles, args.irq)
-        many = threaded(args.threads, args.cycles, args.irq)
+        one = threaded(1, args.thread_cycles, args.irq)
+        many = threaded(args.threads, args.thread_cycles, args.irq)
         print(
             "\n%d threads x %d cycles via run_until: wall %.2f s vs %.2f s single (%.2fx)"
-            % (args.threads, args.cycles, many, one, many / one)
+            % (args.threads, args.thread_cycles, many, one, many / one)
         )
     return 0
 
