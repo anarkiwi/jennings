@@ -36,6 +36,7 @@ jobs:
         run: |
           python -m venv /tmp/smoke
           /tmp/smoke/bin/pip install dist/*.whl
+          cd "$RUNNER_TEMP"
           /tmp/smoke/bin/python -c "import jennings._core, jennings.memory as m; assert m.NATIVE"
       - uses: actions/upload-artifact@v7
         with:
