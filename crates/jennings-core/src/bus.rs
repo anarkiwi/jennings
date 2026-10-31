@@ -1,5 +1,7 @@
 //! The CPU's view of the address space.
 
+use crate::cpu::Cpu;
+
 /// A 64 KiB address space the [`Cpu`](crate::Cpu) runs on.
 ///
 /// `read`/`write` are the accesses that are neither instruction fetch, data nor
@@ -41,9 +43,9 @@ pub trait Bus {
         self.write(addr, v)
     }
 
-    /// Instruction (or interrupt) boundary; `cycles` is the CPU's count before it.
+    /// Instruction (or interrupt) boundary: `cpu` as it is before it executes.
     #[inline(always)]
-    fn sync(&mut self, _cycles: u64) {}
+    fn sync(&mut self, _cpu: &Cpu) {}
 }
 
 impl Bus for [u8; 0x10000] {

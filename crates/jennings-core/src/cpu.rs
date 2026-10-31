@@ -99,7 +99,7 @@ impl Cpu {
     /// Execute one instruction; cycles taken, page-cross and branch extras included.
     #[inline]
     pub fn step<B: Bus>(&mut self, bus: &mut B) -> u32 {
-        bus.sync(self.cycles);
+        bus.sync(self);
         let n = cpu_gen::execute(self, bus);
         self.cycles += n as u64;
         n
@@ -119,7 +119,7 @@ impl Cpu {
     }
 
     fn interrupt<B: Bus>(&mut self, bus: &mut B, vec: u16) -> u32 {
-        bus.sync(self.cycles);
+        bus.sync(self);
         self.push(bus, (self.pc >> 8) as u8);
         self.push(bus, self.pc as u8);
         self.push(bus, self.status(0));
