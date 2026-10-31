@@ -22,7 +22,7 @@ classifiers = [
     "Topic :: Software Development :: Disassemblers",
     "Topic :: System :: Emulators",
 ]
-dependencies = ["deity-informant>=0.4.1"]
+dependencies = ["deity-informant>=0.6.2"]
 
 [project.optional-dependencies]
 superopt = ["z3-solver>=4.12", "numpy>=1.23"]

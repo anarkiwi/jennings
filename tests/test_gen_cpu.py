@@ -20,16 +20,20 @@ def test_every_opcode_has_a_generated_fn():
         assert "fn op_%02x<" % op in src and "0x%02x => op_%02x(" % (op, op) in src
 
 
-def test_sha_indy_binds_the_loaded_pointer():
-    """$93's H+1 is read by the lifter from the pointer; the generator binds the P-Code LOAD."""
-    o = gen_cpu._Op(0x93)
-    assert any(e.startswith("((u") for e in o.consts.values())
+def test_sha_indy_has_no_operand_bound_h_plus_1():
+    """$93's H+1 is P-Code on the loaded pointer, so only the zp operand is bound."""
+    assert set(gen_cpu._Op(0x93).consts.values()) == {"b1", "((b1 + 1) & 0xff)"}
 
 
 def test_unexplained_constant_is_an_error(monkeypatch):
-    o = gen_cpu._Op(0x93)
+    o = gen_cpu._Op(0xA9)
+    rec = o.lifts[1][0]
+    i = next(i for i, (_m, _o, ins) in enumerate(rec["ops"]) if any(v[0] == "c" for v in ins))
+    j = next(j for j, v in enumerate(rec["ops"][i][2]) if v[0] == "c")
+    rec["ops"][i][2][j] = ["c", rec["ops"][i][2][j][1] ^ 1, 1]
+    o.rec["prov"]["ops"].pop((i, j), None)
     with pytest.raises(NotImplementedError):
-        o._lift_time_read([1, 2])
+        o._bind_consts()
     monkeypatch.setattr(gen_cpu, "OUT", gen_cpu.OUT.with_name("missing-stale.rs"))
     gen_cpu.OUT.write_text("stale")
     try:

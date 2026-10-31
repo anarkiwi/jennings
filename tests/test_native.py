@@ -336,9 +336,18 @@ def test_differential_harness_smoke():
         assert difftest.run_program(seed, 20_000, seed % 2 == 0) is None
 
 
-def test_differential_harness_catches_stale_sha(monkeypatch):
-    """Sensitivity: the reference's stale ``$93`` cache entry must show up as a divergence."""
-    monkeypatch.setattr(difftest._NoStaleSha, "__setitem__", dict.__setitem__)
+def test_differential_harness_detects_a_divergence(monkeypatch):
+    """Sensitivity: a reference raster one line late must show up as a divergence."""
+    raster = difftest._Side._raster
+
+    def late(self, addr):
+        self.mpu.processorCycles -= difftest.PAL_CPL
+        try:
+            return raster(self, addr)
+        finally:
+            self.mpu.processorCycles += difftest.PAL_CPL
+
+    monkeypatch.setattr(difftest._Side, "_raster", late)
     assert any(difftest.run_program(seed, 100_000, False) for seed in range(8))
 
 

@@ -42,14 +42,6 @@ class _Paged:
         self.ram[addr] = value
 
 
-class _NoStaleSha(dict):
-    """PcodeVM cache that never keeps ``$93``: its lifted ``H+1`` comes from the zp pointer."""
-
-    def __setitem__(self, key, rec):
-        if key[1] != 0x93:
-            super().__setitem__(key, rec)
-
-
 @dataclass
 class Program:
     seed: int
@@ -86,8 +78,6 @@ class _Side:
             mem.subscribe_to_read((0xD011, 0xD012), self._raster)
         self.mem = mem
         self.mpu = MPU(memory=mem)
-        if not native:
-            self.mpu._cache = _NoStaleSha()
         for base in READ_PAGES:
             mem.subscribe_to_read(range(base << 8, (base + 1) << 8), self._read_a)
         mem.subscribe_to_read(range(0xD400, 0xD420), self._read_b)
