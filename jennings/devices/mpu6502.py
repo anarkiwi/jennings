@@ -13,6 +13,8 @@ from jennings.opcodes import OPCODES, ILLEGAL_OPCODES, MODE_TOKEN
 
 if NATIVE:
     from jennings._core import Core
+else:  # pragma: no cover - sdist install without the native core
+    Core = None
 
 __all__ = ["MPU", "NativeMPU", "ILLEGAL_OPCODES"]
 
@@ -75,9 +77,8 @@ class MPU:
     extracycles = list(EXTRACYCLES)
 
     def __new__(cls, memory=None, pc=0x0000):
-        if cls is MPU and NATIVE and isinstance(memory, NativeMemory):
-            cls = NativeMPU
-        return super().__new__(cls)
+        native = cls is MPU and NATIVE and isinstance(memory, NativeMemory)
+        return super().__new__(NativeMPU if native else cls)
 
     def __init__(self, memory=None, pc=0x0000):
         self.name = "6510"
@@ -266,7 +267,7 @@ class NativeMPU(MPU):
 
     native = True
 
-    def __init__(self, memory=None, pc=0x0000):
+    def __init__(self, memory=None, pc=0x0000):  # pylint: disable=super-init-not-called
         if memory is None:
             memory = NativeMemory()
         if not isinstance(memory, NativeMemory):

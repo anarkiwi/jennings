@@ -59,6 +59,7 @@ line-length = 100
 
 [tool.pylint.main]
 jobs = 0
+extension-pkg-allow-list = ["jennings._core"]
 
 [tool.pylint.format]
 max-line-length = 100

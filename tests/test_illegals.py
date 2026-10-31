@@ -46,10 +46,10 @@ _RMW = {
 
 
 @pytest.mark.parametrize("op", sorted(_RMW))
-def test_rmw_illegal_equals_decomposition(op):
+def test_rmw_illegal_equals_decomposition(op, new_mem):
     name, op1, op2 = _RMW[op]
     ref = py65.MPU(memory=bytearray(0x10000))
-    vm = MPU(memory=bytearray(0x10000))
+    vm = MPU(memory=new_mem(bytearray(0x10000)))
     rng = np.random.default_rng(op)
     for _ in range(300):
         a, x, y, sp = (int(v) for v in rng.integers(0, 256, 4))
@@ -68,55 +68,55 @@ def test_rmw_illegal_equals_decomposition(op):
         assert _state(vm) == _state(ref), "%s a=%02X mem=%02X p=%02X" % (name, a, base[ZP], p)
 
 
-def test_lax_and_sax():
-    mpu = MPU()
+def test_lax_and_sax(new_mem):
+    mpu = MPU(memory=new_mem())
     mpu.memory[0:2] = [0xA7, ZP]  # LAX zp
     mpu.memory[ZP] = 0x80
     mpu.step()
     assert mpu.a == 0x80 and mpu.x == 0x80 and mpu.p & MPU.NEGATIVE
-    mpu = MPU()
+    mpu = MPU(memory=new_mem())
     mpu.a, mpu.x = 0xF0, 0x0F
     mpu.memory[0:2] = [0x87, ZP]  # SAX zp: mem = A & X
     mpu.step()
     assert mpu.memory[ZP] == (0xF0 & 0x0F)
 
 
-def test_anc_alr_arr():
-    mpu = MPU()
+def test_anc_alr_arr(new_mem):
+    mpu = MPU(memory=new_mem())
     mpu.a = 0xFF
     mpu.memory[0:2] = [0x0B, 0x80]  # ANC #$80 -> A=A&imm, C=bit7
     mpu.step()
     assert mpu.a == 0x80 and mpu.p & MPU.CARRY and mpu.p & MPU.NEGATIVE
-    mpu = MPU()
+    mpu = MPU(memory=new_mem())
     mpu.a = 0xFF
     mpu.memory[0:2] = [0x4B, 0x03]  # ALR #$03 -> (A&3)>>1, C=old bit0
     mpu.step()
     assert mpu.a == 0x01 and mpu.p & MPU.CARRY
 
 
-def test_sbx():
-    mpu = MPU()
+def test_sbx(new_mem):
+    mpu = MPU(memory=new_mem())
     mpu.a, mpu.x = 0xFF, 0x0F
     mpu.memory[0:2] = [0xCB, 0x05]  # X = (A&X) - imm
     mpu.step()
     assert mpu.x == (0x0F - 0x05) and mpu.p & MPU.CARRY
 
 
-def test_lxa_ane_magic():
-    mpu = MPU()
+def test_lxa_ane_magic(new_mem):
+    mpu = MPU(memory=new_mem())
     mpu.a = 0x00
     mpu.memory[0:2] = [0xAB, 0xFF]  # LXA: A=X=(A|MAGIC)&imm
     mpu.step()
     assert mpu.a == (MAGIC & 0xFF) and mpu.x == mpu.a
-    mpu = MPU()
+    mpu = MPU(memory=new_mem())
     mpu.a, mpu.x = 0x00, 0xFF
     mpu.memory[0:2] = [0x8B, 0xFF]  # ANE: A=(A|MAGIC)&X&imm
     mpu.step()
     assert mpu.a == (MAGIC & 0xFF)
 
 
-def test_las():
-    mpu = MPU()
+def test_las(new_mem):
+    mpu = MPU(memory=new_mem())
     mpu.sp = 0xFF
     mpu.memory[0x1000:0x1003] = [0xBB, 0x00, 0x20]  # LAS $2000,Y
     mpu.memory[0x2000] = 0x3C
@@ -125,8 +125,8 @@ def test_las():
     assert mpu.a == 0x3C and mpu.x == 0x3C and mpu.sp == 0x3C
 
 
-def test_sh_group_high_byte_and():
-    mpu = MPU()
+def test_sh_group_high_byte_and(new_mem):
+    mpu = MPU(memory=new_mem())
     mpu.a, mpu.x, mpu.y = 0xFF, 0xFF, 0x04
     mpu.memory[0x1000:0x1003] = [0x9F, 0x00, 0x20]  # SHA $2000,Y -> A&X&(H+1)
     mpu.pc = 0x1000
@@ -134,8 +134,8 @@ def test_sh_group_high_byte_and():
     assert mpu.memory[0x2004] == (0xFF & 0xFF & 0x21)
 
 
-def test_jam_flags_and_advances():
-    mpu = MPU()
+def test_jam_flags_and_advances(new_mem):
+    mpu = MPU(memory=new_mem())
     mpu.memory[0x1000] = 0x02  # JAM
     mpu.pc = 0x1000
     c = mpu.processorCycles
@@ -144,11 +144,11 @@ def test_jam_flags_and_advances():
     assert mpu.jammed and mpu.pc == 0x1001 and mpu.processorCycles > c
 
 
-def test_all_illegals_execute():
+def test_all_illegals_execute(new_mem):
     assert len(ILLEGAL_OPCODES) == 105
     jam = {0x02, 0x12, 0x22, 0x32, 0x42, 0x52, 0x62, 0x72, 0x92, 0xB2, 0xD2, 0xF2}
     for op in sorted(ILLEGAL_OPCODES - jam):
-        mpu = MPU(memory=bytearray(0x10000))
+        mpu = MPU(memory=new_mem(bytearray(0x10000)))
         mpu.a = mpu.x = mpu.y = 0x5A
         mpu.memory[PC], mpu.memory[PC + 1], mpu.memory[PC + 2] = op, 0x10, 0x20
         mpu.pc = PC
