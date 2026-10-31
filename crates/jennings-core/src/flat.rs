@@ -93,13 +93,37 @@ fn cells(n: usize) -> Box<[Cell<u8>]> {
     (0..n).map(|_| Cell::new(0)).collect()
 }
 
+/// The 64 KiB RAM: owned, or borrowed from an external writable buffer.
+enum Ram {
+    Owned(Box<[Cell<u8>]>),
+    /// SAFETY contract of [`FlatMemory::with_shared_ram`]: valid for 64 KiB while `self` lives.
+    Shared(*const Cell<u8>),
+}
+
+// SAFETY: `Shared` is a plain pointer to memory the embedder guarantees; `Cell` access is
+// already the embedder's to serialise, as for the owned box.
+unsafe impl Send for Ram {}
+
+impl std::ops::Deref for Ram {
+    type Target = [Cell<u8>];
+
+    #[inline(always)]
+    fn deref(&self) -> &[Cell<u8>] {
+        match self {
+            Ram::Owned(b) => b,
+            // SAFETY: see `Ram::Shared`.
+            Ram::Shared(p) => unsafe { std::slice::from_raw_parts(*p, 0x10000) },
+        }
+    }
+}
+
 /// 64 KiB RAM plus a page table of sixteen 4 KiB pages.
 ///
 /// Reads of an overlaid page come from its image, writes always reach RAM
 /// (ROM under RAM, as on a C64). Mutation goes through `&self`, so a hook may
 /// rebank, poke or (un)watch from inside an access.
 pub struct FlatMemory {
-    ram: Box<[Cell<u8>]>,
+    ram: Ram,
     shadow: Box<[Cell<u8>]>,
     rpage: [Cell<u8>; 256],
     wpage: [Cell<u8>; 256],
@@ -111,7 +135,8 @@ pub struct FlatMemory {
     io: Cell<bool>,
     raster: Cell<Option<(u32, u32)>>,
     now: Cell<u64>,
-    last_load: Cell<u16>,
+    last_load: Cell<Option<u16>>,
+    stack_obs: Cell<bool>,
 }
 
 impl Default for FlatMemory {
@@ -123,7 +148,7 @@ impl Default for FlatMemory {
 impl FlatMemory {
     pub fn new() -> Self {
         FlatMemory {
-            ram: cells(0x10000),
+            ram: Ram::Owned(cells(0x10000)),
             shadow: cells(0x10000),
             rpage: std::array::from_fn(|_| Cell::new(0)),
             wpage: std::array::from_fn(|_| Cell::new(0)),
@@ -135,7 +160,20 @@ impl FlatMemory {
             io: Cell::new(false),
             raster: Cell::new(None),
             now: Cell::new(0),
-            last_load: Cell::new(0),
+            last_load: Cell::new(None),
+            stack_obs: Cell::new(false),
+        }
+    }
+
+    /// A memory whose RAM is the 64 KiB at `ram`, not a copy.
+    ///
+    /// # Safety
+    /// `ram` must be valid for reads and writes of 0x10000 bytes for the life of the
+    /// returned value, and written by nothing else while a [`Cpu`] runs on it.
+    pub unsafe fn with_shared_ram(ram: *mut u8) -> Self {
+        FlatMemory {
+            ram: Ram::Shared(ram as *const Cell<u8>),
+            ..Self::new()
         }
     }
 
@@ -205,8 +243,8 @@ impl FlatMemory {
         self.now.set(cycles)
     }
 
-    /// The address of the most recent data LOAD.
-    pub fn last_load(&self) -> u16 {
+    /// The address of the most recent data LOAD, None before the first.
+    pub fn last_load(&self) -> Option<u16> {
         self.last_load.get()
     }
 
@@ -218,6 +256,16 @@ impl FlatMemory {
     pub fn watch_write(&self, addr: u16, on: bool) {
         self.wsub.set(addr, on);
         self.refresh(addr as usize >> 8);
+    }
+
+    /// Also report `PHA`/`PHP`/`PLA`/`PLP` page-1 accesses to the load/store observers.
+    pub fn observe_stack(&self, on: bool) {
+        self.stack_obs.set(on)
+    }
+
+    #[inline(always)]
+    fn observed(&self, access: Access) -> bool {
+        access == Access::Data || (access == Access::Stack && self.stack_obs.get())
     }
 
     pub fn observe_load(&self, addr: u16, on: bool) {
@@ -269,9 +317,9 @@ impl FlatMemory {
     #[inline(always)]
     fn fetch(&self, addr: u16) -> u8 {
         let src = if self.overlay.get() >> (addr >> 12) & 1 != 0 {
-            &self.shadow
+            &*self.shadow
         } else {
-            &self.ram
+            &*self.ram
         };
         src[addr as usize].get()
     }
@@ -300,7 +348,7 @@ impl FlatMemory {
     fn read_as<H: Hooks>(&self, h: &mut H, addr: u16, access: Access) -> u8 {
         let f = self.rpage[addr as usize >> 8].get();
         if access == Access::Data {
-            self.last_load.set(addr);
+            self.last_load.set(Some(addr));
         }
         if f == 0 {
             return self.ram(addr);
@@ -321,7 +369,7 @@ impl FlatMemory {
             }
         }
         let v = v.unwrap_or_else(|| self.mapped(h, addr));
-        if access == Access::Data && f & R_OBS != 0 && self.robs.get(addr) {
+        if self.observed(access) && f & R_OBS != 0 && self.robs.get(addr) {
             h.observe_load(self, addr);
         }
         v
@@ -348,7 +396,7 @@ impl FlatMemory {
         } else {
             self.set_ram(addr, stored);
         }
-        if access == Access::Data && f & W_OBS != 0 && self.wobs.get(addr) {
+        if self.observed(access) && f & W_OBS != 0 && self.wobs.get(addr) {
             h.observe_store(self, addr, v);
         }
     }

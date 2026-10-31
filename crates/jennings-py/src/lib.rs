@@ -84,6 +84,8 @@ pub struct Memory {
     flat: FlatMemory,
     subs: UnsafeCell<Subs>,
     owner: Owner,
+    /// The exported buffer a `share=True` memory runs on; keeps it alive and pinned.
+    _shared: Option<PyBuffer<u8>>,
 }
 
 // SAFETY: every access holds the GIL; while a driver runs detached, `owner`
@@ -132,12 +134,32 @@ fn addrs(it: &Bound<'_, PyAny>) -> PyResult<Vec<u16>> {
 #[pymethods]
 impl Memory {
     #[new]
-    #[pyo3(signature = (data=None))]
-    fn new(data: Option<&Bound<'_, PyAny>>) -> PyResult<Self> {
+    #[pyo3(signature = (data=None, share=false))]
+    fn new(data: Option<&Bound<'_, PyAny>>, share: bool) -> PyResult<Self> {
+        if share {
+            let Some(obj) = data else {
+                return Err(PyValueError::new_err("share=True needs a buffer"));
+            };
+            let buf = PyBuffer::<u8>::get(obj)?;
+            if buf.readonly() || buf.len_bytes() != 0x10000 || !buf.is_c_contiguous() {
+                return Err(PyValueError::new_err(
+                    "share=True needs a writable, contiguous 64 KiB buffer",
+                ));
+            }
+            // SAFETY: writable 64 KiB; `_shared` keeps the export (and its owner) alive and pinned.
+            let flat = unsafe { FlatMemory::with_shared_ram(buf.buf_ptr() as *mut u8) };
+            return Ok(Memory {
+                flat,
+                subs: UnsafeCell::default(),
+                owner: Owner::default(),
+                _shared: Some(buf),
+            });
+        }
         let m = Memory {
             flat: FlatMemory::new(),
             subs: UnsafeCell::default(),
             owner: Owner::default(),
+            _shared: None,
         };
         if let Some(d) = data.map(octets).transpose()? {
             if d.len() > 0x10000 {
@@ -259,9 +281,9 @@ impl Memory {
         Ok(())
     }
 
-    /// Address of the most recent data LOAD by the CPU.
+    /// Address of the most recent data LOAD by the CPU; None before the first.
     #[getter]
-    fn last_load(&self) -> u16 {
+    fn last_load(&self) -> Option<u16> {
         self.flat.last_load()
     }
 
@@ -285,12 +307,13 @@ impl Memory {
         self.subscribe(py, addrs(addrs_)?, cb, false)
     }
 
-    /// Route the CPU's data LOAD/STORE (never fetch or stack) per byte to callbacks.
+    /// Route the CPU's data LOAD/STORE (never fetch; stack only with ``stack=True``) per byte to callbacks.
     ///
     /// ``on_read(addr)`` after a load, ``on_write(addr, value)`` with the instruction's
     /// value after a store. ``reads``/``writes`` limit them to those addresses
-    /// (default: all). Replaces any previous observers; both None clears them.
-    #[pyo3(signature = (on_read=None, on_write=None, reads=None, writes=None))]
+    /// (default: all). ``stack=True`` also reports the page-1
+    /// accesses of PHA/PHP/PLA/PLP. Replaces any previous observers; both None clears them.
+    #[pyo3(signature = (on_read=None, on_write=None, reads=None, writes=None, stack=false))]
     fn observe_data_access(
         &self,
         py: Python<'_>,
@@ -298,8 +321,10 @@ impl Memory {
         on_write: Option<Py<PyAny>>,
         reads: Option<&Bound<'_, PyAny>>,
         writes: Option<&Bound<'_, PyAny>>,
+        stack: bool,
     ) -> PyResult<()> {
         self.owner.check()?;
+        self.flat.observe_stack(stack);
         let pick = |on: bool, set: Option<&Bound<'_, PyAny>>| -> PyResult<Vec<bool>> {
             let mut bits = vec![on && set.is_none(); 0x10000];
             if let (true, Some(s)) = (on, set) {
@@ -729,6 +754,18 @@ impl Core {
     fn set_cycles(&self, v: u64) -> PyResult<()> {
         self.regs_mut()?.cycles = v;
         self.mem.get().flat.set_now(v);
+        Ok(())
+    }
+
+    /// Instructions executed since reset; a callback sees the count before its instruction.
+    #[getter]
+    fn get_steps(&self) -> PyResult<u64> {
+        Ok(self.regs()?.steps)
+    }
+
+    #[setter]
+    fn set_steps(&self, v: u64) -> PyResult<()> {
+        self.regs_mut()?.steps = v;
         Ok(())
     }
 

@@ -138,7 +138,7 @@ fn flat_memory_pages_watches_observers() {
             c.step(&mut bus);
         }
     }
-    assert_eq!(m.last_load(), 0xC000);
+    assert_eq!(m.last_load(), Some(0xC000));
     assert_eq!(m.ram(0xE000), 0x42 ^ 0xFF);
     assert!(!m.page_mapped(0xE));
     assert_eq!(

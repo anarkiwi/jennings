@@ -424,3 +424,60 @@ def test_run_until_trace():
     assert mpu.run_until(max_cycles=5) in ("cycles", "pc", "jam", "sp")
     _, tr = mpu.run_until(max_cycles=0, regs=True)
     assert len(tr) == 1 and len(tr.sp) == 1
+
+
+def test_steps_matches_trace_rows():
+    mem = NativeMemory()
+    mem[0x1000:0x1008] = [0xEE, 0x00, 0xC0, 0xEE, 0x00, 0xC0, 0x4C, 0x00]  # INC $C000 x2; JMP
+    mem[0x1008] = 0x10
+    mpu = MPU(memory=mem, pc=0x1000)
+    assert mpu.steps == 0
+    seen = []
+    mem.observe_data_access(on_write=lambda a, v: seen.append((mpu.steps, v)))
+    _, tr = mpu.run_until(max_cycles=40, trace=True)
+    assert seen and all(tr.pc[i] in (0x1000, 0x1003) for i, _ in seen)
+    assert mpu.steps == len(tr)
+    mpu.reset()
+    assert mpu.steps == 0
+
+
+def test_observe_stack_and_last_load_none():
+    mem = NativeMemory()
+    mem[0x1000:0x1006] = [0x48, 0x68, 0x08, 0x28, 0x20, 0x00]  # PHA PLA PHP PLP JSR $20xx
+    mem[0x1006] = 0x20
+    mem[0x2000] = 0x60
+    assert mem.last_load is None
+    got = []
+    mem.observe_data_access(lambda a: got.append(("r", a)), lambda a, v: got.append(("w", a)))
+    mpu = MPU(memory=mem, pc=0x1000)
+    for _ in range(6):
+        mpu.step()
+    assert got == [] and mem.last_load is None
+    mem.observe_data_access(
+        lambda a: got.append(("r", a)), lambda a, v: got.append(("w", a)), stack=True
+    )
+    mpu.pc = 0x1000
+    for _ in range(6):
+        mpu.step()  # JSR/RTS frames are not PHA/PHP/PLA/PLP accesses
+    assert got == [("w", 0x1FF), ("r", 0x1FF), ("w", 0x1FF), ("r", 0x1FF)]
+    mem[0x1000:0x1003] = [0xAD, 0x00, 0x00]  # LDA $0000
+    mpu.pc = 0x1000
+    mpu.step()
+    assert mem.last_load == 0
+
+
+def test_shared_memory_aliases_buffer():
+    ram = bytearray(0x10000)
+    ram[0x1000:0x1003] = [0xE6, 0x10, 0x60]  # INC $10; RTS
+    mem = NativeMemory(ram, share=True)
+    mpu = MPU(memory=mem)
+    mpu.run_to_rts(0x1000, 0, 100)
+    assert ram[0x10] == 1 and mem[0x10] == 1
+    ram[0x10] = 7  # host writes show through
+    assert mem[0x10] == 7
+    for bad in (bytearray(10), bytes(0x10000)):
+        with pytest.raises(ValueError):
+            NativeMemory(bad, share=True)
+    with pytest.raises(ValueError):
+        NativeMemory(share=True)
+    assert bytes(NativeMemory(ram)) == bytes(ram) and NativeMemory(ram) is not mem
