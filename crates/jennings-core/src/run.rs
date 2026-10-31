@@ -18,6 +18,11 @@ impl AddrSet {
         self.0[a as usize >> 6] |= 1 << (a & 63);
     }
 
+    /// Insert every address in the half-open range `[lo, hi)` (`hi` up to `0x10000`).
+    pub fn insert_range(&mut self, lo: u32, hi: u32) {
+        (lo..hi.min(0x10000)).for_each(|a| self.insert(a as u16));
+    }
+
     #[inline(always)]
     pub fn contains(&self, a: u16) -> bool {
         self.0[a as usize >> 6] >> (a & 63) & 1 != 0

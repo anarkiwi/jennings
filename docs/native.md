@@ -68,7 +68,7 @@ to address sets; `mem.last_load` is the address of the most recent data load.
 
 `NativeMPU.run_until(max_cycles=None, stop_pcs=None, sp_above=None, stop_on_jam=True,
 irq_period=None)` steps with the GIL released until, before an instruction, SP exceeds
-`sp_above`, more than `max_cycles` have elapsed, or PC is in `stop_pcs`; or, after one, a
+`sp_above`, more than `max_cycles` have elapsed, or PC is in `stop_pcs` or a half-open `(lo, hi)` of `stop_ranges`; or, after one, a
 JAM ran or a callback set `mpu.stop = True`. It returns `"sp"`, `"cycles"`, `"pc"`,
 `"jam"` or `"stop"`. With `irq_period`, the instruction that brings the cycle count to
 `mpu.irq_due` is followed by `irq()` (dropped if I is set, as `MPU.irq()` does) and
