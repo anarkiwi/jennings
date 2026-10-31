@@ -235,3 +235,25 @@ fn periodic_irq_fires_on_schedule_and_drops_when_masked() {
     run_until(&mut c, &mut *m, &mut u, || false);
     assert_eq!((c.sp, c.pc & 0xF000), (sp, 0x1000));
 }
+
+#[test]
+fn idle_and_irq_stops() {
+    // NOP ; JMP $1001 (idles) ; CLI at $2000
+    let mut m = ram(&[(0x1000, &[0xEA, 0x4C, 0x01, 0x10]), (0x2000, &[0x58, 0xEA])]);
+    let mut c = Cpu::new();
+    c.pc = 0x1000;
+    let mut u = Until {
+        stop_on_idle: true,
+        ..Until::default()
+    };
+    assert_eq!(run_until(&mut c, &mut *m, &mut u, || false), Stop::Idle);
+    assert_eq!(c.pc, 0x1001);
+    c.pc = 0x2000;
+    c.i = 1;
+    let mut u = Until {
+        stop_on_irq: true,
+        ..Until::default()
+    };
+    assert_eq!(run_until(&mut c, &mut *m, &mut u, || false), Stop::Irq);
+    assert_eq!(c.pc, 0x2001);
+}

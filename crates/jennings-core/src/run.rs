@@ -50,6 +50,10 @@ pub enum Stop {
     Jam,
     /// The `stopped` probe asked to stop after an instruction.
     Stopped,
+    /// An instruction left both PC and SP unchanged (`JMP *`, a branch to itself).
+    Idle,
+    /// The I flag is clear (checked before an instruction).
+    Irq,
 }
 
 /// Per-instruction record of a run: one row per executed instruction.
@@ -111,6 +115,10 @@ pub struct Until<'a> {
     pub max_cycles: Option<u64>,
     pub stop_pcs: Option<&'a AddrSet>,
     pub stop_on_jam: bool,
+    /// Stop after an instruction that leaves PC and SP as they were.
+    pub stop_on_idle: bool,
+    /// Stop before an instruction when the I flag is clear.
+    pub stop_on_irq: bool,
     pub irq: Option<Periodic>,
     pub trace: Option<&'a mut Trace>,
 }
@@ -133,7 +141,11 @@ pub fn run_until<B: Bus, S: FnMut() -> bool>(
         if until.stop_pcs.is_some_and(|s| s.contains(cpu.pc)) {
             return Stop::Pc;
         }
+        if until.stop_on_irq && cpu.i == 0 {
+            return Stop::Irq;
+        }
         let jams = cpu.jams;
+        let (pc0, sp0) = (cpu.pc, cpu.sp);
         if let Some(t) = until.trace.as_deref_mut() {
             t.start(cpu);
         }
@@ -152,6 +164,9 @@ pub fn run_until<B: Bus, S: FnMut() -> bool>(
         }
         if until.stop_on_jam && cpu.jams != jams {
             return Stop::Jam;
+        }
+        if until.stop_on_idle && cpu.pc == pc0 && cpu.sp == sp0 {
+            return Stop::Idle;
         }
     }
 }
