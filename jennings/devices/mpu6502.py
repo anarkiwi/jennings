@@ -381,7 +381,9 @@ class NativeMPU(MPU):
         stop_on_idle=False,
         stop_on_irq=False,
     ):
-        """Run with the GIL released; ``"cycles"``/``"pc"``/``"sp"``/``"jam"``/``"stop"``/``"idle"``/``"irq"``.
+        """Run with the GIL released.
+
+        Returns ``"cycles"``, ``"pc"``, ``"sp"``, ``"jam"``, ``"stop"``, ``"idle"`` or ``"irq"``.
 
         Before each instruction: SP above ``sp_above``, more than ``max_cycles``
         elapsed, or PC in ``stop_pcs`` or in a half-open ``(lo, hi)`` of
