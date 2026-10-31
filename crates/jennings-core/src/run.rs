@@ -47,20 +47,31 @@ pub enum Stop {
     Stopped,
 }
 
+/// A periodic IRQ: taken (unless masked) once the cycle count reaches `due`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Periodic {
+    pub period: u64,
+    pub due: u64,
+}
+
 /// Stop conditions; the boundary checks run in field order before each instruction.
+///
+/// `irq`, after each instruction, calls [`Cpu::irq`] when `due` is reached and
+/// advances `due` by `period` (a masked IRQ is dropped, as `MPU.irq()` does).
 #[derive(Clone, Default)]
 pub struct Until<'a> {
     pub sp_above: Option<i32>,
     pub max_cycles: Option<u64>,
     pub stop_pcs: Option<&'a AddrSet>,
     pub stop_on_jam: bool,
+    pub irq: Option<Periodic>,
 }
 
 /// Step until a condition in `until` holds or `stopped()` returns true after an instruction.
 pub fn run_until<B: Bus, S: FnMut() -> bool>(
     cpu: &mut Cpu,
     bus: &mut B,
-    until: &Until,
+    until: &mut Until,
     mut stopped: S,
 ) -> Stop {
     let start = cpu.cycles;
@@ -76,6 +87,12 @@ pub fn run_until<B: Bus, S: FnMut() -> bool>(
         }
         let jams = cpu.jams;
         cpu.step(bus);
+        if let Some(p) = until.irq.as_mut() {
+            if cpu.cycles >= p.due {
+                cpu.irq(bus);
+                p.due += p.period;
+            }
+        }
         if stopped() {
             return Stop::Stopped;
         }
@@ -105,11 +122,11 @@ pub fn run_to_rts<B: Bus, S: FnMut() -> bool>(
     }
     cpu.a = acc;
     cpu.pc = pc;
-    let until = Until {
+    let mut until = Until {
         sp_above: Some(start_sp - 1),
         max_cycles: Some(max_cycles),
         stop_pcs,
-        stop_on_jam: false,
+        ..Until::default()
     };
-    run_until(cpu, bus, &until, stopped)
+    run_until(cpu, bus, &mut until, stopped)
 }

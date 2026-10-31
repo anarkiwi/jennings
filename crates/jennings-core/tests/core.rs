@@ -1,7 +1,8 @@
 use std::cell::RefCell;
 
 use jennings_core::{
-    run_to_rts, run_until, Access, AddrSet, Bus, Cpu, FlatMemory, Hooks, NoHooks, Stop, Until,
+    run_to_rts, run_until, Access, AddrSet, Bus, Cpu, FlatMemory, Hooks, NoHooks, Periodic, Stop,
+    Until,
 };
 
 fn ram(prog: &[(u16, &[u8])]) -> Box<[u8; 0x10000]> {
@@ -62,23 +63,23 @@ fn drivers_stop_where_asked() {
     let mut c = Cpu::new();
     c.pc = 0x1000;
     let pcs: AddrSet = [0x2001].into_iter().collect();
-    let u = Until {
+    let mut u = Until {
         stop_pcs: Some(&pcs),
         ..Until::default()
     };
-    assert_eq!(run_until(&mut c, &mut *m, &u, || false), Stop::Pc);
-    let u = Until {
+    assert_eq!(run_until(&mut c, &mut *m, &mut u, || false), Stop::Pc);
+    let mut u = Until {
         stop_on_jam: true,
         ..Until::default()
     };
-    assert_eq!(run_until(&mut c, &mut *m, &u, || false), Stop::Jam);
-    let u = Until {
+    assert_eq!(run_until(&mut c, &mut *m, &mut u, || false), Stop::Jam);
+    let mut u = Until {
         max_cycles: Some(1),
         ..Until::default()
     };
-    assert_eq!(run_until(&mut c, &mut *m, &u, || false), Stop::Cycles);
+    assert_eq!(run_until(&mut c, &mut *m, &mut u, || false), Stop::Cycles);
     assert_eq!(
-        run_until(&mut c, &mut *m, &Until::default(), || true),
+        run_until(&mut c, &mut *m, &mut Until::default(), || true),
         Stop::Stopped
     );
     c.sp = 0xF0;
@@ -193,4 +194,44 @@ fn bus_defaults_route_to_read_write() {
     b.stack_write(0x1FF, 3);
     assert_eq!((b.load(1), b.stack_read(0x1FF), b.fetch(1)), (2, 3, 2));
     b.sync(&Cpu::new());
+}
+
+#[test]
+fn periodic_irq_fires_on_schedule_and_drops_when_masked() {
+    // $1000: JMP $1000 ; IRQ handler $3000: RTI
+    let mut m = ram(&[
+        (0x1000, &[0x4C, 0x00, 0x10]),
+        (0xFFFE, &[0x00, 0x30]),
+        (0x3000, &[0x40]),
+    ]);
+    let mut c = Cpu::new();
+    c.pc = 0x1000;
+    let p = Periodic {
+        period: 30,
+        due: 30,
+    };
+    let mut u = Until {
+        max_cycles: Some(95),
+        irq: Some(p),
+        ..Until::default()
+    };
+    run_until(&mut c, &mut *m, &mut u, || false);
+    assert_eq!(
+        u.irq,
+        Some(Periodic {
+            period: 30,
+            due: 120
+        })
+    );
+    c.pc = 0x1000;
+    c.sp = 0xFF;
+    c.i = 1;
+    let sp = c.sp;
+    let mut u = Until {
+        max_cycles: Some(30),
+        irq: Some(p),
+        ..Until::default()
+    };
+    run_until(&mut c, &mut *m, &mut u, || false);
+    assert_eq!((c.sp, c.pc & 0xF000), (sp, 0x1000));
 }

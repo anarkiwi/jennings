@@ -7,13 +7,12 @@ name = "jennings"
 version = "0.4.0"
 description = "py65-compatible 6502/6510 MPU, assembler, and disassembler with first-class NMOS illegal-opcode support."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = { text = "Apache-2.0" }
 authors = [{ name = "Josh Bailey", email = "josh@overlyspecific.com" }]
 keywords = ["6502", "6510", "c64", "py65", "emulator", "assembler", "disassembler", "illegal-opcodes"]
 classifiers = [
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",

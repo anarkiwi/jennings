@@ -8,10 +8,11 @@
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::ffi::{c_int, c_void};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use jennings_core::{
-    run_to_rts, run_until, Access, AddrSet, Bus, Cpu, FlatBus, FlatMemory, Hooks, Stop, Until,
+    run_to_rts, run_until, Access, AddrSet, Bus, Cpu, FlatBus, FlatMemory, Hooks, Periodic, Stop,
+    Until,
 };
 use pyo3::buffer::PyBuffer;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -20,6 +21,7 @@ use pyo3::prelude::*;
 use pyo3::types::PySlice;
 
 const PAL: (u32, u32) = (63, 312);
+const NO_IRQ: u64 = u64::MAX;
 const NTSC: (u32, u32) = (65, 263);
 
 thread_local!(static TOKEN: u8 = const { 0 });
@@ -522,6 +524,7 @@ pub struct Core {
     snap: UnsafeCell<Cpu>,
     mem: Py<Memory>,
     stop: AtomicBool,
+    irq_due: AtomicU64,
     owner: Owner,
 }
 
@@ -612,8 +615,22 @@ impl Core {
             snap: UnsafeCell::new(Cpu::new()),
             mem,
             stop: AtomicBool::new(false),
+            irq_due: AtomicU64::new(NO_IRQ),
             owner: Owner::default(),
         }
+    }
+
+    /// Cycle count at which `run_until(irq_period=...)` takes its next IRQ; None to restart.
+    #[getter]
+    fn get_irq_due(&self) -> Option<u64> {
+        Some(self.irq_due.load(Ordering::Relaxed)).filter(|&d| d != NO_IRQ)
+    }
+
+    #[setter]
+    fn set_irq_due(&self, v: Option<u64>) -> PyResult<()> {
+        self.owner.check()?;
+        self.irq_due.store(v.unwrap_or(NO_IRQ), Ordering::Relaxed);
+        Ok(())
     }
 
     #[getter]
@@ -743,7 +760,10 @@ impl Core {
     }
 
     /// Run with the GIL released until a condition holds; the reason as a string.
-    #[pyo3(signature = (max_cycles=None, stop_pcs=None, sp_above=None, stop_on_jam=true))]
+    ///
+    /// `irq_period` takes an IRQ (dropped if masked) after the instruction that
+    /// reaches `irq_due`, which then advances by the period and persists across runs.
+    #[pyo3(signature = (max_cycles=None, stop_pcs=None, sp_above=None, stop_on_jam=true, irq_period=None))]
     fn run_until(
         &self,
         py: Python<'_>,
@@ -751,18 +771,35 @@ impl Core {
         stop_pcs: Option<&Bound<'_, PyAny>>,
         sp_above: Option<i32>,
         stop_on_jam: bool,
+        irq_period: Option<u64>,
     ) -> PyResult<&'static str> {
+        if irq_period == Some(0) {
+            return Err(PyValueError::new_err("irq_period must be positive"));
+        }
         let pcs = pc_set(stop_pcs)?;
+        let due = &self.irq_due;
         self.drive(py, true, move |cpu, bus, stop| {
-            let until = Until {
+            let irq = irq_period.map(|period| Periodic {
+                period,
+                due: match due.load(Ordering::Relaxed) {
+                    NO_IRQ => cpu.cycles + period,
+                    d => d,
+                },
+            });
+            let mut until = Until {
                 sp_above,
                 max_cycles,
                 stop_pcs: pcs.as_ref(),
                 stop_on_jam,
+                irq,
             };
-            reason(run_until(cpu, bus, &until, || {
+            let r = run_until(cpu, bus, &mut until, || {
                 stop.load(Ordering::Relaxed) && stop.swap(false, Ordering::Relaxed)
-            }))
+            });
+            if let Some(p) = until.irq {
+                due.store(p.due, Ordering::Relaxed);
+            }
+            reason(r)
         })
     }
 

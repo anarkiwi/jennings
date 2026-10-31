@@ -330,13 +330,25 @@ class NativeMPU(MPU):
         self._core.step()
         return self
 
-    def run_until(self, max_cycles=None, stop_pcs=None, sp_above=None, stop_on_jam=True):
+    @property
+    def irq_due(self):
+        """Cycle count of the next ``run_until(irq_period=...)`` IRQ; None restarts the cadence."""
+        return self._core.irq_due
+
+    @irq_due.setter
+    def irq_due(self, v):
+        self._core.irq_due = v
+
+    def run_until(
+        self, max_cycles=None, stop_pcs=None, sp_above=None, stop_on_jam=True, irq_period=None
+    ):
         """Run with the GIL released; ``"cycles"``/``"pc"``/``"sp"``/``"jam"``/``"stop"``.
 
         Before each instruction: SP above ``sp_above``, more than ``max_cycles``
-        elapsed, or PC in ``stop_pcs``. After it: ``stop`` set, or a JAM ran.
+        elapsed, or PC in ``stop_pcs``. After it: ``stop`` set, or a JAM ran;
+        with ``irq_period``, :meth:`irq` once the count reaches :attr:`irq_due`.
         """
-        return self._core.run_until(max_cycles, stop_pcs, sp_above, stop_on_jam)
+        return self._core.run_until(max_cycles, stop_pcs, sp_above, stop_on_jam, irq_period)
 
     def run_to_rts(self, pc, acc, max_cycles):
         """``vagrant_moses.cpu.run_to_rts`` on the native core."""

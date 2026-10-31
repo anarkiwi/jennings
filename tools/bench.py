@@ -109,14 +109,8 @@ def drive_step(mpu, total: int, period: int) -> None:
 
 
 def drive_run_until(mpu, total: int, period: int) -> None:
-    due = period
-    while mpu.processorCycles < total:
-        left = min(due, total) - mpu.processorCycles
-        if left > 0:
-            mpu.run_until(max_cycles=left - 1, stop_on_jam=False)
-        if mpu.processorCycles >= due:
-            mpu.irq()
-            due += period
+    mpu.irq_due = period
+    mpu.run_until(max_cycles=total - 1, stop_on_jam=False, irq_period=period)
 
 
 def python_list():

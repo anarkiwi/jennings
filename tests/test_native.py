@@ -345,3 +345,29 @@ def test_differential_harness_catches_stale_sha(monkeypatch):
 def test_difftest_cli(capsys):
     assert difftest.main(["--programs", "2", "--steps", "2000", "--jobs", "1"]) == 0
     assert "0 diverged" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("seed", range(6))
+def test_run_until_irq_period_matches_stepped_irqs(seed):
+    data = bytearray(random.Random(seed).randbytes(0x10000))
+    data[0xFFFE], data[0xFFFF] = 0x00, 0x30
+    data[0x3000:0x3004] = bytes((0xE6, 0x02, 0x58, 0x40))  # INC $02; CLI; RTI
+    (ref, _rmem), (nat, nmem) = _pair(data)
+    period, total = 997, 60_000
+    ref.pc = nat.pc = 0x3002
+    due = period
+    while ref.processorCycles < total:
+        ref.step()
+        if ref.processorCycles >= due:
+            ref.irq()
+            due += period
+    for end in (total // 2, total):
+        nat.run_until(
+            max_cycles=end - nat.processorCycles - 1, irq_period=period, stop_on_jam=False
+        )
+    assert _state(ref) == _state(nat) and nat.irq_due == due
+    assert bytes(_rmem) == bytes(nmem)
+    nat.irq_due = None
+    assert nat.irq_due is None
+    with pytest.raises(ValueError):
+        nat.run_until(max_cycles=10, irq_period=0)
