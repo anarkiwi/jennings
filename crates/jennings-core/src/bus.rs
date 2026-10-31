@@ -31,13 +31,13 @@ pub trait Bus {
         self.write(addr, v)
     }
 
-    /// A pull from page 1 (`PLA`/`PLP`/`RTS`/`RTI`).
+    /// A pull from page 1 by `PLA`/`PLP`.
     #[inline(always)]
     fn stack_read(&mut self, addr: u16) -> u8 {
         self.read(addr)
     }
 
-    /// A push to page 1 (`PHA`/`PHP`/`JSR`/`BRK`, interrupt frames).
+    /// A push to page 1 by `PHA`/`PHP`. (`JSR`/`RTS`/`BRK`/`RTI` and interrupt frames use `read`/`write`.)
     #[inline(always)]
     fn stack_write(&mut self, addr: u16, v: u8) {
         self.write(addr, v)

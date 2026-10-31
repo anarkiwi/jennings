@@ -322,6 +322,15 @@ class NativeMPU(MPU):
     processorCycles = _core_reg("cycles", (1 << 64) - 1)
 
     @property
+    def steps(self):
+        """Instructions executed since reset; in a watch callback, the executing one's index."""
+        return self._core.steps
+
+    @steps.setter
+    def steps(self, v):
+        self._core.steps = v
+
+    @property
     def jammed(self):
         return self._core.jammed
 

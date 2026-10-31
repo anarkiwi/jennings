@@ -168,7 +168,7 @@ pub fn run_to_rts<B: Bus, S: FnMut() -> bool>(
 ) -> Stop {
     let start_sp = cpu.sp as i32;
     for byte in [0x00, 0x01] {
-        bus.stack_write(0x100 | cpu.sp as u16, byte);
+        bus.write(0x100 | cpu.sp as u16, byte);
         cpu.sp = cpu.sp.wrapping_sub(1);
     }
     cpu.a = acc;

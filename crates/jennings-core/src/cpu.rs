@@ -28,6 +28,8 @@ pub struct Cpu {
     pub cycles: u64,
     pub jammed: bool,
     pub jams: u64,
+    /// Instructions executed since `new`/`reset` (interrupts are not instructions).
+    pub steps: u64,
 }
 
 impl Default for Cpu {
@@ -60,6 +62,7 @@ impl Cpu {
             cycles: 0,
             jammed: false,
             jams: 0,
+            steps: 0,
         }
     }
 
@@ -102,6 +105,7 @@ impl Cpu {
         bus.sync(self);
         let n = cpu_gen::execute(self, bus);
         self.cycles += n as u64;
+        self.steps += 1;
         n
     }
 
@@ -137,14 +141,14 @@ impl Cpu {
 
     #[inline(always)]
     fn push<B: Bus>(&mut self, bus: &mut B, v: u8) {
-        bus.stack_write(0x100 | self.sp as u16, v);
+        bus.write(0x100 | self.sp as u16, v);
         self.sp = self.sp.wrapping_sub(1);
     }
 
     #[inline(always)]
     fn pull<B: Bus>(&mut self, bus: &mut B) -> u8 {
         self.sp = self.sp.wrapping_add(1);
-        bus.stack_read(0x100 | self.sp as u16)
+        bus.read(0x100 | self.sp as u16)
     }
 
     /// Resolve a relative branch at `pc`; extra cycles (taken +1, page cross +1).
