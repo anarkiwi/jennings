@@ -12,7 +12,7 @@ from jennings.memory import NATIVE, NativeMemory
 from jennings.opcodes import OPCODES, ILLEGAL_OPCODES, MODE_TOKEN
 
 if NATIVE:
-    from jennings._core import Core
+    from jennings._core import Core  # pylint: disable=import-error,no-name-in-module
 else:  # pragma: no cover - sdist install without the native core
     Core = None
 
