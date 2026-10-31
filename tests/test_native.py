@@ -96,7 +96,15 @@ def test_run_until_reasons():
     assert mpu.run_until(stop_ranges=[(0x1001, 0x2000)], max_cycles=9) == "cycles"
     with pytest.raises(ValueError):
         mpu.run_until(stop_ranges=[(0, 0x10001)])
+    mem[0x1000:0x1004] = [0xEA, 0x4C, 0x01, 0x10]  # NOP; JMP $1001
+    mpu.pc = 0x1000
+    assert mpu.run_until(stop_on_idle=True) == "idle" and mpu.pc == 0x1001
+    mem[0x1000] = 0x58  # CLI
+    mpu.pc, mpu.p = 0x1000, 0x34
+    assert mpu.run_until(stop_on_irq=True) == "irq" and mpu.pc == 0x1001
+    assert mpu.run_until(stop_on_irq=True, max_cycles=0) == "irq"
     mem[0x1000] = 0x02
+    mpu.pc = 0x1000
     assert mpu.run_until() == "jam" and mpu.jammed and mpu.pc == 0x1001
     mem[0x1000:0x1002] = [0x68, 0x02]  # PLA; JAM
     mpu.pc, mpu.sp = 0x1000, 0xF0

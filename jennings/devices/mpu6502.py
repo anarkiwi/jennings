@@ -378,13 +378,18 @@ class NativeMPU(MPU):
         trace=False,
         regs=False,
         stop_ranges=None,
+        stop_on_idle=False,
+        stop_on_irq=False,
     ):
-        """Run with the GIL released; ``"cycles"``/``"pc"``/``"sp"``/``"jam"``/``"stop"``.
+        """Run with the GIL released; ``"cycles"``/``"pc"``/``"sp"``/``"jam"``/``"stop"``/``"idle"``/``"irq"``.
 
         Before each instruction: SP above ``sp_above``, more than ``max_cycles``
         elapsed, or PC in ``stop_pcs`` or in a half-open ``(lo, hi)`` of
         ``stop_ranges`` (built natively, so a large window costs no per-call Python
-        conversion). After it: ``stop`` set, or a JAM ran;
+        conversion), or with ``stop_on_irq`` the I flag is clear (``"irq"``, so a
+        caller can take an asserted interrupt as soon as CLI/PLP/RTI unmask it).
+        After it: ``stop`` set, or a JAM ran; or with ``stop_on_idle`` PC and SP are
+        unchanged (``"idle"``: ``JMP *``, a branch to itself);
         with ``irq_period``, :meth:`irq` once the count reaches :attr:`irq_due`.
 
         With ``trace`` (or ``regs``, which implies it) returns ``(reason, Trace)``, one
@@ -398,6 +403,8 @@ class NativeMPU(MPU):
             irq_period,
             regs if trace or regs else None,
             stop_ranges,
+            stop_on_idle,
+            stop_on_irq,
         )
         if cols is None:
             return reason

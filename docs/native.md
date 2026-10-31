@@ -69,8 +69,10 @@ to address sets; `mem.last_load` is the address of the most recent data load.
 `NativeMPU.run_until(max_cycles=None, stop_pcs=None, sp_above=None, stop_on_jam=True,
 irq_period=None)` steps with the GIL released until, before an instruction, SP exceeds
 `sp_above`, more than `max_cycles` have elapsed, or PC is in `stop_pcs` or a half-open `(lo, hi)` of `stop_ranges`; or, after one, a
-JAM ran or a callback set `mpu.stop = True`. It returns `"sp"`, `"cycles"`, `"pc"`,
-`"jam"` or `"stop"`. With `irq_period`, the instruction that brings the cycle count to
+JAM ran or a callback set `mpu.stop = True`. `stop_on_irq=True` also stops before an instruction when I is clear (`"irq"`), and
+`stop_on_idle=True` after one that leaves PC and SP unchanged (`"idle"`); both are constant-time,
+so no `stop_pcs` RAM scan is needed. It returns `"sp"`, `"cycles"`, `"pc"`,
+`"jam"`, `"stop"`, `"idle"` or `"irq"`. With `irq_period`, the instruction that brings the cycle count to
 `mpu.irq_due` is followed by `irq()` (dropped if I is set, as `MPU.irq()` does) and
 `irq_due` advances by the period; it persists across runs (unset: one period from the
 run's start), so a playroutine's IRQ cadence never returns to Python. `run_to_rts(pc, acc, max_cycles)` and `run_to_rts_until(pc, acc, pcs,

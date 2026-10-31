@@ -623,6 +623,8 @@ fn reason(s: Stop) -> &'static str {
         Stop::Sp => "sp",
         Stop::Jam => "jam",
         Stop::Stopped => "stop",
+        Stop::Idle => "idle",
+        Stop::Irq => "irq",
     }
 }
 
@@ -830,7 +832,7 @@ impl Core {
     ///
     /// `irq_period` takes an IRQ (dropped if masked) after the instruction that
     /// reaches `irq_due`, which then advances by the period and persists across runs.
-    #[pyo3(signature = (max_cycles=None, stop_pcs=None, sp_above=None, stop_on_jam=true, irq_period=None, trace=None, stop_ranges=None))]
+    #[pyo3(signature = (max_cycles=None, stop_pcs=None, sp_above=None, stop_on_jam=true, irq_period=None, trace=None, stop_ranges=None, stop_on_idle=false, stop_on_irq=false))]
     #[allow(clippy::too_many_arguments)]
     fn run_until<'py>(
         &self,
@@ -842,6 +844,8 @@ impl Core {
         irq_period: Option<u64>,
         trace: Option<bool>,
         stop_ranges: Option<Vec<(u32, u32)>>,
+        stop_on_idle: bool,
+        stop_on_irq: bool,
     ) -> PyResult<(&'static str, Option<Columns<'py>>)> {
         if irq_period == Some(0) {
             return Err(PyValueError::new_err("irq_period must be positive"));
@@ -862,6 +866,8 @@ impl Core {
                 max_cycles,
                 stop_pcs: pcs.as_ref(),
                 stop_on_jam,
+                stop_on_idle,
+                stop_on_irq,
                 irq,
                 trace: tr.as_mut(),
             };
