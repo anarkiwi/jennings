@@ -47,6 +47,48 @@ pub enum Stop {
     Stopped,
 }
 
+/// Per-instruction record of a run: one row per executed instruction.
+///
+/// `pc` and `cycles` are those at the instruction's start; with `regs`, A/X/Y/SP/P
+/// are those after it.
+#[derive(Default)]
+pub struct Trace {
+    pub regs: bool,
+    pub pc: Vec<u16>,
+    pub cycles: Vec<u64>,
+    pub a: Vec<u8>,
+    pub x: Vec<u8>,
+    pub y: Vec<u8>,
+    pub sp: Vec<u8>,
+    pub p: Vec<u8>,
+}
+
+impl Trace {
+    pub fn new(regs: bool) -> Self {
+        Trace {
+            regs,
+            ..Trace::default()
+        }
+    }
+
+    #[inline(always)]
+    fn start(&mut self, cpu: &Cpu) {
+        self.pc.push(cpu.pc);
+        self.cycles.push(cpu.cycles);
+    }
+
+    #[inline(always)]
+    fn end(&mut self, cpu: &Cpu) {
+        if self.regs {
+            self.a.push(cpu.a);
+            self.x.push(cpu.x);
+            self.y.push(cpu.y);
+            self.sp.push(cpu.sp);
+            self.p.push(cpu.p());
+        }
+    }
+}
+
 /// A periodic IRQ: taken (unless masked) once the cycle count reaches `due`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Periodic {
@@ -58,13 +100,14 @@ pub struct Periodic {
 ///
 /// `irq`, after each instruction, calls [`Cpu::irq`] when `due` is reached and
 /// advances `due` by `period` (a masked IRQ is dropped, as `MPU.irq()` does).
-#[derive(Clone, Default)]
+#[derive(Default)]
 pub struct Until<'a> {
     pub sp_above: Option<i32>,
     pub max_cycles: Option<u64>,
     pub stop_pcs: Option<&'a AddrSet>,
     pub stop_on_jam: bool,
     pub irq: Option<Periodic>,
+    pub trace: Option<&'a mut Trace>,
 }
 
 /// Step until a condition in `until` holds or `stopped()` returns true after an instruction.
@@ -86,7 +129,13 @@ pub fn run_until<B: Bus, S: FnMut() -> bool>(
             return Stop::Pc;
         }
         let jams = cpu.jams;
+        if let Some(t) = until.trace.as_deref_mut() {
+            t.start(cpu);
+        }
         cpu.step(bus);
+        if let Some(t) = until.trace.as_deref_mut() {
+            t.end(cpu);
+        }
         if let Some(p) = until.irq.as_mut() {
             if cpu.cycles >= p.due {
                 cpu.irq(bus);
@@ -106,6 +155,7 @@ pub fn run_until<B: Bus, S: FnMut() -> bool>(
 ///
 /// The dummy return `$0100` is pushed first (`vagrant_moses.cpu.run_to_rts`);
 /// `stop_pcs` are checked before each instruction (`run_to_rts_until`).
+#[allow(clippy::too_many_arguments)]
 pub fn run_to_rts<B: Bus, S: FnMut() -> bool>(
     cpu: &mut Cpu,
     bus: &mut B,
@@ -113,6 +163,7 @@ pub fn run_to_rts<B: Bus, S: FnMut() -> bool>(
     acc: u8,
     stop_pcs: Option<&AddrSet>,
     max_cycles: u64,
+    trace: Option<&mut Trace>,
     stopped: S,
 ) -> Stop {
     let start_sp = cpu.sp as i32;
@@ -126,6 +177,7 @@ pub fn run_to_rts<B: Bus, S: FnMut() -> bool>(
         sp_above: Some(start_sp - 1),
         max_cycles: Some(max_cycles),
         stop_pcs,
+        trace,
         ..Until::default()
     };
     run_until(cpu, bus, &mut until, stopped)

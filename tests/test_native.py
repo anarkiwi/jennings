@@ -380,3 +380,47 @@ def test_run_until_irq_period_matches_stepped_irqs(seed):
     assert nat.irq_due is None
     with pytest.raises(ValueError):
         nat.run_until(max_cycles=10, irq_period=0)
+
+
+def _trace_program():
+    mem = NativeMemory()
+    mem[0x1000:0x1008] = [
+        0xA2,
+        0x03,
+        0xCA,
+        0xD0,
+        0xFD,
+        0x20,
+        0x00,
+        0x20,
+    ]  # LDX #3; DEX; BNE; JSR $2000
+    mem[0x2000] = 0x60
+    mem[0x1008] = 0x60
+    return MPU(memory=mem)
+
+
+def test_run_to_rts_traced_matches_step_loop():
+    mpu, ref = _trace_program(), _trace_program()
+    tr = mpu.run_to_rts_traced(0x1000, 0, 1000, regs=True)
+    ref.sp -= 2
+    ref.pc, ref.a = 0x1000, 0
+    rows = []
+    while ref.sp < 0xFF:
+        pc, cyc = ref.pc, ref.processorCycles
+        ref.step()
+        rows.append((pc, cyc, ref.a, ref.x, ref.y, ref.sp, ref.p))
+    assert len(tr) == len(rows) and len(tr) > 8
+    got = list(zip(tr.pc, tr.cycles, tr.a, tr.x, tr.y, tr.sp, tr.p))
+    assert got == rows
+    assert _trace_program().run_to_rts_traced(0x1000, 0, 1000).a is None
+
+
+def test_run_until_trace():
+    mpu = _trace_program()
+    mpu.pc = 0x1000
+    reason, tr = mpu.run_until(stop_pcs=[0x2000], trace=True)
+    assert reason == "pc" and tr.pc[0] == 0x1000 and tr.pc[-1] == 0x1005
+    assert tr.cycles[0] == 0 and tr.x is None
+    assert mpu.run_until(max_cycles=5) in ("cycles", "pc", "jam", "sp")
+    _, tr = mpu.run_until(max_cycles=0, regs=True)
+    assert len(tr) == 1 and len(tr.sp) == 1

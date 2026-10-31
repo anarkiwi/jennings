@@ -257,6 +257,26 @@ def _core_reg(name, mask):
     return property(get, put)
 
 
+class Trace:
+    """Per-instruction record from a traced run: one row per executed instruction.
+
+    ``pc`` (uint16) and ``cycles`` (uint64) are those at the instruction's start;
+    ``a``, ``x``, ``y``, ``sp``, ``p`` (uint8, after it) are None unless ``regs`` was
+    asked for. Each column is a read-only :class:`memoryview`, so ``numpy.asarray``
+    wraps it without a copy.
+    """
+
+    def __init__(self, pc, cycles, regs):
+        self.pc = memoryview(pc).cast("H")
+        self.cycles = memoryview(cycles).cast("Q")
+        self.a, self.x, self.y, self.sp, self.p = (
+            (memoryview(c) for c in regs) if regs else (None,) * 5
+        )
+
+    def __len__(self):
+        return len(self.pc)
+
+
 class NativeMPU(MPU):
     """:class:`MPU` on the native core; ``MPU(memory=NativeMemory())`` returns one.
 
@@ -340,19 +360,44 @@ class NativeMPU(MPU):
         self._core.irq_due = v
 
     def run_until(
-        self, max_cycles=None, stop_pcs=None, sp_above=None, stop_on_jam=True, irq_period=None
+        self,
+        max_cycles=None,
+        stop_pcs=None,
+        sp_above=None,
+        stop_on_jam=True,
+        irq_period=None,
+        trace=False,
+        regs=False,
     ):
         """Run with the GIL released; ``"cycles"``/``"pc"``/``"sp"``/``"jam"``/``"stop"``.
 
         Before each instruction: SP above ``sp_above``, more than ``max_cycles``
         elapsed, or PC in ``stop_pcs``. After it: ``stop`` set, or a JAM ran;
         with ``irq_period``, :meth:`irq` once the count reaches :attr:`irq_due`.
+
+        With ``trace`` (or ``regs``, which implies it) returns ``(reason, Trace)``, one
+        row per executed instruction; ``regs`` adds A/X/Y/SP/P after each.
         """
-        return self._core.run_until(max_cycles, stop_pcs, sp_above, stop_on_jam, irq_period)
+        reason, cols = self._core.run_until(
+            max_cycles,
+            stop_pcs,
+            sp_above,
+            stop_on_jam,
+            irq_period,
+            regs if trace or regs else None,
+        )
+        if cols is None:
+            return reason
+        return reason, Trace(*cols)
 
     def run_to_rts(self, pc, acc, max_cycles):
         """``vagrant_moses.cpu.run_to_rts`` on the native core."""
         self._core.run_to_rts(pc, acc, max_cycles)
+
+    def run_to_rts_traced(self, pc, acc, max_cycles, regs=False):
+        """:meth:`run_to_rts`, returning a :class:`Trace` of every executed instruction."""
+        pcs, cycles, cols = self._core.run_to_rts_traced(pc, acc, max_cycles, regs)
+        return Trace(pcs, cycles, cols)
 
     def run_to_rts_until(self, pc, acc, pcs, max_cycles):
         """``pysidtracker.emu.run_to_rts_until`` on the native core."""

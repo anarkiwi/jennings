@@ -14,4 +14,4 @@ pub mod run;
 pub use bus::Bus;
 pub use cpu::Cpu;
 pub use flat::{Access, FlatBus, FlatMemory, Hooks, NoHooks};
-pub use run::{run_to_rts, run_until, AddrSet, Periodic, Stop, Until};
+pub use run::{run_to_rts, run_until, AddrSet, Periodic, Stop, Trace, Until};

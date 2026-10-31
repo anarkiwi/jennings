@@ -76,7 +76,11 @@ JAM ran or a callback set `mpu.stop = True`. It returns `"sp"`, `"cycles"`, `"pc
 run's start), so a playroutine's IRQ cadence never returns to Python. `run_to_rts(pc, acc, max_cycles)` and `run_to_rts_until(pc, acc, pcs,
 max_cycles)` are `vagrant_moses.cpu.run_to_rts` and `pysidtracker.emu.run_to_rts_until`
 (dummy `$0100` return pushed, stop once SP rises above its start, `pcs` checked before
-each instruction). `step()` remains correct for callers that step from Python; the
+each instruction). `run_until(..., trace=True)` (returns `(reason, Trace)`) and
+`run_to_rts_traced(pc, acc, max_cycles, regs=False)` (returns a `Trace`) record one row per
+executed instruction without leaving the native loop: `pc` (uint16) and `cycles` (uint64) at
+the instruction's start and, with `regs=True`, `a`/`x`/`y`/`sp`/`p` after it. Columns are
+read-only memoryviews, so `numpy.asarray(trace.pc)` wraps them without a copy. `step()` remains correct for callers that step from Python; the
 drivers are the fast path.
 
 A driver claims its core and memory for the running thread. Other threads touching

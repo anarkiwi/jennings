@@ -83,9 +83,9 @@ fn drivers_stop_where_asked() {
         Stop::Stopped
     );
     c.sp = 0xF0;
-    let r = run_to_rts(&mut c, &mut *m, 0x2000, 9, None, 100, || false);
+    let r = run_to_rts(&mut c, &mut *m, 0x2000, 9, None, 100, None, || false);
     assert_eq!((r, c.pc, c.a, c.sp), (Stop::Sp, 0x0002, 9, 0xF0));
-    let r = run_to_rts(&mut c, &mut *m, 0x2000, 9, Some(&pcs), 100, || false);
+    let r = run_to_rts(&mut c, &mut *m, 0x2000, 9, Some(&pcs), 100, None, || false);
     assert_eq!((r, c.pc), (Stop::Pc, 0x2001));
 }
 

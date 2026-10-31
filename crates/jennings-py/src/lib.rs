@@ -12,13 +12,13 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use jennings_core::{
     run_to_rts, run_until, Access, AddrSet, Bus, Cpu, FlatBus, FlatMemory, Hooks, Periodic, Stop,
-    Until,
+    Trace, Until,
 };
 use pyo3::buffer::PyBuffer;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::ffi;
 use pyo3::prelude::*;
-use pyo3::types::PySlice;
+use pyo3::types::{PyBytes, PySlice};
 
 const PAL: (u32, u32) = (63, 312);
 const NO_IRQ: u64 = u64::MAX;
@@ -601,6 +601,22 @@ fn reason(s: Stop) -> &'static str {
     }
 }
 
+/// Columns of a [`Trace`] as little-endian byte strings: `(pc, cycles, [a, x, y, sp, p])`.
+type Columns<'py> = (
+    Bound<'py, PyBytes>,
+    Bound<'py, PyBytes>,
+    Option<[Bound<'py, PyBytes>; 5]>,
+);
+
+fn columns<'py>(py: Python<'py>, t: Trace) -> Columns<'py> {
+    let pc: Vec<u8> = t.pc.iter().flat_map(|v| v.to_le_bytes()).collect();
+    let cycles: Vec<u8> = t.cycles.iter().flat_map(|v| v.to_le_bytes()).collect();
+    let regs = t
+        .regs
+        .then(|| [&t.a, &t.x, &t.y, &t.sp, &t.p].map(|c| PyBytes::new(py, c)));
+    (PyBytes::new(py, &pc), PyBytes::new(py, &cycles), regs)
+}
+
 fn pc_set(pcs: Option<&Bound<'_, PyAny>>) -> PyResult<Option<AddrSet>> {
     pcs.map(|p| addrs(p).map(|v| v.into_iter().collect()))
         .transpose()
@@ -763,22 +779,25 @@ impl Core {
     ///
     /// `irq_period` takes an IRQ (dropped if masked) after the instruction that
     /// reaches `irq_due`, which then advances by the period and persists across runs.
-    #[pyo3(signature = (max_cycles=None, stop_pcs=None, sp_above=None, stop_on_jam=true, irq_period=None))]
-    fn run_until(
+    #[pyo3(signature = (max_cycles=None, stop_pcs=None, sp_above=None, stop_on_jam=true, irq_period=None, trace=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn run_until<'py>(
         &self,
-        py: Python<'_>,
+        py: Python<'py>,
         max_cycles: Option<u64>,
         stop_pcs: Option<&Bound<'_, PyAny>>,
         sp_above: Option<i32>,
         stop_on_jam: bool,
         irq_period: Option<u64>,
-    ) -> PyResult<&'static str> {
+        trace: Option<bool>,
+    ) -> PyResult<(&'static str, Option<Columns<'py>>)> {
         if irq_period == Some(0) {
             return Err(PyValueError::new_err("irq_period must be positive"));
         }
         let pcs = pc_set(stop_pcs)?;
         let due = &self.irq_due;
-        self.drive(py, true, move |cpu, bus, stop| {
+        let mut tr = trace.map(Trace::new);
+        let r = self.drive(py, true, |cpu, bus, stop| {
             let irq = irq_period.map(|period| Periodic {
                 period,
                 due: match due.load(Ordering::Relaxed) {
@@ -792,6 +811,7 @@ impl Core {
                 stop_pcs: pcs.as_ref(),
                 stop_on_jam,
                 irq,
+                trace: tr.as_mut(),
             };
             let r = run_until(cpu, bus, &mut until, || {
                 stop.load(Ordering::Relaxed) && stop.swap(false, Ordering::Relaxed)
@@ -800,16 +820,42 @@ impl Core {
                 due.store(p.due, Ordering::Relaxed);
             }
             reason(r)
-        })
+        })?;
+        Ok((r, tr.map(|t| columns(py, t))))
     }
 
     /// `vagrant_moses.cpu.run_to_rts`: call `pc` with `A = acc` until its RTS or the cap.
     fn run_to_rts(&self, py: Python<'_>, pc: u16, acc: i64, max_cycles: u64) -> PyResult<()> {
         self.drive(py, true, move |cpu, bus, stop| {
-            run_to_rts(cpu, bus, pc, acc as u8, None, max_cycles, || {
+            run_to_rts(cpu, bus, pc, acc as u8, None, max_cycles, None, || {
                 stop.load(Ordering::Relaxed) && stop.swap(false, Ordering::Relaxed)
             });
         })
+    }
+
+    /// As `run_to_rts`, recording one row per executed instruction (`regs`: A/X/Y/SP/P after it).
+    fn run_to_rts_traced<'py>(
+        &self,
+        py: Python<'py>,
+        pc: u16,
+        acc: i64,
+        max_cycles: u64,
+        regs: bool,
+    ) -> PyResult<Columns<'py>> {
+        let mut tr = Trace::new(regs);
+        self.drive(py, true, |cpu, bus, stop| {
+            run_to_rts(
+                cpu,
+                bus,
+                pc,
+                acc as u8,
+                None,
+                max_cycles,
+                Some(&mut tr),
+                || stop.load(Ordering::Relaxed) && stop.swap(false, Ordering::Relaxed),
+            );
+        })?;
+        Ok(columns(py, tr))
     }
 
     /// `pysidtracker.emu.run_to_rts_until`: as `run_to_rts`, True on entering `pcs`.
@@ -823,9 +869,16 @@ impl Core {
     ) -> PyResult<bool> {
         let set = pc_set(Some(pcs))?;
         self.drive(py, true, move |cpu, bus, stop| {
-            let r = run_to_rts(cpu, bus, pc, acc as u8, set.as_ref(), max_cycles, || {
-                stop.load(Ordering::Relaxed) && stop.swap(false, Ordering::Relaxed)
-            });
+            let r = run_to_rts(
+                cpu,
+                bus,
+                pc,
+                acc as u8,
+                set.as_ref(),
+                max_cycles,
+                None,
+                || stop.load(Ordering::Relaxed) && stop.swap(false, Ordering::Relaxed),
+            );
             r == Stop::Pc
         })
     }
