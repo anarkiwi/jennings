@@ -44,9 +44,25 @@ jennings[cuda]`), and a z3 proof of the result. See [docs/superopt.md](docs/supe
 (registers, flags, memory bytes, a branch's condition) off the same lifted pcode the
 MPU executes, given the addresses an observed run accessed.
 
-`jennings.coverage.CoverageMPU` records executed bytes, branch directions, data reads and
-writes, and dynamic control-flow edges, reportable through coverage.py. See
-[docs/coverage.md](docs/coverage.md).
+`jennings.coverage` records 6502 code coverage (executed bytes, branch directions, data
+accesses, dynamic edges), reports it through coverage.py, derives self-modifying-code and
+interrupt-vector obligations, explains one-way branches, and records per-test coverage
+from pytest. See [docs/coverage.md](docs/coverage.md).
+
+## Native core
+
+Wheels carry a Rust 6510 core (`jennings._core`) whose opcode semantics are generated
+from deity-informant's lifter. An `MPU` over a `NativeMemory` runs it; `run_until`,
+`run_to_rts` and `run_to_rts_until` release the GIL, so independent tunes run in parallel
+threads. An sdist install keeps the pure-Python engine. See [docs/native.md](docs/native.md).
+
+```python
+from jennings.memory import NativeMemory
+mem = NativeMemory(image)                 # 64 KiB, banked 4 KiB pages, watch sets
+mem.io = True; mem.raster_model(False)    # $D011/$D012 follow the PAL beam natively
+mpu = MPU(memory=mem)                     # mpu.native is True
+mpu.run_to_rts(play, 0, 200_000)
+```
 
 ## Compatibility
 

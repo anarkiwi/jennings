@@ -4,16 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jennings"
-version = "0.3.0"
+version = "0.5.1"
 description = "py65-compatible 6502/6510 MPU, assembler, and disassembler with first-class NMOS illegal-opcode support."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = { text = "Apache-2.0" }
 authors = [{ name = "Josh Bailey", email = "josh@overlyspecific.com" }]
 keywords = ["6502", "6510", "c64", "py65", "emulator", "assembler", "disassembler", "illegal-opcodes"]
 classifiers = [
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -23,13 +22,16 @@ classifiers = [
     "Topic :: Software Development :: Disassemblers",
     "Topic :: System :: Emulators",
 ]
-dependencies = ["deity-informant>=0.4.1"]
+dependencies = ["deity-informant>=0.6.2"]
 
 [project.optional-dependencies]
 superopt = ["z3-solver>=4.12", "numpy>=1.23"]
-coverage = ["numpy>=1.23", "coverage>=7.4", "pyelftools>=0.31"]
+coverage = ["numpy>=1.23", "coverage>=7.4", "pyelftools>=0.31", "tqdm>=4.60"]
 cuda = ["z3-solver>=4.12", "numpy>=1.23", "cupy-cuda12x>=13"]
-dev = ["pytest", "pytest-xdist", "pytest-cov", "coverage>=7.4", "pyelftools>=0.31", "build", "black", "pylint", "py65", "numpy", "z3-solver>=4.12"]
+dev = ["pytest", "pytest-xdist", "pytest-cov", "coverage>=7.4", "pyelftools>=0.31", "tqdm>=4.60", "build", "black", "pylint", "py65", "numpy", "z3-solver>=4.12"]
+
+[project.entry-points.pytest11]
+jennings_cov6502 = "jennings.coverage.pytest_plugin"
 
 [project.urls]
 Homepage = "https://github.com/anarkiwi/jennings"
@@ -37,6 +39,15 @@ Repository = "https://github.com/anarkiwi/jennings"
 
 [tool.setuptools.packages.find]
 include = ["jennings*"]
+
+# Wheels carry the native core: `maturin build --release` (CI) or `maturin develop`.
+# The sdist builds with setuptools above and installs the pure-Python engine only.
+[tool.maturin]
+manifest-path = "crates/jennings-py/Cargo.toml"
+module-name = "jennings._core"
+python-source = "."
+python-packages = ["jennings"]
+features = ["pyo3/extension-module"]
 
 [tool.coverage.run]
 source = ["jennings"]
@@ -47,6 +58,7 @@ line-length = 100
 
 [tool.pylint.main]
 jobs = 0
+extension-pkg-allow-list = ["jennings._core"]
 
 [tool.pylint.format]
 max-line-length = 100

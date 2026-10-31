@@ -2,10 +2,24 @@
 
 py65-compatible ``ObservableMemory``: wrap a subject (list/bytearray/MPU memory)
 and register callbacks fired on access to specific addresses, e.g. to trap SID
-register writes or synthesise VIC/CIA reads.
+register writes or synthesise VIC/CIA reads. ``NativeMemory`` is the native
+core's banked equivalent; an ``MPU`` over one runs the native core.
 """
 
 from collections import defaultdict
+
+try:
+    from jennings._core import NativeMemory
+except ImportError:  # pragma: no cover - sdist install without the native core
+
+    class NativeMemory:
+        def __new__(cls, *args, **kwargs):
+            raise ImportError("jennings was installed without its native core (_core)")
+
+
+NATIVE = NativeMemory.__module__ == "jennings._core"
+
+__all__ = ["ObservableMemory", "NativeMemory", "NATIVE"]
 
 
 class ObservableMemory:
