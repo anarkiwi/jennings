@@ -154,3 +154,16 @@ def test_all_illegals_execute(new_mem):
         mpu.pc = PC
         mpu.step()
         assert mpu.pc != PC, "opcode %02X did not advance" % op
+
+
+def test_sha_indy_follows_the_pointer_on_rerun(new_mem):
+    """$93 at one PC: H+1 tracks the pointer's high byte each time, not the first lift's."""
+    mpu = MPU(memory=new_mem())
+    mem = mpu.memory
+    mem[0x1000:0x1002] = [0x93, ZP]
+    for hi in (0x20, 0x40, 0xFE):
+        mem[ZP], mem[ZP + 1] = 0x00, hi
+        mpu.a = mpu.x = 0xFF
+        mpu.y, mpu.pc = 3, 0x1000
+        mpu.step()
+        assert mem[(hi << 8) | 3] == (hi + 1) & 0xFF

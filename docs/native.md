@@ -21,9 +21,7 @@ sentinel sets (operand bytes and the zero-page pointer they name all differ betw
 sets). Each operand-derived constant is bound to an operand expression (`b1`, the word
 `w`, `(b1+1)&$FF`, `(b2+1)&$FF`) from the lifter's own provenance map, and every binding
 is checked to reproduce the lifted value under both lifts. A constant that differs
-between lifts without provenance must be explained by a memory read the lifter made: the
-only one is `$93 SHA (zp),Y`, whose `H+1` comes from the pointer high byte; it binds to
-the P-Code `LOAD` of that byte. Anything else fails generation.
+between lifts without provenance fails generation.
 
 Each opcode becomes one `op_XX` function: operand fetches, the P-Code as straight-line
 Rust (`LOAD`/`STORE` whose address derives from SP become stack accesses, the rest data
@@ -92,9 +90,6 @@ current instruction (with no further callbacks) and is raised from the driver or
 
 - Fetches never reach subscriptions; the Python engine reads opcode bytes through an
   `ObservableMemory` several times per step (JAM check, cache key, lift).
-- `$93 SHA (zp),Y` uses the pointer it loads. `PcodeVM` caches the record on
-  `(pc, opcode, operand bytes)` with `H+1` taken from the pointer at first lift, so a
-  later pointer change at the same PC reuses the stale constant.
 - The `(zp),Y` page-cross penalty uses the loaded pointer; `PcodeVM._resolve` re-reads
   it from memory after the instruction (equal unless a callback rewrites the pointer).
 - Host writes must be bytes (`ValueError` otherwise); callback results are masked to 8 bits.

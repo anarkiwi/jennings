@@ -2444,9 +2444,10 @@ fn op_93<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u2: u32 = (u4 | u8) & 0xffff;
     let u12: u32 = (s.y as u32);
     let u10: u32 = (u2 + u12) & 0xffff;
-    let u15: u32 = ((s.a as u32) & (s.x as u32)) & 0xff;
-    let u14: u32 = (u15 & ((u1 + 1) & 0xff)) & 0xff;
-    bus.store(u10 as u16, u14 as u8);
+    let u14: u32 = (u1 + 0x1u32) & 0xff;
+    let u16: u32 = ((s.a as u32) & (s.x as u32)) & 0xff;
+    let u15: u32 = (u16 & u14) & 0xff;
+    bus.store(u10 as u16, u15 as u8);
     s.pc = pc.wrapping_add(2);
     6
 }

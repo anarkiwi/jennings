@@ -1,7 +1,7 @@
 """Generate ``crates/jennings-core/src/cpu_gen.rs`` from deity-informant's lifter.
 
 Each opcode is lifted under distinct sentinel operands; operand-derived constants
-bind via the lifter's provenance map (or a lift-time pointer read), each binding
+bind via the lifter's provenance map (any other operand-dependent one is an error), each binding
 is checked against every lift, and the P-Code is emitted as straight-line Rust.
 """
 
@@ -79,28 +79,14 @@ class _Op:
                     expr, fn = BINDINGS[(tuple(key[0]), key[1])]
                     got = [fn(b1, b2) & _mask(vn[2]) for b1, b2, _p1, _p2 in SENTINELS]
                 elif len(set(vals)) > 1:
-                    expr, got = self._lift_time_read(vals)
+                    raise NotImplementedError(
+                        "operand-dependent constant without provenance in %02X" % self.op
+                    )
                 else:
                     continue
                 assert got == vals, (hex(self.op), i, j, got, vals)
                 out[(i, j)] = expr
         return out
-
-    def _lift_time_read(self, vals):
-        """Bind a constant computed from memory the lifter read: a pointer byte the P-Code LOADs."""
-        prov = self.rec["prov"]["ops"]
-        for i, (mn, out, _ins) in enumerate(self.rec["ops"]):
-            if mn != "LOAD" or (i, 0) not in prov:
-                continue
-            afn = BINDINGS[(tuple(prov[(i, 0)][0]), prov[(i, 0)][1])][1]
-            for delta in (0, 1):
-                got = [
-                    (m[afn(b1, b2)] + delta) & 0xFF
-                    for (b1, b2, _p1, _p2), (_r, m) in zip(SENTINELS, self.lifts)
-                ]
-                if got == vals:
-                    return ("((u%d + %d) & 0xff)" % (out[1], delta)), got
-        raise NotImplementedError("unexplained operand-dependent constant in %02X" % self.op)
 
     def _stack_temps(self):
         """Unique offsets whose value derives from SP (stack-page addresses)."""
