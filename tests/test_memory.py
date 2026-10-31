@@ -1,18 +1,16 @@
 """ObservableMemory: subject-backed store with read/write observers."""
 
-from jennings.memory import ObservableMemory
 
-
-def test_read_write_and_slice():
-    mem = ObservableMemory()
+def test_read_write_and_slice(new_observable):
+    mem = new_observable()
     mem[0x10] = 0x42
     assert mem[0x10] == 0x42
     mem[0x20:0x23] = [1, 2, 3]
     assert mem[0x20:0x23] == [1, 2, 3]
 
 
-def test_write_observer_can_override():
-    mem = ObservableMemory()
+def test_write_observer_can_override(new_observable):
+    mem = new_observable()
     seen = []
     mem.subscribe_to_write([0xD400], lambda a, v: seen.append((a, v)))
     mem[0xD400] = 0x7F
@@ -22,21 +20,21 @@ def test_write_observer_can_override():
     assert mem[0x50] == 0xAA
 
 
-def test_read_observer():
-    mem = ObservableMemory()
+def test_read_observer(new_observable):
+    mem = new_observable()
     mem.subscribe_to_read([0xD012], lambda a: 0x33)
     assert mem[0xD012] == 0x33
 
 
-def test_write_helper_and_delegation():
-    mem = ObservableMemory(subject=bytearray(0x10000))
+def test_write_helper_and_delegation(new_observable):
+    mem = new_observable(bytearray(0x10000))
     mem.write(0x100, bytes([9, 8, 7]))
     assert mem[0x100] == 9 and mem[0x102] == 7
     assert mem.count(7) >= 1  # __getattr__ delegates to the subject's methods
 
 
-def test_duplicate_subscribe_is_idempotent():
-    mem = ObservableMemory()
+def test_duplicate_subscribe_is_idempotent(new_observable):
+    mem = new_observable()
     calls = []
     cb = lambda a, v: calls.append(a)
     mem.subscribe_to_write([0x10], cb)

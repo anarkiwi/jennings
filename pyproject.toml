@@ -7,13 +7,12 @@ name = "jennings"
 version = "0.4.0"
 description = "py65-compatible 6502/6510 MPU, assembler, and disassembler with first-class NMOS illegal-opcode support."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = { text = "Apache-2.0" }
 authors = [{ name = "Josh Bailey", email = "josh@overlyspecific.com" }]
 keywords = ["6502", "6510", "c64", "py65", "emulator", "assembler", "disassembler", "illegal-opcodes"]
 classifiers = [
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -41,6 +40,15 @@ Repository = "https://github.com/anarkiwi/jennings"
 [tool.setuptools.packages.find]
 include = ["jennings*"]
 
+# Wheels carry the native core: `maturin build --release` (CI) or `maturin develop`.
+# The sdist builds with setuptools above and installs the pure-Python engine only.
+[tool.maturin]
+manifest-path = "crates/jennings-py/Cargo.toml"
+module-name = "jennings._core"
+python-source = "."
+python-packages = ["jennings"]
+features = ["pyo3/extension-module"]
+
 [tool.coverage.run]
 source = ["jennings"]
 omit = ["jennings/superopt/cuda.py"]
@@ -50,6 +58,7 @@ line-length = 100
 
 [tool.pylint.main]
 jobs = 0
+extension-pkg-allow-list = ["jennings._core"]
 
 [tool.pylint.format]
 max-line-length = 100

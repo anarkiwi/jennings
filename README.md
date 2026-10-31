@@ -49,6 +49,21 @@ accesses, dynamic edges), reports it through coverage.py, derives self-modifying
 interrupt-vector obligations, explains one-way branches, and records per-test coverage
 from pytest. See [docs/coverage.md](docs/coverage.md).
 
+## Native core
+
+Wheels carry a Rust 6510 core (`jennings._core`) whose opcode semantics are generated
+from deity-informant's lifter. An `MPU` over a `NativeMemory` runs it; `run_until`,
+`run_to_rts` and `run_to_rts_until` release the GIL, so independent tunes run in parallel
+threads. An sdist install keeps the pure-Python engine. See [docs/native.md](docs/native.md).
+
+```python
+from jennings.memory import NativeMemory
+mem = NativeMemory(image)                 # 64 KiB, banked 4 KiB pages, watch sets
+mem.io = True; mem.raster_model(False)    # $D011/$D012 follow the PAL beam natively
+mpu = MPU(memory=mem)                     # mpu.native is True
+mpu.run_to_rts(play, 0, 200_000)
+```
+
 ## Compatibility
 
 Mirrors the py65 API surface used in practice: `devices.mpu6502.MPU`

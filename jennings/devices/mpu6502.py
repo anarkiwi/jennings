@@ -2,13 +2,21 @@
 
 A py65-compatible ``MPU`` over deity-informant's hardware-validated ``lift`` +
 ``PcodeVM`` engine: all 256 opcodes (incl. the 105 NMOS 6510 illegals py65 stubs)
-execute byte- and cycle-exact. Drop-in for ``py65.devices.mpu6502.MPU``.
+execute byte- and cycle-exact. Drop-in for ``py65.devices.mpu6502.MPU``. Over a
+:class:`~jennings.memory.NativeMemory` the MPU is the native core (``native``),
+whose :meth:`run_until` drivers release the GIL.
 """
 
 from deity_informant import lift, PcodeVM, CYCLETIME, EXTRACYCLES
+from jennings.memory import NATIVE, NativeMemory
 from jennings.opcodes import OPCODES, ILLEGAL_OPCODES, MODE_TOKEN
 
-__all__ = ["MPU", "ILLEGAL_OPCODES"]
+if NATIVE:
+    from jennings._core import Core  # pylint: disable=import-error,no-name-in-module
+else:  # pragma: no cover - sdist install without the native core
+    Core = None
+
+__all__ = ["MPU", "NativeMPU", "ILLEGAL_OPCODES"]
 
 # PcodeVM.reg indices: 0-3 A/X/Y/SP; flags C/Z/I/D/B/V/N at 8-14.
 _A, _X, _Y, _SP = 0, 1, 2, 3
@@ -61,11 +69,16 @@ class MPU:
     ADDR_FORMAT = "%04x"
 
     VM = PcodeVM
+    native = False
 
     disassemble = _disassemble_table()
     instruct = _instruct_table()
     cycletime = list(CYCLETIME)
     extracycles = list(EXTRACYCLES)
+
+    def __new__(cls, memory=None, pc=0x0000):
+        native = cls is MPU and NATIVE and isinstance(memory, NativeMemory)
+        return super().__new__(NativeMPU if native else cls)
 
     def __init__(self, memory=None, pc=0x0000):
         self.name = "6510"
@@ -232,3 +245,115 @@ class MPU:
             self.sp,
             flags,
         )
+
+
+def _core_reg(name, mask):
+    def get(self):
+        return getattr(self._core, name)
+
+    def put(self, v):
+        setattr(self._core, name, v & mask)
+
+    return property(get, put)
+
+
+class NativeMPU(MPU):
+    """:class:`MPU` on the native core; ``MPU(memory=NativeMemory())`` returns one.
+
+    :meth:`step` works as on the Python engine; :meth:`run_until` and the
+    ``run_to_rts`` drivers are the fast path. Watch callbacks see the registers
+    as at the start of the executing instruction and may set ``stop``.
+    """
+
+    native = True
+
+    def __init__(self, memory=None, pc=0x0000):  # pylint: disable=super-init-not-called
+        if memory is None:
+            memory = NativeMemory()
+        if not isinstance(memory, NativeMemory):
+            raise TypeError("NativeMPU runs on a NativeMemory")
+        self.name = "6510"
+        self.byteMask = (1 << self.BYTE_WIDTH) - 1
+        self.addrMask = (1 << self.ADDR_WIDTH) - 1
+        self.addrHighMask = self.byteMask << self.BYTE_WIDTH
+        self.spBase = 1 << self.BYTE_WIDTH
+        self.excycles = 0
+        self.addcycles = False
+        self._core = Core(memory)
+        self._memory = memory
+        self.start_pc = pc
+        self.reset()
+
+    @property
+    def memory(self):
+        return self._memory
+
+    @memory.setter
+    def memory(self, mem):
+        if mem is not self._memory:
+            raise TypeError("the native core's memory is fixed at construction")
+
+    a = _core_reg("a", 0xFF)
+    x = _core_reg("x", 0xFF)
+    y = _core_reg("y", 0xFF)
+    sp = _core_reg("sp", 0xFF)
+    p = _core_reg("p", 0xFF)
+    pc = _core_reg("pc", 0xFFFF)
+    processorCycles = _core_reg("cycles", (1 << 64) - 1)
+
+    @property
+    def jammed(self):
+        return self._core.jammed
+
+    @jammed.setter
+    def jammed(self, v):
+        self._core.jammed = bool(v)
+
+    @property
+    def stop(self):
+        return self._core.stop
+
+    @stop.setter
+    def stop(self, v):
+        self._core.stop = bool(v)
+
+    def reset(self):
+        self._core.reset(self.start_pc)
+
+    def irq(self):
+        self._core.irq()
+
+    def nmi(self):
+        self._core.nmi()
+
+    def step(self):
+        self._core.step()
+        return self
+
+    @property
+    def irq_due(self):
+        """Cycle count of the next ``run_until(irq_period=...)`` IRQ; None restarts the cadence."""
+        return self._core.irq_due
+
+    @irq_due.setter
+    def irq_due(self, v):
+        self._core.irq_due = v
+
+    def run_until(
+        self, max_cycles=None, stop_pcs=None, sp_above=None, stop_on_jam=True, irq_period=None
+    ):
+        """Run with the GIL released; ``"cycles"``/``"pc"``/``"sp"``/``"jam"``/``"stop"``.
+
+        Before each instruction: SP above ``sp_above``, more than ``max_cycles``
+        elapsed, or PC in ``stop_pcs``. After it: ``stop`` set, or a JAM ran;
+        with ``irq_period``, :meth:`irq` once the count reaches :attr:`irq_due`.
+        """
+        return self._core.run_until(max_cycles, stop_pcs, sp_above, stop_on_jam, irq_period)
+
+    def run_to_rts(self, pc, acc, max_cycles):
+        """``vagrant_moses.cpu.run_to_rts`` on the native core."""
+        self._core.run_to_rts(pc, acc, max_cycles)
+
+    def run_to_rts_until(self, pc, acc, pcs, max_cycles):
+        """``pysidtracker.emu.run_to_rts_until`` on the native core."""
+        return self._core.run_to_rts_until(pc, acc, pcs, max_cycles)

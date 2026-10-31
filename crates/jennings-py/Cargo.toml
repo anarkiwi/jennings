@@ -1,0 +1,15 @@
+[package]
+name = "jennings-py"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "_core"
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+jennings-core = { path = "../jennings-core" }
+pyo3 = { version = "0.30", features = ["abi3-py311"] }
