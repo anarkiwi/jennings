@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use jennings_core::{
     run_to_rts, run_until, Access, AddrSet, Bus, Cpu, FlatBus, FlatMemory, Hooks, Stop, Until,
 };
+use pyo3::buffer::PyBuffer;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::ffi;
 use pyo3::prelude::*;
@@ -110,6 +111,16 @@ fn byte(v: i64) -> PyResult<u8> {
     u8::try_from(v).map_err(|_| PyValueError::new_err("byte must be in range(0, 256)"))
 }
 
+/// Bytes from any buffer (bytes, bytearray, memoryview, numpy) or iterable of ints.
+fn octets(obj: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
+    if let Ok(buf) = PyBuffer::<u8>::get(obj) {
+        return buf.to_vec(obj.py());
+    }
+    obj.try_iter()?
+        .map(|v| v.and_then(|v| v.extract::<i64>()).and_then(byte))
+        .collect()
+}
+
 fn addrs(it: &Bound<'_, PyAny>) -> PyResult<Vec<u16>> {
     it.try_iter()?
         .map(|a| a.and_then(|a| a.extract::<i64>()).map(Memory::index))
@@ -120,17 +131,17 @@ fn addrs(it: &Bound<'_, PyAny>) -> PyResult<Vec<u16>> {
 impl Memory {
     #[new]
     #[pyo3(signature = (data=None))]
-    fn new(data: Option<&[u8]>) -> PyResult<Self> {
+    fn new(data: Option<&Bound<'_, PyAny>>) -> PyResult<Self> {
         let m = Memory {
             flat: FlatMemory::new(),
             subs: UnsafeCell::default(),
             owner: Owner::default(),
         };
-        if let Some(d) = data {
+        if let Some(d) = data.map(octets).transpose()? {
             if d.len() > 0x10000 {
                 return Err(PyValueError::new_err("more than 64 KiB"));
             }
-            m.write(0, d)?;
+            m.store(0, &d);
         }
         Ok(m)
     }
@@ -160,13 +171,7 @@ impl Memory {
     fn __setitem__(&self, key: &Bound<'_, PyAny>, value: &Bound<'_, PyAny>) -> PyResult<()> {
         if let Ok(s) = key.cast::<PySlice>() {
             let ix = s.indices(0x10000)?;
-            let vals: Vec<u8> = match value.extract::<&[u8]>() {
-                Ok(b) => b.to_vec(),
-                Err(_) => value
-                    .try_iter()?
-                    .map(|v| v.and_then(|v| v.extract::<i64>()).and_then(byte))
-                    .collect::<PyResult<_>>()?,
-            };
+            let vals = octets(value)?;
             return self.host(|h| {
                 for (k, v) in vals.into_iter().take(ix.slicelength).enumerate() {
                     self.flat
@@ -207,23 +212,21 @@ impl Memory {
     }
 
     /// Copy `data` into RAM at `start`, bypassing watches (``ObservableMemory.write``).
-    fn write(&self, start: i64, data: &[u8]) -> PyResult<()> {
+    fn write(&self, start: i64, data: &Bound<'_, PyAny>) -> PyResult<()> {
         self.owner.check()?;
-        let start = Self::index(start);
-        for (k, &b) in data.iter().enumerate() {
-            self.flat.set_ram(start.wrapping_add(k as u16), b);
-        }
+        self.store(Self::index(start), &octets(data)?);
         Ok(())
     }
 
     /// Map 4 KiB page `n` to a read-only 4096-byte `image`, or back to RAM with None.
     #[pyo3(signature = (n, image=None))]
-    fn set_page(&self, n: u8, image: Option<&[u8]>) -> PyResult<()> {
+    fn set_page(&self, n: u8, image: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
         self.owner.check()?;
-        if n > 15 || image.is_some_and(|i| i.len() != 0x1000) {
+        let image = image.map(octets).transpose()?;
+        if n > 15 || image.as_ref().is_some_and(|i| i.len() != 0x1000) {
             return Err(PyValueError::new_err("page 0-15 with a 4096-byte image"));
         }
-        self.flat.set_page(n, image);
+        self.flat.set_page(n, image.as_deref());
         Ok(())
     }
 
@@ -318,6 +321,12 @@ impl Memory {
 }
 
 impl Memory {
+    fn store(&self, start: u16, data: &[u8]) {
+        for (k, &b) in data.iter().enumerate() {
+            self.flat.set_ram(start.wrapping_add(k as u16), b);
+        }
+    }
+
     fn subscribe(
         &self,
         py: Python<'_>,
