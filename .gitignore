@@ -221,3 +221,6 @@ __marimo__/
 
 # Claude Code worktrees and local state
 .claude/
+
+# Process core dumps
+core.[0-9]*
