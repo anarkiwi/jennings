@@ -128,47 +128,78 @@ pub fn run_until<B: Bus, S: FnMut() -> bool>(
     cpu: &mut Cpu,
     bus: &mut B,
     until: &mut Until,
+    stopped: S,
+) -> Stop {
+    let full = until.sp_above.is_some()
+        || until.stop_pcs.is_some()
+        || until.stop_on_irq
+        || until.stop_on_idle
+        || until.trace.is_some();
+    if full {
+        run::<true, B, S>(cpu, bus, until, stopped)
+    } else {
+        run::<false, B, S>(cpu, bus, until, stopped)
+    }
+}
+
+/// [`run_until`] with the per-instruction checks other than cycles, IRQ, `stopped`
+/// and JAM compiled in only when `FULL`.
+#[inline(always)]
+fn run<const FULL: bool, B: Bus, S: FnMut() -> bool>(
+    cpu: &mut Cpu,
+    bus: &mut B,
+    until: &mut Until,
     mut stopped: S,
 ) -> Stop {
-    let start = cpu.cycles;
-    loop {
-        if until.sp_above.is_some_and(|t| cpu.sp as i32 > t) {
-            return Stop::Sp;
+    let end = until
+        .max_cycles
+        .map_or(u64::MAX, |m| cpu.cycles.saturating_add(m).saturating_add(1));
+    let period = until.irq.map_or(0, |p| p.period);
+    let mut due = until.irq.map_or(u64::MAX, |p| p.due);
+    let stop = loop {
+        if FULL && until.sp_above.is_some_and(|t| cpu.sp as i32 > t) {
+            break Stop::Sp;
         }
-        if until.max_cycles.is_some_and(|m| cpu.cycles - start > m) {
-            return Stop::Cycles;
+        if cpu.cycles >= end {
+            break Stop::Cycles;
         }
-        if until.stop_pcs.is_some_and(|s| s.contains(cpu.pc)) {
-            return Stop::Pc;
+        if FULL && until.stop_pcs.is_some_and(|s| s.contains(cpu.pc)) {
+            break Stop::Pc;
         }
-        if until.stop_on_irq && cpu.i == 0 {
-            return Stop::Irq;
+        if FULL && until.stop_on_irq && cpu.i == 0 {
+            break Stop::Irq;
         }
         let jams = cpu.jams;
         let (pc0, sp0) = (cpu.pc, cpu.sp);
-        if let Some(t) = until.trace.as_deref_mut() {
-            t.start(cpu);
-        }
-        cpu.step(bus);
-        if let Some(t) = until.trace.as_deref_mut() {
-            t.end(cpu);
-        }
-        if let Some(p) = until.irq.as_mut() {
-            if cpu.cycles >= p.due {
-                cpu.irq(bus);
-                p.due += p.period;
+        if FULL {
+            if let Some(t) = until.trace.as_deref_mut() {
+                t.start(cpu);
             }
         }
+        cpu.step(bus);
+        if FULL {
+            if let Some(t) = until.trace.as_deref_mut() {
+                t.end(cpu);
+            }
+        }
+        if cpu.cycles >= due {
+            cpu.irq(bus);
+            due += period;
+        }
         if stopped() {
-            return Stop::Stopped;
+            break Stop::Stopped;
         }
         if until.stop_on_jam && cpu.jams != jams {
-            return Stop::Jam;
+            break Stop::Jam;
         }
-        if until.stop_on_idle && cpu.pc == pc0 && cpu.sp == sp0 {
-            return Stop::Idle;
+        if FULL && until.stop_on_idle && cpu.pc == pc0 && cpu.sp == sp0 {
+            break Stop::Idle;
         }
+    };
+    if let Some(p) = until.irq.as_mut() {
+        p.due = due;
     }
+    stop
 }
 
 /// Call `pc` with `A = acc` until its balancing RTS lifts SP above its start.

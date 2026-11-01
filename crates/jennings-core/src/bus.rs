@@ -44,6 +44,10 @@ pub trait Bus {
     }
 
     /// Instruction (or interrupt) boundary: `cpu` as it is before it executes.
+    ///
+    /// Every instruction and interrupt calls it before its first non-fetch access and
+    /// writes `*cpu` only after its last, so a pointer kept from here reads the
+    /// instruction-start registers from inside any of its accesses.
     #[inline(always)]
     fn sync(&mut self, _cpu: &Cpu) {}
 }

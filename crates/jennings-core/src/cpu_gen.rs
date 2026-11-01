@@ -6,13 +6,16 @@ use crate::cpu::{cross, Cpu};
 // BRK impl
 #[inline(always)]
 fn op_00<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
-    s.brk(bus, pc.wrapping_add(2));
+    bus.sync(s);
+    (s.sp, s.pc) = s.brk(bus, pc.wrapping_add(2));
+    s.i = 1;
     7
 }
 
 // ORA indx
 #[inline(always)]
 fn op_01<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = (b1 + (s.x as u32)) & 0xff;
     let u1: u32 = (u0 + 0x1u32) & 0xff;
@@ -25,10 +28,13 @@ fn op_01<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u14: u32 = u2;
     let u8: u32 = (u10 | u14) & 0xffff;
     let u16: u32 = bus.load(u8 as u16) as u32;
-    s.a = (((s.a as u32) | u16) & 0xff) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u17: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u17 != 0x0u32) as u32) as u8;
+    let r11_a: u32 = ((((s.a as u32) | u16) & 0xff) as u8) as u32;
+    let r12_z: u32 = (((r11_a == 0x0u32) as u32) as u8) as u32;
+    let u17: u32 = (r11_a & 0x80u32) & 0xff;
+    let r14_n: u32 = (((u17 != 0x0u32) as u32) as u8) as u32;
+    s.a = r11_a as u8;
+    s.z = r12_z as u8;
+    s.n = r14_n as u8;
     s.pc = pc.wrapping_add(2);
     6
 }
@@ -36,6 +42,7 @@ fn op_01<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // JAM impl
 #[inline(always)]
 fn op_02<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     s.jam(pc);
     2
 }
@@ -43,6 +50,7 @@ fn op_02<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // SLO indx
 #[inline(always)]
 fn op_03<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = (b1 + (s.x as u32)) & 0xff;
     let u1: u32 = (u0 + 0x1u32) & 0xff;
@@ -56,14 +64,18 @@ fn op_03<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u8: u32 = (u10 | u14) & 0xffff;
     let u16: u32 = bus.load(u8 as u16) as u32;
     let u17: u32 = (u16 & 0x80u32) & 0xff;
-    s.c = ((u17 != 0x0u32) as u32) as u8;
+    let r12_c: u32 = (((u17 != 0x0u32) as u32) as u8) as u32;
     let u19: u32 = (u16 << 0x1u32) & 0xff;
     let u18: u32 = (u19 & 0xffu32) & 0xff;
     bus.store(u8 as u16, u18 as u8);
-    s.a = (((s.a as u32) | u18) & 0xff) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u20: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u20 != 0x0u32) as u32) as u8;
+    let r16_a: u32 = ((((s.a as u32) | u18) & 0xff) as u8) as u32;
+    let r17_z: u32 = (((r16_a == 0x0u32) as u32) as u8) as u32;
+    let u20: u32 = (r16_a & 0x80u32) & 0xff;
+    let r19_n: u32 = (((u20 != 0x0u32) as u32) as u8) as u32;
+    s.c = r12_c as u8;
+    s.a = r16_a as u8;
+    s.z = r17_z as u8;
+    s.n = r19_n as u8;
     s.pc = pc.wrapping_add(2);
     8
 }
@@ -71,6 +83,7 @@ fn op_03<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // NOP zp
 #[inline(always)]
 fn op_04<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = bus.load(b1 as u16) as u32;
     s.pc = pc.wrapping_add(2);
@@ -80,12 +93,16 @@ fn op_04<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // ORA zp
 #[inline(always)]
 fn op_05<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = bus.load(b1 as u16) as u32;
-    s.a = (((s.a as u32) | u0) & 0xff) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u1: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u1 != 0x0u32) as u32) as u8;
+    let r1_a: u32 = ((((s.a as u32) | u0) & 0xff) as u8) as u32;
+    let r2_z: u32 = (((r1_a == 0x0u32) as u32) as u8) as u32;
+    let u1: u32 = (r1_a & 0x80u32) & 0xff;
+    let r4_n: u32 = (((u1 != 0x0u32) as u32) as u8) as u32;
+    s.a = r1_a as u8;
+    s.z = r2_z as u8;
+    s.n = r4_n as u8;
     s.pc = pc.wrapping_add(2);
     3
 }
@@ -93,16 +110,20 @@ fn op_05<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // ASL zp
 #[inline(always)]
 fn op_06<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = bus.load(b1 as u16) as u32;
     let u1: u32 = (u0 & 0x80u32) & 0xff;
-    s.c = ((u1 != 0x0u32) as u32) as u8;
+    let r2_c: u32 = (((u1 != 0x0u32) as u32) as u8) as u32;
     let u3: u32 = (u0 << 0x1u32) & 0xff;
     let u2: u32 = (u3 & 0xffu32) & 0xff;
     bus.store(b1 as u16, u2 as u8);
-    s.z = ((u2 == 0x0u32) as u32) as u8;
+    let r6_z: u32 = (((u2 == 0x0u32) as u32) as u8) as u32;
     let u4: u32 = (u2 & 0x80u32) & 0xff;
-    s.n = ((u4 != 0x0u32) as u32) as u8;
+    let r8_n: u32 = (((u4 != 0x0u32) as u32) as u8) as u32;
+    s.c = r2_c as u8;
+    s.z = r6_z as u8;
+    s.n = r8_n as u8;
     s.pc = pc.wrapping_add(2);
     5
 }
@@ -110,17 +131,22 @@ fn op_06<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // SLO zp
 #[inline(always)]
 fn op_07<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = bus.load(b1 as u16) as u32;
     let u1: u32 = (u0 & 0x80u32) & 0xff;
-    s.c = ((u1 != 0x0u32) as u32) as u8;
+    let r2_c: u32 = (((u1 != 0x0u32) as u32) as u8) as u32;
     let u3: u32 = (u0 << 0x1u32) & 0xff;
     let u2: u32 = (u3 & 0xffu32) & 0xff;
     bus.store(b1 as u16, u2 as u8);
-    s.a = (((s.a as u32) | u2) & 0xff) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u4: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u4 != 0x0u32) as u32) as u8;
+    let r6_a: u32 = ((((s.a as u32) | u2) & 0xff) as u8) as u32;
+    let r7_z: u32 = (((r6_a == 0x0u32) as u32) as u8) as u32;
+    let u4: u32 = (r6_a & 0x80u32) & 0xff;
+    let r9_n: u32 = (((u4 != 0x0u32) as u32) as u8) as u32;
+    s.c = r2_c as u8;
+    s.a = r6_a as u8;
+    s.z = r7_z as u8;
+    s.n = r9_n as u8;
     s.pc = pc.wrapping_add(2);
     5
 }
@@ -128,6 +154,7 @@ fn op_07<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // PHP impl
 #[inline(always)]
 fn op_08<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let u0: u32 = (0x30u32 | (s.c as u32)) & 0xff;
     let u2: u32 = ((s.z as u32) << 0x1u32) & 0xff;
     let u1: u32 = (u0 | u2) & 0xff;
@@ -142,7 +169,8 @@ fn op_08<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u13: u32 = (s.sp as u32);
     let u11: u32 = (u13 | 0x100u32) & 0xffff;
     bus.stack_write(u11 as u16, u9 as u8);
-    s.sp = ((s.sp as u32).wrapping_sub(0x1u32) & 0xff) as u8;
+    let r14_sp: u32 = (((s.sp as u32).wrapping_sub(0x1u32) & 0xff) as u8) as u32;
+    s.sp = r14_sp as u8;
     s.pc = pc.wrapping_add(1);
     3
 }
@@ -150,11 +178,15 @@ fn op_08<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // ORA imm
 #[inline(always)]
 fn op_09<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
-    s.a = (((s.a as u32) | b1) & 0xff) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u0: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u0 != 0x0u32) as u32) as u8;
+    let r0_a: u32 = ((((s.a as u32) | b1) & 0xff) as u8) as u32;
+    let r1_z: u32 = (((r0_a == 0x0u32) as u32) as u8) as u32;
+    let u0: u32 = (r0_a & 0x80u32) & 0xff;
+    let r3_n: u32 = (((u0 != 0x0u32) as u32) as u8) as u32;
+    s.a = r0_a as u8;
+    s.z = r1_z as u8;
+    s.n = r3_n as u8;
     s.pc = pc.wrapping_add(2);
     2
 }
@@ -162,14 +194,19 @@ fn op_09<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // ASL acc
 #[inline(always)]
 fn op_0a<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let u0: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.c = ((u0 != 0x0u32) as u32) as u8;
+    let r1_c: u32 = (((u0 != 0x0u32) as u32) as u8) as u32;
     let u2: u32 = ((s.a as u32) << 0x1u32) & 0xff;
     let u1: u32 = (u2 & 0xffu32) & 0xff;
-    s.a = (u1) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u3: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u3 != 0x0u32) as u32) as u8;
+    let r4_a: u32 = ((u1) as u8) as u32;
+    let r5_z: u32 = (((r4_a == 0x0u32) as u32) as u8) as u32;
+    let u3: u32 = (r4_a & 0x80u32) & 0xff;
+    let r7_n: u32 = (((u3 != 0x0u32) as u32) as u8) as u32;
+    s.c = r1_c as u8;
+    s.a = r4_a as u8;
+    s.z = r5_z as u8;
+    s.n = r7_n as u8;
     s.pc = pc.wrapping_add(1);
     2
 }
@@ -177,13 +214,18 @@ fn op_0a<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // ANC imm
 #[inline(always)]
 fn op_0b<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
-    s.a = (((s.a as u32) & b1) & 0xff) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u0: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u0 != 0x0u32) as u32) as u8;
-    let u1: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.c = ((u1 != 0x0u32) as u32) as u8;
+    let r0_a: u32 = ((((s.a as u32) & b1) & 0xff) as u8) as u32;
+    let r1_z: u32 = (((r0_a == 0x0u32) as u32) as u8) as u32;
+    let u0: u32 = (r0_a & 0x80u32) & 0xff;
+    let r3_n: u32 = (((u0 != 0x0u32) as u32) as u8) as u32;
+    let u1: u32 = (r0_a & 0x80u32) & 0xff;
+    let r5_c: u32 = (((u1 != 0x0u32) as u32) as u8) as u32;
+    s.a = r0_a as u8;
+    s.z = r1_z as u8;
+    s.n = r3_n as u8;
+    s.c = r5_c as u8;
     s.pc = pc.wrapping_add(2);
     2
 }
@@ -191,6 +233,7 @@ fn op_0b<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // NOP abs
 #[inline(always)]
 fn op_0c<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
@@ -202,14 +245,18 @@ fn op_0c<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // ORA abs
 #[inline(always)]
 fn op_0d<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
     let u0: u32 = bus.load(w as u16) as u32;
-    s.a = (((s.a as u32) | u0) & 0xff) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u1: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u1 != 0x0u32) as u32) as u8;
+    let r1_a: u32 = ((((s.a as u32) | u0) & 0xff) as u8) as u32;
+    let r2_z: u32 = (((r1_a == 0x0u32) as u32) as u8) as u32;
+    let u1: u32 = (r1_a & 0x80u32) & 0xff;
+    let r4_n: u32 = (((u1 != 0x0u32) as u32) as u8) as u32;
+    s.a = r1_a as u8;
+    s.z = r2_z as u8;
+    s.n = r4_n as u8;
     s.pc = pc.wrapping_add(3);
     4
 }
@@ -217,18 +264,22 @@ fn op_0d<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // ASL abs
 #[inline(always)]
 fn op_0e<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
     let u0: u32 = bus.load(w as u16) as u32;
     let u1: u32 = (u0 & 0x80u32) & 0xff;
-    s.c = ((u1 != 0x0u32) as u32) as u8;
+    let r2_c: u32 = (((u1 != 0x0u32) as u32) as u8) as u32;
     let u3: u32 = (u0 << 0x1u32) & 0xff;
     let u2: u32 = (u3 & 0xffu32) & 0xff;
     bus.store(w as u16, u2 as u8);
-    s.z = ((u2 == 0x0u32) as u32) as u8;
+    let r6_z: u32 = (((u2 == 0x0u32) as u32) as u8) as u32;
     let u4: u32 = (u2 & 0x80u32) & 0xff;
-    s.n = ((u4 != 0x0u32) as u32) as u8;
+    let r8_n: u32 = (((u4 != 0x0u32) as u32) as u8) as u32;
+    s.c = r2_c as u8;
+    s.z = r6_z as u8;
+    s.n = r8_n as u8;
     s.pc = pc.wrapping_add(3);
     6
 }
@@ -236,19 +287,24 @@ fn op_0e<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // SLO abs
 #[inline(always)]
 fn op_0f<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
     let u0: u32 = bus.load(w as u16) as u32;
     let u1: u32 = (u0 & 0x80u32) & 0xff;
-    s.c = ((u1 != 0x0u32) as u32) as u8;
+    let r2_c: u32 = (((u1 != 0x0u32) as u32) as u8) as u32;
     let u3: u32 = (u0 << 0x1u32) & 0xff;
     let u2: u32 = (u3 & 0xffu32) & 0xff;
     bus.store(w as u16, u2 as u8);
-    s.a = (((s.a as u32) | u2) & 0xff) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u4: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u4 != 0x0u32) as u32) as u8;
+    let r6_a: u32 = ((((s.a as u32) | u2) & 0xff) as u8) as u32;
+    let r7_z: u32 = (((r6_a == 0x0u32) as u32) as u8) as u32;
+    let u4: u32 = (r6_a & 0x80u32) & 0xff;
+    let r9_n: u32 = (((u4 != 0x0u32) as u32) as u8) as u32;
+    s.c = r2_c as u8;
+    s.a = r6_a as u8;
+    s.z = r7_z as u8;
+    s.n = r9_n as u8;
     s.pc = pc.wrapping_add(3);
     6
 }
@@ -256,6 +312,7 @@ fn op_0f<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // BPL rel
 #[inline(always)]
 fn op_10<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     2 + s.branch(s.n == 0, pc, b1)
 }
@@ -263,6 +320,7 @@ fn op_10<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // ORA indy
 #[inline(always)]
 fn op_11<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = bus.load(b1 as u16) as u32;
     let u1: u32 = bus.load(((b1 + 1) & 0xff) as u16) as u32;
@@ -273,10 +331,13 @@ fn op_11<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u12: u32 = (s.y as u32);
     let u10: u32 = (u2 + u12) & 0xffff;
     let u14: u32 = bus.load(u10 as u16) as u32;
-    s.a = (((s.a as u32) | u14) & 0xff) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u15: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u15 != 0x0u32) as u32) as u8;
+    let r9_a: u32 = ((((s.a as u32) | u14) & 0xff) as u8) as u32;
+    let r10_z: u32 = (((r9_a == 0x0u32) as u32) as u8) as u32;
+    let u15: u32 = (r9_a & 0x80u32) & 0xff;
+    let r12_n: u32 = (((u15 != 0x0u32) as u32) as u8) as u32;
+    s.a = r9_a as u8;
+    s.z = r10_z as u8;
+    s.n = r12_n as u8;
     s.pc = pc.wrapping_add(2);
     5 + cross(u2, s.y)
 }
@@ -284,6 +345,7 @@ fn op_11<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // JAM impl
 #[inline(always)]
 fn op_12<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     s.jam(pc);
     2
 }
@@ -291,6 +353,7 @@ fn op_12<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // SLO indy
 #[inline(always)]
 fn op_13<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = bus.load(b1 as u16) as u32;
     let u1: u32 = bus.load(((b1 + 1) & 0xff) as u16) as u32;
@@ -302,14 +365,18 @@ fn op_13<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u10: u32 = (u2 + u12) & 0xffff;
     let u14: u32 = bus.load(u10 as u16) as u32;
     let u15: u32 = (u14 & 0x80u32) & 0xff;
-    s.c = ((u15 != 0x0u32) as u32) as u8;
+    let r10_c: u32 = (((u15 != 0x0u32) as u32) as u8) as u32;
     let u17: u32 = (u14 << 0x1u32) & 0xff;
     let u16: u32 = (u17 & 0xffu32) & 0xff;
     bus.store(u10 as u16, u16 as u8);
-    s.a = (((s.a as u32) | u16) & 0xff) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u18: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u18 != 0x0u32) as u32) as u8;
+    let r14_a: u32 = ((((s.a as u32) | u16) & 0xff) as u8) as u32;
+    let r15_z: u32 = (((r14_a == 0x0u32) as u32) as u8) as u32;
+    let u18: u32 = (r14_a & 0x80u32) & 0xff;
+    let r17_n: u32 = (((u18 != 0x0u32) as u32) as u8) as u32;
+    s.c = r10_c as u8;
+    s.a = r14_a as u8;
+    s.z = r15_z as u8;
+    s.n = r17_n as u8;
     s.pc = pc.wrapping_add(2);
     8
 }
@@ -317,6 +384,7 @@ fn op_13<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // NOP zpx
 #[inline(always)]
 fn op_14<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u2: u32 = (b1 + (s.x as u32)) & 0xff;
     let u0: u32 = u2;
@@ -328,14 +396,18 @@ fn op_14<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // ORA zpx
 #[inline(always)]
 fn op_15<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u2: u32 = (b1 + (s.x as u32)) & 0xff;
     let u0: u32 = u2;
     let u3: u32 = bus.load(u0 as u16) as u32;
-    s.a = (((s.a as u32) | u3) & 0xff) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u4: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u4 != 0x0u32) as u32) as u8;
+    let r3_a: u32 = ((((s.a as u32) | u3) & 0xff) as u8) as u32;
+    let r4_z: u32 = (((r3_a == 0x0u32) as u32) as u8) as u32;
+    let u4: u32 = (r3_a & 0x80u32) & 0xff;
+    let r6_n: u32 = (((u4 != 0x0u32) as u32) as u8) as u32;
+    s.a = r3_a as u8;
+    s.z = r4_z as u8;
+    s.n = r6_n as u8;
     s.pc = pc.wrapping_add(2);
     4
 }
@@ -343,18 +415,22 @@ fn op_15<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // ASL zpx
 #[inline(always)]
 fn op_16<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u2: u32 = (b1 + (s.x as u32)) & 0xff;
     let u0: u32 = u2;
     let u3: u32 = bus.load(u0 as u16) as u32;
     let u4: u32 = (u3 & 0x80u32) & 0xff;
-    s.c = ((u4 != 0x0u32) as u32) as u8;
+    let r4_c: u32 = (((u4 != 0x0u32) as u32) as u8) as u32;
     let u6: u32 = (u3 << 0x1u32) & 0xff;
     let u5: u32 = (u6 & 0xffu32) & 0xff;
     bus.store(u0 as u16, u5 as u8);
-    s.z = ((u5 == 0x0u32) as u32) as u8;
+    let r8_z: u32 = (((u5 == 0x0u32) as u32) as u8) as u32;
     let u7: u32 = (u5 & 0x80u32) & 0xff;
-    s.n = ((u7 != 0x0u32) as u32) as u8;
+    let r10_n: u32 = (((u7 != 0x0u32) as u32) as u8) as u32;
+    s.c = r4_c as u8;
+    s.z = r8_z as u8;
+    s.n = r10_n as u8;
     s.pc = pc.wrapping_add(2);
     6
 }
@@ -362,19 +438,24 @@ fn op_16<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // SLO zpx
 #[inline(always)]
 fn op_17<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u2: u32 = (b1 + (s.x as u32)) & 0xff;
     let u0: u32 = u2;
     let u3: u32 = bus.load(u0 as u16) as u32;
     let u4: u32 = (u3 & 0x80u32) & 0xff;
-    s.c = ((u4 != 0x0u32) as u32) as u8;
+    let r4_c: u32 = (((u4 != 0x0u32) as u32) as u8) as u32;
     let u6: u32 = (u3 << 0x1u32) & 0xff;
     let u5: u32 = (u6 & 0xffu32) & 0xff;
     bus.store(u0 as u16, u5 as u8);
-    s.a = (((s.a as u32) | u5) & 0xff) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u7: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u7 != 0x0u32) as u32) as u8;
+    let r8_a: u32 = ((((s.a as u32) | u5) & 0xff) as u8) as u32;
+    let r9_z: u32 = (((r8_a == 0x0u32) as u32) as u8) as u32;
+    let u7: u32 = (r8_a & 0x80u32) & 0xff;
+    let r11_n: u32 = (((u7 != 0x0u32) as u32) as u8) as u32;
+    s.c = r4_c as u8;
+    s.a = r8_a as u8;
+    s.z = r9_z as u8;
+    s.n = r11_n as u8;
     s.pc = pc.wrapping_add(2);
     6
 }
@@ -382,7 +463,9 @@ fn op_17<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // CLC impl
 #[inline(always)]
 fn op_18<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
-    s.c = (0x0u32) as u8;
+    bus.sync(s);
+    let r0_c: u32 = ((0x0u32) as u8) as u32;
+    s.c = r0_c as u8;
     s.pc = pc.wrapping_add(1);
     2
 }
@@ -390,16 +473,20 @@ fn op_18<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // ORA absy
 #[inline(always)]
 fn op_19<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
     let u2: u32 = (s.y as u32);
     let u0: u32 = (w + u2) & 0xffff;
     let u4: u32 = bus.load(u0 as u16) as u32;
-    s.a = (((s.a as u32) | u4) & 0xff) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u5: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u5 != 0x0u32) as u32) as u8;
+    let r3_a: u32 = ((((s.a as u32) | u4) & 0xff) as u8) as u32;
+    let r4_z: u32 = (((r3_a == 0x0u32) as u32) as u8) as u32;
+    let u5: u32 = (r3_a & 0x80u32) & 0xff;
+    let r6_n: u32 = (((u5 != 0x0u32) as u32) as u8) as u32;
+    s.a = r3_a as u8;
+    s.z = r4_z as u8;
+    s.n = r6_n as u8;
     s.pc = pc.wrapping_add(3);
     4 + cross(w, s.y)
 }
@@ -407,6 +494,7 @@ fn op_19<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // NOP impl
 #[inline(always)]
 fn op_1a<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     s.pc = pc.wrapping_add(1);
     2
 }
@@ -414,6 +502,7 @@ fn op_1a<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // SLO absy
 #[inline(always)]
 fn op_1b<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
@@ -421,14 +510,18 @@ fn op_1b<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u0: u32 = (w + u2) & 0xffff;
     let u4: u32 = bus.load(u0 as u16) as u32;
     let u5: u32 = (u4 & 0x80u32) & 0xff;
-    s.c = ((u5 != 0x0u32) as u32) as u8;
+    let r4_c: u32 = (((u5 != 0x0u32) as u32) as u8) as u32;
     let u7: u32 = (u4 << 0x1u32) & 0xff;
     let u6: u32 = (u7 & 0xffu32) & 0xff;
     bus.store(u0 as u16, u6 as u8);
-    s.a = (((s.a as u32) | u6) & 0xff) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u8: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u8 != 0x0u32) as u32) as u8;
+    let r8_a: u32 = ((((s.a as u32) | u6) & 0xff) as u8) as u32;
+    let r9_z: u32 = (((r8_a == 0x0u32) as u32) as u8) as u32;
+    let u8: u32 = (r8_a & 0x80u32) & 0xff;
+    let r11_n: u32 = (((u8 != 0x0u32) as u32) as u8) as u32;
+    s.c = r4_c as u8;
+    s.a = r8_a as u8;
+    s.z = r9_z as u8;
+    s.n = r11_n as u8;
     s.pc = pc.wrapping_add(3);
     7
 }
@@ -436,6 +529,7 @@ fn op_1b<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // NOP absx
 #[inline(always)]
 fn op_1c<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
@@ -449,16 +543,20 @@ fn op_1c<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // ORA absx
 #[inline(always)]
 fn op_1d<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
     let u2: u32 = (s.x as u32);
     let u0: u32 = (w + u2) & 0xffff;
     let u4: u32 = bus.load(u0 as u16) as u32;
-    s.a = (((s.a as u32) | u4) & 0xff) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u5: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u5 != 0x0u32) as u32) as u8;
+    let r3_a: u32 = ((((s.a as u32) | u4) & 0xff) as u8) as u32;
+    let r4_z: u32 = (((r3_a == 0x0u32) as u32) as u8) as u32;
+    let u5: u32 = (r3_a & 0x80u32) & 0xff;
+    let r6_n: u32 = (((u5 != 0x0u32) as u32) as u8) as u32;
+    s.a = r3_a as u8;
+    s.z = r4_z as u8;
+    s.n = r6_n as u8;
     s.pc = pc.wrapping_add(3);
     4 + cross(w, s.x)
 }
@@ -466,6 +564,7 @@ fn op_1d<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // ASL absx
 #[inline(always)]
 fn op_1e<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
@@ -473,13 +572,16 @@ fn op_1e<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u0: u32 = (w + u2) & 0xffff;
     let u4: u32 = bus.load(u0 as u16) as u32;
     let u5: u32 = (u4 & 0x80u32) & 0xff;
-    s.c = ((u5 != 0x0u32) as u32) as u8;
+    let r4_c: u32 = (((u5 != 0x0u32) as u32) as u8) as u32;
     let u7: u32 = (u4 << 0x1u32) & 0xff;
     let u6: u32 = (u7 & 0xffu32) & 0xff;
     bus.store(u0 as u16, u6 as u8);
-    s.z = ((u6 == 0x0u32) as u32) as u8;
+    let r8_z: u32 = (((u6 == 0x0u32) as u32) as u8) as u32;
     let u8: u32 = (u6 & 0x80u32) & 0xff;
-    s.n = ((u8 != 0x0u32) as u32) as u8;
+    let r10_n: u32 = (((u8 != 0x0u32) as u32) as u8) as u32;
+    s.c = r4_c as u8;
+    s.z = r8_z as u8;
+    s.n = r10_n as u8;
     s.pc = pc.wrapping_add(3);
     7
 }
@@ -487,6 +589,7 @@ fn op_1e<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // SLO absx
 #[inline(always)]
 fn op_1f<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
@@ -494,14 +597,18 @@ fn op_1f<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u0: u32 = (w + u2) & 0xffff;
     let u4: u32 = bus.load(u0 as u16) as u32;
     let u5: u32 = (u4 & 0x80u32) & 0xff;
-    s.c = ((u5 != 0x0u32) as u32) as u8;
+    let r4_c: u32 = (((u5 != 0x0u32) as u32) as u8) as u32;
     let u7: u32 = (u4 << 0x1u32) & 0xff;
     let u6: u32 = (u7 & 0xffu32) & 0xff;
     bus.store(u0 as u16, u6 as u8);
-    s.a = (((s.a as u32) | u6) & 0xff) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u8: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u8 != 0x0u32) as u32) as u8;
+    let r8_a: u32 = ((((s.a as u32) | u6) & 0xff) as u8) as u32;
+    let r9_z: u32 = (((r8_a == 0x0u32) as u32) as u8) as u32;
+    let u8: u32 = (r8_a & 0x80u32) & 0xff;
+    let r11_n: u32 = (((u8 != 0x0u32) as u32) as u8) as u32;
+    s.c = r4_c as u8;
+    s.a = r8_a as u8;
+    s.z = r9_z as u8;
+    s.n = r11_n as u8;
     s.pc = pc.wrapping_add(3);
     7
 }
@@ -509,16 +616,18 @@ fn op_1f<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // JSR abs
 #[inline(always)]
 fn op_20<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
-    s.jsr(bus, pc.wrapping_add(2), w as u16);
+    (s.sp, s.pc) = s.jsr(bus, pc.wrapping_add(2), w as u16);
     6
 }
 
 // AND indx
 #[inline(always)]
 fn op_21<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = (b1 + (s.x as u32)) & 0xff;
     let u1: u32 = (u0 + 0x1u32) & 0xff;
@@ -531,10 +640,13 @@ fn op_21<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u14: u32 = u2;
     let u8: u32 = (u10 | u14) & 0xffff;
     let u16: u32 = bus.load(u8 as u16) as u32;
-    s.a = (((s.a as u32) & u16) & 0xff) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u17: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u17 != 0x0u32) as u32) as u8;
+    let r11_a: u32 = ((((s.a as u32) & u16) & 0xff) as u8) as u32;
+    let r12_z: u32 = (((r11_a == 0x0u32) as u32) as u8) as u32;
+    let u17: u32 = (r11_a & 0x80u32) & 0xff;
+    let r14_n: u32 = (((u17 != 0x0u32) as u32) as u8) as u32;
+    s.a = r11_a as u8;
+    s.z = r12_z as u8;
+    s.n = r14_n as u8;
     s.pc = pc.wrapping_add(2);
     6
 }
@@ -542,6 +654,7 @@ fn op_21<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // JAM impl
 #[inline(always)]
 fn op_22<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     s.jam(pc);
     2
 }
@@ -549,6 +662,7 @@ fn op_22<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // RLA indx
 #[inline(always)]
 fn op_23<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = (b1 + (s.x as u32)) & 0xff;
     let u1: u32 = (u0 + 0x1u32) & 0xff;
@@ -563,15 +677,19 @@ fn op_23<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u16: u32 = bus.load(u8 as u16) as u32;
     let u17: u32 = (s.c as u32);
     let u18: u32 = (u16 & 0x80u32) & 0xff;
-    s.c = ((u18 != 0x0u32) as u32) as u8;
+    let r13_c: u32 = (((u18 != 0x0u32) as u32) as u8) as u32;
     let u21: u32 = (u16 << 0x1u32) & 0xff;
     let u20: u32 = (u21 | u17) & 0xff;
     let u19: u32 = (u20 & 0xffu32) & 0xff;
     bus.store(u8 as u16, u19 as u8);
-    s.a = (((s.a as u32) & u19) & 0xff) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u22: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u22 != 0x0u32) as u32) as u8;
+    let r18_a: u32 = ((((s.a as u32) & u19) & 0xff) as u8) as u32;
+    let r19_z: u32 = (((r18_a == 0x0u32) as u32) as u8) as u32;
+    let u22: u32 = (r18_a & 0x80u32) & 0xff;
+    let r21_n: u32 = (((u22 != 0x0u32) as u32) as u8) as u32;
+    s.c = r13_c as u8;
+    s.a = r18_a as u8;
+    s.z = r19_z as u8;
+    s.n = r21_n as u8;
     s.pc = pc.wrapping_add(2);
     8
 }
@@ -579,14 +697,18 @@ fn op_23<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // BIT zp
 #[inline(always)]
 fn op_24<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = bus.load(b1 as u16) as u32;
     let u1: u32 = ((s.a as u32) & u0) & 0xff;
-    s.z = ((u1 == 0x0u32) as u32) as u8;
+    let r2_z: u32 = (((u1 == 0x0u32) as u32) as u8) as u32;
     let u2: u32 = (u0 & 0x80u32) & 0xff;
-    s.n = ((u2 != 0x0u32) as u32) as u8;
+    let r4_n: u32 = (((u2 != 0x0u32) as u32) as u8) as u32;
     let u3: u32 = (u0 & 0x40u32) & 0xff;
-    s.v = ((u3 != 0x0u32) as u32) as u8;
+    let r6_v: u32 = (((u3 != 0x0u32) as u32) as u8) as u32;
+    s.z = r2_z as u8;
+    s.n = r4_n as u8;
+    s.v = r6_v as u8;
     s.pc = pc.wrapping_add(2);
     3
 }
@@ -594,12 +716,16 @@ fn op_24<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // AND zp
 #[inline(always)]
 fn op_25<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = bus.load(b1 as u16) as u32;
-    s.a = (((s.a as u32) & u0) & 0xff) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u1: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u1 != 0x0u32) as u32) as u8;
+    let r1_a: u32 = ((((s.a as u32) & u0) & 0xff) as u8) as u32;
+    let r2_z: u32 = (((r1_a == 0x0u32) as u32) as u8) as u32;
+    let u1: u32 = (r1_a & 0x80u32) & 0xff;
+    let r4_n: u32 = (((u1 != 0x0u32) as u32) as u8) as u32;
+    s.a = r1_a as u8;
+    s.z = r2_z as u8;
+    s.n = r4_n as u8;
     s.pc = pc.wrapping_add(2);
     3
 }
@@ -607,18 +733,22 @@ fn op_25<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // ROL zp
 #[inline(always)]
 fn op_26<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = bus.load(b1 as u16) as u32;
     let u1: u32 = (s.c as u32);
     let u2: u32 = (u0 & 0x80u32) & 0xff;
-    s.c = ((u2 != 0x0u32) as u32) as u8;
+    let r3_c: u32 = (((u2 != 0x0u32) as u32) as u8) as u32;
     let u5: u32 = (u0 << 0x1u32) & 0xff;
     let u4: u32 = (u5 | u1) & 0xff;
     let u3: u32 = (u4 & 0xffu32) & 0xff;
     bus.store(b1 as u16, u3 as u8);
-    s.z = ((u3 == 0x0u32) as u32) as u8;
+    let r8_z: u32 = (((u3 == 0x0u32) as u32) as u8) as u32;
     let u6: u32 = (u3 & 0x80u32) & 0xff;
-    s.n = ((u6 != 0x0u32) as u32) as u8;
+    let r10_n: u32 = (((u6 != 0x0u32) as u32) as u8) as u32;
+    s.c = r3_c as u8;
+    s.z = r8_z as u8;
+    s.n = r10_n as u8;
     s.pc = pc.wrapping_add(2);
     5
 }
@@ -626,19 +756,24 @@ fn op_26<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // RLA zp
 #[inline(always)]
 fn op_27<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = bus.load(b1 as u16) as u32;
     let u1: u32 = (s.c as u32);
     let u2: u32 = (u0 & 0x80u32) & 0xff;
-    s.c = ((u2 != 0x0u32) as u32) as u8;
+    let r3_c: u32 = (((u2 != 0x0u32) as u32) as u8) as u32;
     let u5: u32 = (u0 << 0x1u32) & 0xff;
     let u4: u32 = (u5 | u1) & 0xff;
     let u3: u32 = (u4 & 0xffu32) & 0xff;
     bus.store(b1 as u16, u3 as u8);
-    s.a = (((s.a as u32) & u3) & 0xff) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u6: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u6 != 0x0u32) as u32) as u8;
+    let r8_a: u32 = ((((s.a as u32) & u3) & 0xff) as u8) as u32;
+    let r9_z: u32 = (((r8_a == 0x0u32) as u32) as u8) as u32;
+    let u6: u32 = (r8_a & 0x80u32) & 0xff;
+    let r11_n: u32 = (((u6 != 0x0u32) as u32) as u8) as u32;
+    s.c = r3_c as u8;
+    s.a = r8_a as u8;
+    s.z = r9_z as u8;
+    s.n = r11_n as u8;
     s.pc = pc.wrapping_add(2);
     5
 }
@@ -646,21 +781,29 @@ fn op_27<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // PLP impl
 #[inline(always)]
 fn op_28<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
-    s.sp = (((s.sp as u32) + 0x1u32) & 0xff) as u8;
-    let u2: u32 = (s.sp as u32);
+    bus.sync(s);
+    let r0_sp: u32 = ((((s.sp as u32) + 0x1u32) & 0xff) as u8) as u32;
+    let u2: u32 = r0_sp;
     let u0: u32 = (u2 | 0x100u32) & 0xffff;
     let u4: u32 = bus.stack_read(u0 as u16) as u32;
-    s.c = ((u4 & 0x1u32) & 0xff) as u8;
+    let r4_c: u32 = (((u4 & 0x1u32) & 0xff) as u8) as u32;
     let u5: u32 = u4 >> 0x1u32;
-    s.z = ((u5 & 0x1u32) & 0xff) as u8;
+    let r6_z: u32 = (((u5 & 0x1u32) & 0xff) as u8) as u32;
     let u6: u32 = u4 >> 0x2u32;
-    s.i = ((u6 & 0x1u32) & 0xff) as u8;
+    let r8_i: u32 = (((u6 & 0x1u32) & 0xff) as u8) as u32;
     let u7: u32 = u4 >> 0x3u32;
-    s.d = ((u7 & 0x1u32) & 0xff) as u8;
+    let r10_d: u32 = (((u7 & 0x1u32) & 0xff) as u8) as u32;
     let u8: u32 = u4 >> 0x6u32;
-    s.v = ((u8 & 0x1u32) & 0xff) as u8;
+    let r12_v: u32 = (((u8 & 0x1u32) & 0xff) as u8) as u32;
     let u9: u32 = u4 >> 0x7u32;
-    s.n = ((u9 & 0x1u32) & 0xff) as u8;
+    let r14_n: u32 = (((u9 & 0x1u32) & 0xff) as u8) as u32;
+    s.sp = r0_sp as u8;
+    s.c = r4_c as u8;
+    s.z = r6_z as u8;
+    s.i = r8_i as u8;
+    s.d = r10_d as u8;
+    s.v = r12_v as u8;
+    s.n = r14_n as u8;
     s.pc = pc.wrapping_add(1);
     4
 }
@@ -668,11 +811,15 @@ fn op_28<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // AND imm
 #[inline(always)]
 fn op_29<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
-    s.a = (((s.a as u32) & b1) & 0xff) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u0: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u0 != 0x0u32) as u32) as u8;
+    let r0_a: u32 = ((((s.a as u32) & b1) & 0xff) as u8) as u32;
+    let r1_z: u32 = (((r0_a == 0x0u32) as u32) as u8) as u32;
+    let u0: u32 = (r0_a & 0x80u32) & 0xff;
+    let r3_n: u32 = (((u0 != 0x0u32) as u32) as u8) as u32;
+    s.a = r0_a as u8;
+    s.z = r1_z as u8;
+    s.n = r3_n as u8;
     s.pc = pc.wrapping_add(2);
     2
 }
@@ -680,16 +827,21 @@ fn op_29<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // ROL acc
 #[inline(always)]
 fn op_2a<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let u0: u32 = (s.c as u32);
     let u1: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.c = ((u1 != 0x0u32) as u32) as u8;
+    let r2_c: u32 = (((u1 != 0x0u32) as u32) as u8) as u32;
     let u4: u32 = ((s.a as u32) << 0x1u32) & 0xff;
     let u3: u32 = (u4 | u0) & 0xff;
     let u2: u32 = (u3 & 0xffu32) & 0xff;
-    s.a = (u2) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u5: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u5 != 0x0u32) as u32) as u8;
+    let r6_a: u32 = ((u2) as u8) as u32;
+    let r7_z: u32 = (((r6_a == 0x0u32) as u32) as u8) as u32;
+    let u5: u32 = (r6_a & 0x80u32) & 0xff;
+    let r9_n: u32 = (((u5 != 0x0u32) as u32) as u8) as u32;
+    s.c = r2_c as u8;
+    s.a = r6_a as u8;
+    s.z = r7_z as u8;
+    s.n = r9_n as u8;
     s.pc = pc.wrapping_add(1);
     2
 }
@@ -697,13 +849,18 @@ fn op_2a<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // ANC imm
 #[inline(always)]
 fn op_2b<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
-    s.a = (((s.a as u32) & b1) & 0xff) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u0: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u0 != 0x0u32) as u32) as u8;
-    let u1: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.c = ((u1 != 0x0u32) as u32) as u8;
+    let r0_a: u32 = ((((s.a as u32) & b1) & 0xff) as u8) as u32;
+    let r1_z: u32 = (((r0_a == 0x0u32) as u32) as u8) as u32;
+    let u0: u32 = (r0_a & 0x80u32) & 0xff;
+    let r3_n: u32 = (((u0 != 0x0u32) as u32) as u8) as u32;
+    let u1: u32 = (r0_a & 0x80u32) & 0xff;
+    let r5_c: u32 = (((u1 != 0x0u32) as u32) as u8) as u32;
+    s.a = r0_a as u8;
+    s.z = r1_z as u8;
+    s.n = r3_n as u8;
+    s.c = r5_c as u8;
     s.pc = pc.wrapping_add(2);
     2
 }
@@ -711,16 +868,20 @@ fn op_2b<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // BIT abs
 #[inline(always)]
 fn op_2c<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
     let u0: u32 = bus.load(w as u16) as u32;
     let u1: u32 = ((s.a as u32) & u0) & 0xff;
-    s.z = ((u1 == 0x0u32) as u32) as u8;
+    let r2_z: u32 = (((u1 == 0x0u32) as u32) as u8) as u32;
     let u2: u32 = (u0 & 0x80u32) & 0xff;
-    s.n = ((u2 != 0x0u32) as u32) as u8;
+    let r4_n: u32 = (((u2 != 0x0u32) as u32) as u8) as u32;
     let u3: u32 = (u0 & 0x40u32) & 0xff;
-    s.v = ((u3 != 0x0u32) as u32) as u8;
+    let r6_v: u32 = (((u3 != 0x0u32) as u32) as u8) as u32;
+    s.z = r2_z as u8;
+    s.n = r4_n as u8;
+    s.v = r6_v as u8;
     s.pc = pc.wrapping_add(3);
     4
 }
@@ -728,14 +889,18 @@ fn op_2c<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // AND abs
 #[inline(always)]
 fn op_2d<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
     let u0: u32 = bus.load(w as u16) as u32;
-    s.a = (((s.a as u32) & u0) & 0xff) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u1: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u1 != 0x0u32) as u32) as u8;
+    let r1_a: u32 = ((((s.a as u32) & u0) & 0xff) as u8) as u32;
+    let r2_z: u32 = (((r1_a == 0x0u32) as u32) as u8) as u32;
+    let u1: u32 = (r1_a & 0x80u32) & 0xff;
+    let r4_n: u32 = (((u1 != 0x0u32) as u32) as u8) as u32;
+    s.a = r1_a as u8;
+    s.z = r2_z as u8;
+    s.n = r4_n as u8;
     s.pc = pc.wrapping_add(3);
     4
 }
@@ -743,20 +908,24 @@ fn op_2d<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // ROL abs
 #[inline(always)]
 fn op_2e<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
     let u0: u32 = bus.load(w as u16) as u32;
     let u1: u32 = (s.c as u32);
     let u2: u32 = (u0 & 0x80u32) & 0xff;
-    s.c = ((u2 != 0x0u32) as u32) as u8;
+    let r3_c: u32 = (((u2 != 0x0u32) as u32) as u8) as u32;
     let u5: u32 = (u0 << 0x1u32) & 0xff;
     let u4: u32 = (u5 | u1) & 0xff;
     let u3: u32 = (u4 & 0xffu32) & 0xff;
     bus.store(w as u16, u3 as u8);
-    s.z = ((u3 == 0x0u32) as u32) as u8;
+    let r8_z: u32 = (((u3 == 0x0u32) as u32) as u8) as u32;
     let u6: u32 = (u3 & 0x80u32) & 0xff;
-    s.n = ((u6 != 0x0u32) as u32) as u8;
+    let r10_n: u32 = (((u6 != 0x0u32) as u32) as u8) as u32;
+    s.c = r3_c as u8;
+    s.z = r8_z as u8;
+    s.n = r10_n as u8;
     s.pc = pc.wrapping_add(3);
     6
 }
@@ -764,21 +933,26 @@ fn op_2e<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // RLA abs
 #[inline(always)]
 fn op_2f<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
     let u0: u32 = bus.load(w as u16) as u32;
     let u1: u32 = (s.c as u32);
     let u2: u32 = (u0 & 0x80u32) & 0xff;
-    s.c = ((u2 != 0x0u32) as u32) as u8;
+    let r3_c: u32 = (((u2 != 0x0u32) as u32) as u8) as u32;
     let u5: u32 = (u0 << 0x1u32) & 0xff;
     let u4: u32 = (u5 | u1) & 0xff;
     let u3: u32 = (u4 & 0xffu32) & 0xff;
     bus.store(w as u16, u3 as u8);
-    s.a = (((s.a as u32) & u3) & 0xff) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u6: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u6 != 0x0u32) as u32) as u8;
+    let r8_a: u32 = ((((s.a as u32) & u3) & 0xff) as u8) as u32;
+    let r9_z: u32 = (((r8_a == 0x0u32) as u32) as u8) as u32;
+    let u6: u32 = (r8_a & 0x80u32) & 0xff;
+    let r11_n: u32 = (((u6 != 0x0u32) as u32) as u8) as u32;
+    s.c = r3_c as u8;
+    s.a = r8_a as u8;
+    s.z = r9_z as u8;
+    s.n = r11_n as u8;
     s.pc = pc.wrapping_add(3);
     6
 }
@@ -786,6 +960,7 @@ fn op_2f<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // BMI rel
 #[inline(always)]
 fn op_30<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     2 + s.branch(s.n == 1, pc, b1)
 }
@@ -793,6 +968,7 @@ fn op_30<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // AND indy
 #[inline(always)]
 fn op_31<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = bus.load(b1 as u16) as u32;
     let u1: u32 = bus.load(((b1 + 1) & 0xff) as u16) as u32;
@@ -803,10 +979,13 @@ fn op_31<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u12: u32 = (s.y as u32);
     let u10: u32 = (u2 + u12) & 0xffff;
     let u14: u32 = bus.load(u10 as u16) as u32;
-    s.a = (((s.a as u32) & u14) & 0xff) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u15: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u15 != 0x0u32) as u32) as u8;
+    let r9_a: u32 = ((((s.a as u32) & u14) & 0xff) as u8) as u32;
+    let r10_z: u32 = (((r9_a == 0x0u32) as u32) as u8) as u32;
+    let u15: u32 = (r9_a & 0x80u32) & 0xff;
+    let r12_n: u32 = (((u15 != 0x0u32) as u32) as u8) as u32;
+    s.a = r9_a as u8;
+    s.z = r10_z as u8;
+    s.n = r12_n as u8;
     s.pc = pc.wrapping_add(2);
     5 + cross(u2, s.y)
 }
@@ -814,6 +993,7 @@ fn op_31<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // JAM impl
 #[inline(always)]
 fn op_32<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     s.jam(pc);
     2
 }
@@ -821,6 +1001,7 @@ fn op_32<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // RLA indy
 #[inline(always)]
 fn op_33<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = bus.load(b1 as u16) as u32;
     let u1: u32 = bus.load(((b1 + 1) & 0xff) as u16) as u32;
@@ -833,15 +1014,19 @@ fn op_33<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u14: u32 = bus.load(u10 as u16) as u32;
     let u15: u32 = (s.c as u32);
     let u16: u32 = (u14 & 0x80u32) & 0xff;
-    s.c = ((u16 != 0x0u32) as u32) as u8;
+    let r11_c: u32 = (((u16 != 0x0u32) as u32) as u8) as u32;
     let u19: u32 = (u14 << 0x1u32) & 0xff;
     let u18: u32 = (u19 | u15) & 0xff;
     let u17: u32 = (u18 & 0xffu32) & 0xff;
     bus.store(u10 as u16, u17 as u8);
-    s.a = (((s.a as u32) & u17) & 0xff) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u20: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u20 != 0x0u32) as u32) as u8;
+    let r16_a: u32 = ((((s.a as u32) & u17) & 0xff) as u8) as u32;
+    let r17_z: u32 = (((r16_a == 0x0u32) as u32) as u8) as u32;
+    let u20: u32 = (r16_a & 0x80u32) & 0xff;
+    let r19_n: u32 = (((u20 != 0x0u32) as u32) as u8) as u32;
+    s.c = r11_c as u8;
+    s.a = r16_a as u8;
+    s.z = r17_z as u8;
+    s.n = r19_n as u8;
     s.pc = pc.wrapping_add(2);
     8
 }
@@ -849,6 +1034,7 @@ fn op_33<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // NOP zpx
 #[inline(always)]
 fn op_34<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u2: u32 = (b1 + (s.x as u32)) & 0xff;
     let u0: u32 = u2;
@@ -860,14 +1046,18 @@ fn op_34<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // AND zpx
 #[inline(always)]
 fn op_35<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u2: u32 = (b1 + (s.x as u32)) & 0xff;
     let u0: u32 = u2;
     let u3: u32 = bus.load(u0 as u16) as u32;
-    s.a = (((s.a as u32) & u3) & 0xff) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u4: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u4 != 0x0u32) as u32) as u8;
+    let r3_a: u32 = ((((s.a as u32) & u3) & 0xff) as u8) as u32;
+    let r4_z: u32 = (((r3_a == 0x0u32) as u32) as u8) as u32;
+    let u4: u32 = (r3_a & 0x80u32) & 0xff;
+    let r6_n: u32 = (((u4 != 0x0u32) as u32) as u8) as u32;
+    s.a = r3_a as u8;
+    s.z = r4_z as u8;
+    s.n = r6_n as u8;
     s.pc = pc.wrapping_add(2);
     4
 }
@@ -875,20 +1065,24 @@ fn op_35<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // ROL zpx
 #[inline(always)]
 fn op_36<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u2: u32 = (b1 + (s.x as u32)) & 0xff;
     let u0: u32 = u2;
     let u3: u32 = bus.load(u0 as u16) as u32;
     let u4: u32 = (s.c as u32);
     let u5: u32 = (u3 & 0x80u32) & 0xff;
-    s.c = ((u5 != 0x0u32) as u32) as u8;
+    let r5_c: u32 = (((u5 != 0x0u32) as u32) as u8) as u32;
     let u8: u32 = (u3 << 0x1u32) & 0xff;
     let u7: u32 = (u8 | u4) & 0xff;
     let u6: u32 = (u7 & 0xffu32) & 0xff;
     bus.store(u0 as u16, u6 as u8);
-    s.z = ((u6 == 0x0u32) as u32) as u8;
+    let r10_z: u32 = (((u6 == 0x0u32) as u32) as u8) as u32;
     let u9: u32 = (u6 & 0x80u32) & 0xff;
-    s.n = ((u9 != 0x0u32) as u32) as u8;
+    let r12_n: u32 = (((u9 != 0x0u32) as u32) as u8) as u32;
+    s.c = r5_c as u8;
+    s.z = r10_z as u8;
+    s.n = r12_n as u8;
     s.pc = pc.wrapping_add(2);
     6
 }
@@ -896,21 +1090,26 @@ fn op_36<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // RLA zpx
 #[inline(always)]
 fn op_37<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u2: u32 = (b1 + (s.x as u32)) & 0xff;
     let u0: u32 = u2;
     let u3: u32 = bus.load(u0 as u16) as u32;
     let u4: u32 = (s.c as u32);
     let u5: u32 = (u3 & 0x80u32) & 0xff;
-    s.c = ((u5 != 0x0u32) as u32) as u8;
+    let r5_c: u32 = (((u5 != 0x0u32) as u32) as u8) as u32;
     let u8: u32 = (u3 << 0x1u32) & 0xff;
     let u7: u32 = (u8 | u4) & 0xff;
     let u6: u32 = (u7 & 0xffu32) & 0xff;
     bus.store(u0 as u16, u6 as u8);
-    s.a = (((s.a as u32) & u6) & 0xff) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u9: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u9 != 0x0u32) as u32) as u8;
+    let r10_a: u32 = ((((s.a as u32) & u6) & 0xff) as u8) as u32;
+    let r11_z: u32 = (((r10_a == 0x0u32) as u32) as u8) as u32;
+    let u9: u32 = (r10_a & 0x80u32) & 0xff;
+    let r13_n: u32 = (((u9 != 0x0u32) as u32) as u8) as u32;
+    s.c = r5_c as u8;
+    s.a = r10_a as u8;
+    s.z = r11_z as u8;
+    s.n = r13_n as u8;
     s.pc = pc.wrapping_add(2);
     6
 }
@@ -918,7 +1117,9 @@ fn op_37<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // SEC impl
 #[inline(always)]
 fn op_38<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
-    s.c = (0x1u32) as u8;
+    bus.sync(s);
+    let r0_c: u32 = ((0x1u32) as u8) as u32;
+    s.c = r0_c as u8;
     s.pc = pc.wrapping_add(1);
     2
 }
@@ -926,16 +1127,20 @@ fn op_38<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // AND absy
 #[inline(always)]
 fn op_39<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
     let u2: u32 = (s.y as u32);
     let u0: u32 = (w + u2) & 0xffff;
     let u4: u32 = bus.load(u0 as u16) as u32;
-    s.a = (((s.a as u32) & u4) & 0xff) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u5: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u5 != 0x0u32) as u32) as u8;
+    let r3_a: u32 = ((((s.a as u32) & u4) & 0xff) as u8) as u32;
+    let r4_z: u32 = (((r3_a == 0x0u32) as u32) as u8) as u32;
+    let u5: u32 = (r3_a & 0x80u32) & 0xff;
+    let r6_n: u32 = (((u5 != 0x0u32) as u32) as u8) as u32;
+    s.a = r3_a as u8;
+    s.z = r4_z as u8;
+    s.n = r6_n as u8;
     s.pc = pc.wrapping_add(3);
     4 + cross(w, s.y)
 }
@@ -943,6 +1148,7 @@ fn op_39<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // NOP impl
 #[inline(always)]
 fn op_3a<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     s.pc = pc.wrapping_add(1);
     2
 }
@@ -950,6 +1156,7 @@ fn op_3a<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // RLA absy
 #[inline(always)]
 fn op_3b<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
@@ -958,15 +1165,19 @@ fn op_3b<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u4: u32 = bus.load(u0 as u16) as u32;
     let u5: u32 = (s.c as u32);
     let u6: u32 = (u4 & 0x80u32) & 0xff;
-    s.c = ((u6 != 0x0u32) as u32) as u8;
+    let r5_c: u32 = (((u6 != 0x0u32) as u32) as u8) as u32;
     let u9: u32 = (u4 << 0x1u32) & 0xff;
     let u8: u32 = (u9 | u5) & 0xff;
     let u7: u32 = (u8 & 0xffu32) & 0xff;
     bus.store(u0 as u16, u7 as u8);
-    s.a = (((s.a as u32) & u7) & 0xff) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u10: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u10 != 0x0u32) as u32) as u8;
+    let r10_a: u32 = ((((s.a as u32) & u7) & 0xff) as u8) as u32;
+    let r11_z: u32 = (((r10_a == 0x0u32) as u32) as u8) as u32;
+    let u10: u32 = (r10_a & 0x80u32) & 0xff;
+    let r13_n: u32 = (((u10 != 0x0u32) as u32) as u8) as u32;
+    s.c = r5_c as u8;
+    s.a = r10_a as u8;
+    s.z = r11_z as u8;
+    s.n = r13_n as u8;
     s.pc = pc.wrapping_add(3);
     7
 }
@@ -974,6 +1185,7 @@ fn op_3b<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // NOP absx
 #[inline(always)]
 fn op_3c<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
@@ -987,16 +1199,20 @@ fn op_3c<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // AND absx
 #[inline(always)]
 fn op_3d<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
     let u2: u32 = (s.x as u32);
     let u0: u32 = (w + u2) & 0xffff;
     let u4: u32 = bus.load(u0 as u16) as u32;
-    s.a = (((s.a as u32) & u4) & 0xff) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u5: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u5 != 0x0u32) as u32) as u8;
+    let r3_a: u32 = ((((s.a as u32) & u4) & 0xff) as u8) as u32;
+    let r4_z: u32 = (((r3_a == 0x0u32) as u32) as u8) as u32;
+    let u5: u32 = (r3_a & 0x80u32) & 0xff;
+    let r6_n: u32 = (((u5 != 0x0u32) as u32) as u8) as u32;
+    s.a = r3_a as u8;
+    s.z = r4_z as u8;
+    s.n = r6_n as u8;
     s.pc = pc.wrapping_add(3);
     4 + cross(w, s.x)
 }
@@ -1004,6 +1220,7 @@ fn op_3d<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // ROL absx
 #[inline(always)]
 fn op_3e<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
@@ -1012,14 +1229,17 @@ fn op_3e<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u4: u32 = bus.load(u0 as u16) as u32;
     let u5: u32 = (s.c as u32);
     let u6: u32 = (u4 & 0x80u32) & 0xff;
-    s.c = ((u6 != 0x0u32) as u32) as u8;
+    let r5_c: u32 = (((u6 != 0x0u32) as u32) as u8) as u32;
     let u9: u32 = (u4 << 0x1u32) & 0xff;
     let u8: u32 = (u9 | u5) & 0xff;
     let u7: u32 = (u8 & 0xffu32) & 0xff;
     bus.store(u0 as u16, u7 as u8);
-    s.z = ((u7 == 0x0u32) as u32) as u8;
+    let r10_z: u32 = (((u7 == 0x0u32) as u32) as u8) as u32;
     let u10: u32 = (u7 & 0x80u32) & 0xff;
-    s.n = ((u10 != 0x0u32) as u32) as u8;
+    let r12_n: u32 = (((u10 != 0x0u32) as u32) as u8) as u32;
+    s.c = r5_c as u8;
+    s.z = r10_z as u8;
+    s.n = r12_n as u8;
     s.pc = pc.wrapping_add(3);
     7
 }
@@ -1027,6 +1247,7 @@ fn op_3e<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // RLA absx
 #[inline(always)]
 fn op_3f<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
@@ -1035,15 +1256,19 @@ fn op_3f<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u4: u32 = bus.load(u0 as u16) as u32;
     let u5: u32 = (s.c as u32);
     let u6: u32 = (u4 & 0x80u32) & 0xff;
-    s.c = ((u6 != 0x0u32) as u32) as u8;
+    let r5_c: u32 = (((u6 != 0x0u32) as u32) as u8) as u32;
     let u9: u32 = (u4 << 0x1u32) & 0xff;
     let u8: u32 = (u9 | u5) & 0xff;
     let u7: u32 = (u8 & 0xffu32) & 0xff;
     bus.store(u0 as u16, u7 as u8);
-    s.a = (((s.a as u32) & u7) & 0xff) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u10: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u10 != 0x0u32) as u32) as u8;
+    let r10_a: u32 = ((((s.a as u32) & u7) & 0xff) as u8) as u32;
+    let r11_z: u32 = (((r10_a == 0x0u32) as u32) as u8) as u32;
+    let u10: u32 = (r10_a & 0x80u32) & 0xff;
+    let r13_n: u32 = (((u10 != 0x0u32) as u32) as u8) as u32;
+    s.c = r5_c as u8;
+    s.a = r10_a as u8;
+    s.z = r11_z as u8;
+    s.n = r13_n as u8;
     s.pc = pc.wrapping_add(3);
     7
 }
@@ -1051,13 +1276,17 @@ fn op_3f<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // RTI impl
 #[inline(always)]
 fn op_40<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
-    s.rti(bus);
+    bus.sync(s);
+    let p: u8;
+    (s.sp, s.pc, p) = s.rti(bus);
+    s.set_p(p);
     6
 }
 
 // EOR indx
 #[inline(always)]
 fn op_41<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = (b1 + (s.x as u32)) & 0xff;
     let u1: u32 = (u0 + 0x1u32) & 0xff;
@@ -1070,10 +1299,13 @@ fn op_41<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u14: u32 = u2;
     let u8: u32 = (u10 | u14) & 0xffff;
     let u16: u32 = bus.load(u8 as u16) as u32;
-    s.a = (((s.a as u32) ^ u16) & 0xff) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u17: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u17 != 0x0u32) as u32) as u8;
+    let r11_a: u32 = ((((s.a as u32) ^ u16) & 0xff) as u8) as u32;
+    let r12_z: u32 = (((r11_a == 0x0u32) as u32) as u8) as u32;
+    let u17: u32 = (r11_a & 0x80u32) & 0xff;
+    let r14_n: u32 = (((u17 != 0x0u32) as u32) as u8) as u32;
+    s.a = r11_a as u8;
+    s.z = r12_z as u8;
+    s.n = r14_n as u8;
     s.pc = pc.wrapping_add(2);
     6
 }
@@ -1081,6 +1313,7 @@ fn op_41<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // JAM impl
 #[inline(always)]
 fn op_42<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     s.jam(pc);
     2
 }
@@ -1088,6 +1321,7 @@ fn op_42<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // SRE indx
 #[inline(always)]
 fn op_43<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = (b1 + (s.x as u32)) & 0xff;
     let u1: u32 = (u0 + 0x1u32) & 0xff;
@@ -1101,13 +1335,17 @@ fn op_43<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u8: u32 = (u10 | u14) & 0xffff;
     let u16: u32 = bus.load(u8 as u16) as u32;
     let u17: u32 = (u16 & 0x1u32) & 0xff;
-    s.c = (u17) as u8;
+    let r12_c: u32 = ((u17) as u8) as u32;
     let u18: u32 = u16 >> 0x1u32;
     bus.store(u8 as u16, u18 as u8);
-    s.a = (((s.a as u32) ^ u18) & 0xff) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u19: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u19 != 0x0u32) as u32) as u8;
+    let r15_a: u32 = ((((s.a as u32) ^ u18) & 0xff) as u8) as u32;
+    let r16_z: u32 = (((r15_a == 0x0u32) as u32) as u8) as u32;
+    let u19: u32 = (r15_a & 0x80u32) & 0xff;
+    let r18_n: u32 = (((u19 != 0x0u32) as u32) as u8) as u32;
+    s.c = r12_c as u8;
+    s.a = r15_a as u8;
+    s.z = r16_z as u8;
+    s.n = r18_n as u8;
     s.pc = pc.wrapping_add(2);
     8
 }
@@ -1115,6 +1353,7 @@ fn op_43<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // NOP zp
 #[inline(always)]
 fn op_44<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = bus.load(b1 as u16) as u32;
     s.pc = pc.wrapping_add(2);
@@ -1124,12 +1363,16 @@ fn op_44<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // EOR zp
 #[inline(always)]
 fn op_45<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = bus.load(b1 as u16) as u32;
-    s.a = (((s.a as u32) ^ u0) & 0xff) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u1: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u1 != 0x0u32) as u32) as u8;
+    let r1_a: u32 = ((((s.a as u32) ^ u0) & 0xff) as u8) as u32;
+    let r2_z: u32 = (((r1_a == 0x0u32) as u32) as u8) as u32;
+    let u1: u32 = (r1_a & 0x80u32) & 0xff;
+    let r4_n: u32 = (((u1 != 0x0u32) as u32) as u8) as u32;
+    s.a = r1_a as u8;
+    s.z = r2_z as u8;
+    s.n = r4_n as u8;
     s.pc = pc.wrapping_add(2);
     3
 }
@@ -1137,15 +1380,19 @@ fn op_45<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // LSR zp
 #[inline(always)]
 fn op_46<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = bus.load(b1 as u16) as u32;
     let u1: u32 = (u0 & 0x1u32) & 0xff;
-    s.c = (u1) as u8;
+    let r2_c: u32 = ((u1) as u8) as u32;
     let u2: u32 = u0 >> 0x1u32;
     bus.store(b1 as u16, u2 as u8);
-    s.z = ((u2 == 0x0u32) as u32) as u8;
+    let r5_z: u32 = (((u2 == 0x0u32) as u32) as u8) as u32;
     let u3: u32 = (u2 & 0x80u32) & 0xff;
-    s.n = ((u3 != 0x0u32) as u32) as u8;
+    let r7_n: u32 = (((u3 != 0x0u32) as u32) as u8) as u32;
+    s.c = r2_c as u8;
+    s.z = r5_z as u8;
+    s.n = r7_n as u8;
     s.pc = pc.wrapping_add(2);
     5
 }
@@ -1153,16 +1400,21 @@ fn op_46<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // SRE zp
 #[inline(always)]
 fn op_47<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = bus.load(b1 as u16) as u32;
     let u1: u32 = (u0 & 0x1u32) & 0xff;
-    s.c = (u1) as u8;
+    let r2_c: u32 = ((u1) as u8) as u32;
     let u2: u32 = u0 >> 0x1u32;
     bus.store(b1 as u16, u2 as u8);
-    s.a = (((s.a as u32) ^ u2) & 0xff) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u3: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u3 != 0x0u32) as u32) as u8;
+    let r5_a: u32 = ((((s.a as u32) ^ u2) & 0xff) as u8) as u32;
+    let r6_z: u32 = (((r5_a == 0x0u32) as u32) as u8) as u32;
+    let u3: u32 = (r5_a & 0x80u32) & 0xff;
+    let r8_n: u32 = (((u3 != 0x0u32) as u32) as u8) as u32;
+    s.c = r2_c as u8;
+    s.a = r5_a as u8;
+    s.z = r6_z as u8;
+    s.n = r8_n as u8;
     s.pc = pc.wrapping_add(2);
     5
 }
@@ -1170,10 +1422,12 @@ fn op_47<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // PHA impl
 #[inline(always)]
 fn op_48<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let u2: u32 = (s.sp as u32);
     let u0: u32 = (u2 | 0x100u32) & 0xffff;
     bus.stack_write(u0 as u16, (s.a as u32) as u8);
-    s.sp = ((s.sp as u32).wrapping_sub(0x1u32) & 0xff) as u8;
+    let r3_sp: u32 = (((s.sp as u32).wrapping_sub(0x1u32) & 0xff) as u8) as u32;
+    s.sp = r3_sp as u8;
     s.pc = pc.wrapping_add(1);
     3
 }
@@ -1181,11 +1435,15 @@ fn op_48<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // EOR imm
 #[inline(always)]
 fn op_49<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
-    s.a = (((s.a as u32) ^ b1) & 0xff) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u0: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u0 != 0x0u32) as u32) as u8;
+    let r0_a: u32 = ((((s.a as u32) ^ b1) & 0xff) as u8) as u32;
+    let r1_z: u32 = (((r0_a == 0x0u32) as u32) as u8) as u32;
+    let u0: u32 = (r0_a & 0x80u32) & 0xff;
+    let r3_n: u32 = (((u0 != 0x0u32) as u32) as u8) as u32;
+    s.a = r0_a as u8;
+    s.z = r1_z as u8;
+    s.n = r3_n as u8;
     s.pc = pc.wrapping_add(2);
     2
 }
@@ -1193,13 +1451,18 @@ fn op_49<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // LSR acc
 #[inline(always)]
 fn op_4a<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let u0: u32 = ((s.a as u32) & 0x1u32) & 0xff;
-    s.c = (u0) as u8;
+    let r1_c: u32 = ((u0) as u8) as u32;
     let u1: u32 = (s.a as u32) >> 0x1u32;
-    s.a = (u1) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u2: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u2 != 0x0u32) as u32) as u8;
+    let r3_a: u32 = ((u1) as u8) as u32;
+    let r4_z: u32 = (((r3_a == 0x0u32) as u32) as u8) as u32;
+    let u2: u32 = (r3_a & 0x80u32) & 0xff;
+    let r6_n: u32 = (((u2 != 0x0u32) as u32) as u8) as u32;
+    s.c = r1_c as u8;
+    s.a = r3_a as u8;
+    s.z = r4_z as u8;
+    s.n = r6_n as u8;
     s.pc = pc.wrapping_add(1);
     2
 }
@@ -1207,14 +1470,19 @@ fn op_4a<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // ALR imm
 #[inline(always)]
 fn op_4b<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
-    s.a = (((s.a as u32) & b1) & 0xff) as u8;
-    let u0: u32 = ((s.a as u32) & 0x1u32) & 0xff;
-    s.c = (u0) as u8;
-    s.a = ((s.a as u32) >> 0x1u32) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u1: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u1 != 0x0u32) as u32) as u8;
+    let r0_a: u32 = ((((s.a as u32) & b1) & 0xff) as u8) as u32;
+    let u0: u32 = (r0_a & 0x1u32) & 0xff;
+    let r2_c: u32 = ((u0) as u8) as u32;
+    let r3_a: u32 = ((r0_a >> 0x1u32) as u8) as u32;
+    let r4_z: u32 = (((r3_a == 0x0u32) as u32) as u8) as u32;
+    let u1: u32 = (r3_a & 0x80u32) & 0xff;
+    let r6_n: u32 = (((u1 != 0x0u32) as u32) as u8) as u32;
+    s.a = r3_a as u8;
+    s.c = r2_c as u8;
+    s.z = r4_z as u8;
+    s.n = r6_n as u8;
     s.pc = pc.wrapping_add(2);
     2
 }
@@ -1222,6 +1490,7 @@ fn op_4b<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // JMP abs
 #[inline(always)]
 fn op_4c<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
@@ -1232,14 +1501,18 @@ fn op_4c<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // EOR abs
 #[inline(always)]
 fn op_4d<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
     let u0: u32 = bus.load(w as u16) as u32;
-    s.a = (((s.a as u32) ^ u0) & 0xff) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u1: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u1 != 0x0u32) as u32) as u8;
+    let r1_a: u32 = ((((s.a as u32) ^ u0) & 0xff) as u8) as u32;
+    let r2_z: u32 = (((r1_a == 0x0u32) as u32) as u8) as u32;
+    let u1: u32 = (r1_a & 0x80u32) & 0xff;
+    let r4_n: u32 = (((u1 != 0x0u32) as u32) as u8) as u32;
+    s.a = r1_a as u8;
+    s.z = r2_z as u8;
+    s.n = r4_n as u8;
     s.pc = pc.wrapping_add(3);
     4
 }
@@ -1247,17 +1520,21 @@ fn op_4d<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // LSR abs
 #[inline(always)]
 fn op_4e<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
     let u0: u32 = bus.load(w as u16) as u32;
     let u1: u32 = (u0 & 0x1u32) & 0xff;
-    s.c = (u1) as u8;
+    let r2_c: u32 = ((u1) as u8) as u32;
     let u2: u32 = u0 >> 0x1u32;
     bus.store(w as u16, u2 as u8);
-    s.z = ((u2 == 0x0u32) as u32) as u8;
+    let r5_z: u32 = (((u2 == 0x0u32) as u32) as u8) as u32;
     let u3: u32 = (u2 & 0x80u32) & 0xff;
-    s.n = ((u3 != 0x0u32) as u32) as u8;
+    let r7_n: u32 = (((u3 != 0x0u32) as u32) as u8) as u32;
+    s.c = r2_c as u8;
+    s.z = r5_z as u8;
+    s.n = r7_n as u8;
     s.pc = pc.wrapping_add(3);
     6
 }
@@ -1265,18 +1542,23 @@ fn op_4e<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // SRE abs
 #[inline(always)]
 fn op_4f<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
     let u0: u32 = bus.load(w as u16) as u32;
     let u1: u32 = (u0 & 0x1u32) & 0xff;
-    s.c = (u1) as u8;
+    let r2_c: u32 = ((u1) as u8) as u32;
     let u2: u32 = u0 >> 0x1u32;
     bus.store(w as u16, u2 as u8);
-    s.a = (((s.a as u32) ^ u2) & 0xff) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u3: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u3 != 0x0u32) as u32) as u8;
+    let r5_a: u32 = ((((s.a as u32) ^ u2) & 0xff) as u8) as u32;
+    let r6_z: u32 = (((r5_a == 0x0u32) as u32) as u8) as u32;
+    let u3: u32 = (r5_a & 0x80u32) & 0xff;
+    let r8_n: u32 = (((u3 != 0x0u32) as u32) as u8) as u32;
+    s.c = r2_c as u8;
+    s.a = r5_a as u8;
+    s.z = r6_z as u8;
+    s.n = r8_n as u8;
     s.pc = pc.wrapping_add(3);
     6
 }
@@ -1284,6 +1566,7 @@ fn op_4f<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // BVC rel
 #[inline(always)]
 fn op_50<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     2 + s.branch(s.v == 0, pc, b1)
 }
@@ -1291,6 +1574,7 @@ fn op_50<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // EOR indy
 #[inline(always)]
 fn op_51<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = bus.load(b1 as u16) as u32;
     let u1: u32 = bus.load(((b1 + 1) & 0xff) as u16) as u32;
@@ -1301,10 +1585,13 @@ fn op_51<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u12: u32 = (s.y as u32);
     let u10: u32 = (u2 + u12) & 0xffff;
     let u14: u32 = bus.load(u10 as u16) as u32;
-    s.a = (((s.a as u32) ^ u14) & 0xff) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u15: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u15 != 0x0u32) as u32) as u8;
+    let r9_a: u32 = ((((s.a as u32) ^ u14) & 0xff) as u8) as u32;
+    let r10_z: u32 = (((r9_a == 0x0u32) as u32) as u8) as u32;
+    let u15: u32 = (r9_a & 0x80u32) & 0xff;
+    let r12_n: u32 = (((u15 != 0x0u32) as u32) as u8) as u32;
+    s.a = r9_a as u8;
+    s.z = r10_z as u8;
+    s.n = r12_n as u8;
     s.pc = pc.wrapping_add(2);
     5 + cross(u2, s.y)
 }
@@ -1312,6 +1599,7 @@ fn op_51<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // JAM impl
 #[inline(always)]
 fn op_52<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     s.jam(pc);
     2
 }
@@ -1319,6 +1607,7 @@ fn op_52<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // SRE indy
 #[inline(always)]
 fn op_53<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = bus.load(b1 as u16) as u32;
     let u1: u32 = bus.load(((b1 + 1) & 0xff) as u16) as u32;
@@ -1330,13 +1619,17 @@ fn op_53<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u10: u32 = (u2 + u12) & 0xffff;
     let u14: u32 = bus.load(u10 as u16) as u32;
     let u15: u32 = (u14 & 0x1u32) & 0xff;
-    s.c = (u15) as u8;
+    let r10_c: u32 = ((u15) as u8) as u32;
     let u16: u32 = u14 >> 0x1u32;
     bus.store(u10 as u16, u16 as u8);
-    s.a = (((s.a as u32) ^ u16) & 0xff) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u17: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u17 != 0x0u32) as u32) as u8;
+    let r13_a: u32 = ((((s.a as u32) ^ u16) & 0xff) as u8) as u32;
+    let r14_z: u32 = (((r13_a == 0x0u32) as u32) as u8) as u32;
+    let u17: u32 = (r13_a & 0x80u32) & 0xff;
+    let r16_n: u32 = (((u17 != 0x0u32) as u32) as u8) as u32;
+    s.c = r10_c as u8;
+    s.a = r13_a as u8;
+    s.z = r14_z as u8;
+    s.n = r16_n as u8;
     s.pc = pc.wrapping_add(2);
     8
 }
@@ -1344,6 +1637,7 @@ fn op_53<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // NOP zpx
 #[inline(always)]
 fn op_54<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u2: u32 = (b1 + (s.x as u32)) & 0xff;
     let u0: u32 = u2;
@@ -1355,14 +1649,18 @@ fn op_54<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // EOR zpx
 #[inline(always)]
 fn op_55<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u2: u32 = (b1 + (s.x as u32)) & 0xff;
     let u0: u32 = u2;
     let u3: u32 = bus.load(u0 as u16) as u32;
-    s.a = (((s.a as u32) ^ u3) & 0xff) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u4: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u4 != 0x0u32) as u32) as u8;
+    let r3_a: u32 = ((((s.a as u32) ^ u3) & 0xff) as u8) as u32;
+    let r4_z: u32 = (((r3_a == 0x0u32) as u32) as u8) as u32;
+    let u4: u32 = (r3_a & 0x80u32) & 0xff;
+    let r6_n: u32 = (((u4 != 0x0u32) as u32) as u8) as u32;
+    s.a = r3_a as u8;
+    s.z = r4_z as u8;
+    s.n = r6_n as u8;
     s.pc = pc.wrapping_add(2);
     4
 }
@@ -1370,17 +1668,21 @@ fn op_55<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // LSR zpx
 #[inline(always)]
 fn op_56<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u2: u32 = (b1 + (s.x as u32)) & 0xff;
     let u0: u32 = u2;
     let u3: u32 = bus.load(u0 as u16) as u32;
     let u4: u32 = (u3 & 0x1u32) & 0xff;
-    s.c = (u4) as u8;
+    let r4_c: u32 = ((u4) as u8) as u32;
     let u5: u32 = u3 >> 0x1u32;
     bus.store(u0 as u16, u5 as u8);
-    s.z = ((u5 == 0x0u32) as u32) as u8;
+    let r7_z: u32 = (((u5 == 0x0u32) as u32) as u8) as u32;
     let u6: u32 = (u5 & 0x80u32) & 0xff;
-    s.n = ((u6 != 0x0u32) as u32) as u8;
+    let r9_n: u32 = (((u6 != 0x0u32) as u32) as u8) as u32;
+    s.c = r4_c as u8;
+    s.z = r7_z as u8;
+    s.n = r9_n as u8;
     s.pc = pc.wrapping_add(2);
     6
 }
@@ -1388,18 +1690,23 @@ fn op_56<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // SRE zpx
 #[inline(always)]
 fn op_57<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u2: u32 = (b1 + (s.x as u32)) & 0xff;
     let u0: u32 = u2;
     let u3: u32 = bus.load(u0 as u16) as u32;
     let u4: u32 = (u3 & 0x1u32) & 0xff;
-    s.c = (u4) as u8;
+    let r4_c: u32 = ((u4) as u8) as u32;
     let u5: u32 = u3 >> 0x1u32;
     bus.store(u0 as u16, u5 as u8);
-    s.a = (((s.a as u32) ^ u5) & 0xff) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u6: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u6 != 0x0u32) as u32) as u8;
+    let r7_a: u32 = ((((s.a as u32) ^ u5) & 0xff) as u8) as u32;
+    let r8_z: u32 = (((r7_a == 0x0u32) as u32) as u8) as u32;
+    let u6: u32 = (r7_a & 0x80u32) & 0xff;
+    let r10_n: u32 = (((u6 != 0x0u32) as u32) as u8) as u32;
+    s.c = r4_c as u8;
+    s.a = r7_a as u8;
+    s.z = r8_z as u8;
+    s.n = r10_n as u8;
     s.pc = pc.wrapping_add(2);
     6
 }
@@ -1407,7 +1714,9 @@ fn op_57<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // CLI impl
 #[inline(always)]
 fn op_58<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
-    s.i = (0x0u32) as u8;
+    bus.sync(s);
+    let r0_i: u32 = ((0x0u32) as u8) as u32;
+    s.i = r0_i as u8;
     s.pc = pc.wrapping_add(1);
     2
 }
@@ -1415,16 +1724,20 @@ fn op_58<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // EOR absy
 #[inline(always)]
 fn op_59<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
     let u2: u32 = (s.y as u32);
     let u0: u32 = (w + u2) & 0xffff;
     let u4: u32 = bus.load(u0 as u16) as u32;
-    s.a = (((s.a as u32) ^ u4) & 0xff) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u5: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u5 != 0x0u32) as u32) as u8;
+    let r3_a: u32 = ((((s.a as u32) ^ u4) & 0xff) as u8) as u32;
+    let r4_z: u32 = (((r3_a == 0x0u32) as u32) as u8) as u32;
+    let u5: u32 = (r3_a & 0x80u32) & 0xff;
+    let r6_n: u32 = (((u5 != 0x0u32) as u32) as u8) as u32;
+    s.a = r3_a as u8;
+    s.z = r4_z as u8;
+    s.n = r6_n as u8;
     s.pc = pc.wrapping_add(3);
     4 + cross(w, s.y)
 }
@@ -1432,6 +1745,7 @@ fn op_59<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // NOP impl
 #[inline(always)]
 fn op_5a<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     s.pc = pc.wrapping_add(1);
     2
 }
@@ -1439,6 +1753,7 @@ fn op_5a<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // SRE absy
 #[inline(always)]
 fn op_5b<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
@@ -1446,13 +1761,17 @@ fn op_5b<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u0: u32 = (w + u2) & 0xffff;
     let u4: u32 = bus.load(u0 as u16) as u32;
     let u5: u32 = (u4 & 0x1u32) & 0xff;
-    s.c = (u5) as u8;
+    let r4_c: u32 = ((u5) as u8) as u32;
     let u6: u32 = u4 >> 0x1u32;
     bus.store(u0 as u16, u6 as u8);
-    s.a = (((s.a as u32) ^ u6) & 0xff) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u7: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u7 != 0x0u32) as u32) as u8;
+    let r7_a: u32 = ((((s.a as u32) ^ u6) & 0xff) as u8) as u32;
+    let r8_z: u32 = (((r7_a == 0x0u32) as u32) as u8) as u32;
+    let u7: u32 = (r7_a & 0x80u32) & 0xff;
+    let r10_n: u32 = (((u7 != 0x0u32) as u32) as u8) as u32;
+    s.c = r4_c as u8;
+    s.a = r7_a as u8;
+    s.z = r8_z as u8;
+    s.n = r10_n as u8;
     s.pc = pc.wrapping_add(3);
     7
 }
@@ -1460,6 +1779,7 @@ fn op_5b<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // NOP absx
 #[inline(always)]
 fn op_5c<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
@@ -1473,16 +1793,20 @@ fn op_5c<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // EOR absx
 #[inline(always)]
 fn op_5d<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
     let u2: u32 = (s.x as u32);
     let u0: u32 = (w + u2) & 0xffff;
     let u4: u32 = bus.load(u0 as u16) as u32;
-    s.a = (((s.a as u32) ^ u4) & 0xff) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u5: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u5 != 0x0u32) as u32) as u8;
+    let r3_a: u32 = ((((s.a as u32) ^ u4) & 0xff) as u8) as u32;
+    let r4_z: u32 = (((r3_a == 0x0u32) as u32) as u8) as u32;
+    let u5: u32 = (r3_a & 0x80u32) & 0xff;
+    let r6_n: u32 = (((u5 != 0x0u32) as u32) as u8) as u32;
+    s.a = r3_a as u8;
+    s.z = r4_z as u8;
+    s.n = r6_n as u8;
     s.pc = pc.wrapping_add(3);
     4 + cross(w, s.x)
 }
@@ -1490,6 +1814,7 @@ fn op_5d<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // LSR absx
 #[inline(always)]
 fn op_5e<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
@@ -1497,12 +1822,15 @@ fn op_5e<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u0: u32 = (w + u2) & 0xffff;
     let u4: u32 = bus.load(u0 as u16) as u32;
     let u5: u32 = (u4 & 0x1u32) & 0xff;
-    s.c = (u5) as u8;
+    let r4_c: u32 = ((u5) as u8) as u32;
     let u6: u32 = u4 >> 0x1u32;
     bus.store(u0 as u16, u6 as u8);
-    s.z = ((u6 == 0x0u32) as u32) as u8;
+    let r7_z: u32 = (((u6 == 0x0u32) as u32) as u8) as u32;
     let u7: u32 = (u6 & 0x80u32) & 0xff;
-    s.n = ((u7 != 0x0u32) as u32) as u8;
+    let r9_n: u32 = (((u7 != 0x0u32) as u32) as u8) as u32;
+    s.c = r4_c as u8;
+    s.z = r7_z as u8;
+    s.n = r9_n as u8;
     s.pc = pc.wrapping_add(3);
     7
 }
@@ -1510,6 +1838,7 @@ fn op_5e<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // SRE absx
 #[inline(always)]
 fn op_5f<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
@@ -1517,13 +1846,17 @@ fn op_5f<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u0: u32 = (w + u2) & 0xffff;
     let u4: u32 = bus.load(u0 as u16) as u32;
     let u5: u32 = (u4 & 0x1u32) & 0xff;
-    s.c = (u5) as u8;
+    let r4_c: u32 = ((u5) as u8) as u32;
     let u6: u32 = u4 >> 0x1u32;
     bus.store(u0 as u16, u6 as u8);
-    s.a = (((s.a as u32) ^ u6) & 0xff) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u7: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u7 != 0x0u32) as u32) as u8;
+    let r7_a: u32 = ((((s.a as u32) ^ u6) & 0xff) as u8) as u32;
+    let r8_z: u32 = (((r7_a == 0x0u32) as u32) as u8) as u32;
+    let u7: u32 = (r7_a & 0x80u32) & 0xff;
+    let r10_n: u32 = (((u7 != 0x0u32) as u32) as u8) as u32;
+    s.c = r4_c as u8;
+    s.a = r7_a as u8;
+    s.z = r8_z as u8;
+    s.n = r10_n as u8;
     s.pc = pc.wrapping_add(3);
     7
 }
@@ -1531,13 +1864,15 @@ fn op_5f<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // RTS impl
 #[inline(always)]
 fn op_60<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
-    s.rts(bus);
+    bus.sync(s);
+    (s.sp, s.pc) = s.rts(bus);
     6
 }
 
 // ADC indx
 #[inline(always)]
 fn op_61<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = (b1 + (s.x as u32)) & 0xff;
     let u1: u32 = (u0 + 0x1u32) & 0xff;
@@ -1559,12 +1894,17 @@ fn op_61<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u23: u32 = (u21 ^ 0xffu32) & 0xff;
     let u25: u32 = (u23 & u22) & 0xff;
     let u24: u32 = (u25 & 0x80u32) & 0xff;
-    s.v = ((u24 != 0x0u32) as u32) as u8;
-    s.c = ((u18 | u20) & 0xff) as u8;
-    s.a = (u19) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u26: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u26 != 0x0u32) as u32) as u8;
+    let r20_v: u32 = (((u24 != 0x0u32) as u32) as u8) as u32;
+    let r21_c: u32 = (((u18 | u20) & 0xff) as u8) as u32;
+    let r22_a: u32 = ((u19) as u8) as u32;
+    let r23_z: u32 = (((r22_a == 0x0u32) as u32) as u8) as u32;
+    let u26: u32 = (r22_a & 0x80u32) & 0xff;
+    let r25_n: u32 = (((u26 != 0x0u32) as u32) as u8) as u32;
+    s.v = r20_v as u8;
+    s.c = r21_c as u8;
+    s.a = r22_a as u8;
+    s.z = r23_z as u8;
+    s.n = r25_n as u8;
     s.pc = pc.wrapping_add(2);
     6
 }
@@ -1572,6 +1912,7 @@ fn op_61<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // JAM impl
 #[inline(always)]
 fn op_62<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     s.jam(pc);
     2
 }
@@ -1579,6 +1920,7 @@ fn op_62<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // RRA indx
 #[inline(always)]
 fn op_63<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = (b1 + (s.x as u32)) & 0xff;
     let u1: u32 = (u0 + 0x1u32) & 0xff;
@@ -1593,26 +1935,31 @@ fn op_63<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u16: u32 = bus.load(u8 as u16) as u32;
     let u17: u32 = (s.c as u32);
     let u18: u32 = (u16 & 0x1u32) & 0xff;
-    s.c = (u18) as u8;
+    let r13_c: u32 = ((u18) as u8) as u32;
     let u20: u32 = u16 >> 0x1u32;
     let u21: u32 = (u17 << 0x7u32) & 0xff;
     let u19: u32 = (u20 | u21) & 0xff;
     bus.store(u8 as u16, u19 as u8);
     let u22: u32 = ((s.a as u32) + u19) & 0xff;
     let u23: u32 = ((s.a as u32) + u19 > 0xff) as u32;
-    let u24: u32 = (u22 + (s.c as u32)) & 0xff;
-    let u25: u32 = (u22 + (s.c as u32) > 0xff) as u32;
+    let u24: u32 = (u22 + r13_c) & 0xff;
+    let u25: u32 = (u22 + r13_c > 0xff) as u32;
     let u26: u32 = ((s.a as u32) ^ u19) & 0xff;
     let u27: u32 = ((s.a as u32) ^ u24) & 0xff;
     let u28: u32 = (u26 ^ 0xffu32) & 0xff;
     let u30: u32 = (u28 & u27) & 0xff;
     let u29: u32 = (u30 & 0x80u32) & 0xff;
-    s.v = ((u29 != 0x0u32) as u32) as u8;
-    s.c = ((u23 | u25) & 0xff) as u8;
-    s.a = (u24) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u31: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u31 != 0x0u32) as u32) as u8;
+    let r27_v: u32 = (((u29 != 0x0u32) as u32) as u8) as u32;
+    let r28_c: u32 = (((u23 | u25) & 0xff) as u8) as u32;
+    let r29_a: u32 = ((u24) as u8) as u32;
+    let r30_z: u32 = (((r29_a == 0x0u32) as u32) as u8) as u32;
+    let u31: u32 = (r29_a & 0x80u32) & 0xff;
+    let r32_n: u32 = (((u31 != 0x0u32) as u32) as u8) as u32;
+    s.c = r28_c as u8;
+    s.v = r27_v as u8;
+    s.a = r29_a as u8;
+    s.z = r30_z as u8;
+    s.n = r32_n as u8;
     s.pc = pc.wrapping_add(2);
     8
 }
@@ -1620,6 +1967,7 @@ fn op_63<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // NOP zp
 #[inline(always)]
 fn op_64<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = bus.load(b1 as u16) as u32;
     s.pc = pc.wrapping_add(2);
@@ -1629,6 +1977,7 @@ fn op_64<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // ADC zp
 #[inline(always)]
 fn op_65<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = bus.load(b1 as u16) as u32;
     let u1: u32 = ((s.a as u32) + u0) & 0xff;
@@ -1640,12 +1989,17 @@ fn op_65<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u7: u32 = (u5 ^ 0xffu32) & 0xff;
     let u9: u32 = (u7 & u6) & 0xff;
     let u8: u32 = (u9 & 0x80u32) & 0xff;
-    s.v = ((u8 != 0x0u32) as u32) as u8;
-    s.c = ((u2 | u4) & 0xff) as u8;
-    s.a = (u3) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u10: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u10 != 0x0u32) as u32) as u8;
+    let r10_v: u32 = (((u8 != 0x0u32) as u32) as u8) as u32;
+    let r11_c: u32 = (((u2 | u4) & 0xff) as u8) as u32;
+    let r12_a: u32 = ((u3) as u8) as u32;
+    let r13_z: u32 = (((r12_a == 0x0u32) as u32) as u8) as u32;
+    let u10: u32 = (r12_a & 0x80u32) & 0xff;
+    let r15_n: u32 = (((u10 != 0x0u32) as u32) as u8) as u32;
+    s.v = r10_v as u8;
+    s.c = r11_c as u8;
+    s.a = r12_a as u8;
+    s.z = r13_z as u8;
+    s.n = r15_n as u8;
     s.pc = pc.wrapping_add(2);
     3
 }
@@ -1653,18 +2007,22 @@ fn op_65<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // ROR zp
 #[inline(always)]
 fn op_66<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = bus.load(b1 as u16) as u32;
     let u1: u32 = (s.c as u32);
     let u2: u32 = (u0 & 0x1u32) & 0xff;
-    s.c = (u2) as u8;
+    let r3_c: u32 = ((u2) as u8) as u32;
     let u4: u32 = u0 >> 0x1u32;
     let u5: u32 = (u1 << 0x7u32) & 0xff;
     let u3: u32 = (u4 | u5) & 0xff;
     bus.store(b1 as u16, u3 as u8);
-    s.z = ((u3 == 0x0u32) as u32) as u8;
+    let r8_z: u32 = (((u3 == 0x0u32) as u32) as u8) as u32;
     let u6: u32 = (u3 & 0x80u32) & 0xff;
-    s.n = ((u6 != 0x0u32) as u32) as u8;
+    let r10_n: u32 = (((u6 != 0x0u32) as u32) as u8) as u32;
+    s.c = r3_c as u8;
+    s.z = r8_z as u8;
+    s.n = r10_n as u8;
     s.pc = pc.wrapping_add(2);
     5
 }
@@ -1672,30 +2030,36 @@ fn op_66<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // RRA zp
 #[inline(always)]
 fn op_67<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = bus.load(b1 as u16) as u32;
     let u1: u32 = (s.c as u32);
     let u2: u32 = (u0 & 0x1u32) & 0xff;
-    s.c = (u2) as u8;
+    let r3_c: u32 = ((u2) as u8) as u32;
     let u4: u32 = u0 >> 0x1u32;
     let u5: u32 = (u1 << 0x7u32) & 0xff;
     let u3: u32 = (u4 | u5) & 0xff;
     bus.store(b1 as u16, u3 as u8);
     let u6: u32 = ((s.a as u32) + u3) & 0xff;
     let u7: u32 = ((s.a as u32) + u3 > 0xff) as u32;
-    let u8: u32 = (u6 + (s.c as u32)) & 0xff;
-    let u9: u32 = (u6 + (s.c as u32) > 0xff) as u32;
+    let u8: u32 = (u6 + r3_c) & 0xff;
+    let u9: u32 = (u6 + r3_c > 0xff) as u32;
     let u10: u32 = ((s.a as u32) ^ u3) & 0xff;
     let u11: u32 = ((s.a as u32) ^ u8) & 0xff;
     let u12: u32 = (u10 ^ 0xffu32) & 0xff;
     let u14: u32 = (u12 & u11) & 0xff;
     let u13: u32 = (u14 & 0x80u32) & 0xff;
-    s.v = ((u13 != 0x0u32) as u32) as u8;
-    s.c = ((u7 | u9) & 0xff) as u8;
-    s.a = (u8) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u15: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u15 != 0x0u32) as u32) as u8;
+    let r17_v: u32 = (((u13 != 0x0u32) as u32) as u8) as u32;
+    let r18_c: u32 = (((u7 | u9) & 0xff) as u8) as u32;
+    let r19_a: u32 = ((u8) as u8) as u32;
+    let r20_z: u32 = (((r19_a == 0x0u32) as u32) as u8) as u32;
+    let u15: u32 = (r19_a & 0x80u32) & 0xff;
+    let r22_n: u32 = (((u15 != 0x0u32) as u32) as u8) as u32;
+    s.c = r18_c as u8;
+    s.v = r17_v as u8;
+    s.a = r19_a as u8;
+    s.z = r20_z as u8;
+    s.n = r22_n as u8;
     s.pc = pc.wrapping_add(2);
     5
 }
@@ -1703,14 +2067,19 @@ fn op_67<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // PLA impl
 #[inline(always)]
 fn op_68<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
-    s.sp = (((s.sp as u32) + 0x1u32) & 0xff) as u8;
-    let u2: u32 = (s.sp as u32);
+    bus.sync(s);
+    let r0_sp: u32 = ((((s.sp as u32) + 0x1u32) & 0xff) as u8) as u32;
+    let u2: u32 = r0_sp;
     let u0: u32 = (u2 | 0x100u32) & 0xffff;
     let u4: u32 = bus.stack_read(u0 as u16) as u32;
-    s.a = (u4) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u5: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u5 != 0x0u32) as u32) as u8;
+    let r4_a: u32 = ((u4) as u8) as u32;
+    let r5_z: u32 = (((r4_a == 0x0u32) as u32) as u8) as u32;
+    let u5: u32 = (r4_a & 0x80u32) & 0xff;
+    let r7_n: u32 = (((u5 != 0x0u32) as u32) as u8) as u32;
+    s.sp = r0_sp as u8;
+    s.a = r4_a as u8;
+    s.z = r5_z as u8;
+    s.n = r7_n as u8;
     s.pc = pc.wrapping_add(1);
     4
 }
@@ -1718,6 +2087,7 @@ fn op_68<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // ADC imm
 #[inline(always)]
 fn op_69<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = ((s.a as u32) + b1) & 0xff;
     let u1: u32 = ((s.a as u32) + b1 > 0xff) as u32;
@@ -1728,12 +2098,17 @@ fn op_69<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u6: u32 = (u4 ^ 0xffu32) & 0xff;
     let u8: u32 = (u6 & u5) & 0xff;
     let u7: u32 = (u8 & 0x80u32) & 0xff;
-    s.v = ((u7 != 0x0u32) as u32) as u8;
-    s.c = ((u1 | u3) & 0xff) as u8;
-    s.a = (u2) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u9: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u9 != 0x0u32) as u32) as u8;
+    let r9_v: u32 = (((u7 != 0x0u32) as u32) as u8) as u32;
+    let r10_c: u32 = (((u1 | u3) & 0xff) as u8) as u32;
+    let r11_a: u32 = ((u2) as u8) as u32;
+    let r12_z: u32 = (((r11_a == 0x0u32) as u32) as u8) as u32;
+    let u9: u32 = (r11_a & 0x80u32) & 0xff;
+    let r14_n: u32 = (((u9 != 0x0u32) as u32) as u8) as u32;
+    s.v = r9_v as u8;
+    s.c = r10_c as u8;
+    s.a = r11_a as u8;
+    s.z = r12_z as u8;
+    s.n = r14_n as u8;
     s.pc = pc.wrapping_add(2);
     2
 }
@@ -1741,16 +2116,21 @@ fn op_69<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // ROR acc
 #[inline(always)]
 fn op_6a<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let u0: u32 = (s.c as u32);
     let u1: u32 = ((s.a as u32) & 0x1u32) & 0xff;
-    s.c = (u1) as u8;
+    let r2_c: u32 = ((u1) as u8) as u32;
     let u3: u32 = (s.a as u32) >> 0x1u32;
     let u4: u32 = (u0 << 0x7u32) & 0xff;
     let u2: u32 = (u3 | u4) & 0xff;
-    s.a = (u2) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u5: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u5 != 0x0u32) as u32) as u8;
+    let r6_a: u32 = ((u2) as u8) as u32;
+    let r7_z: u32 = (((r6_a == 0x0u32) as u32) as u8) as u32;
+    let u5: u32 = (r6_a & 0x80u32) & 0xff;
+    let r9_n: u32 = (((u5 != 0x0u32) as u32) as u8) as u32;
+    s.c = r2_c as u8;
+    s.a = r6_a as u8;
+    s.z = r7_z as u8;
+    s.n = r9_n as u8;
     s.pc = pc.wrapping_add(1);
     2
 }
@@ -1758,21 +2138,27 @@ fn op_6a<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // ARR imm
 #[inline(always)]
 fn op_6b<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
-    s.a = (((s.a as u32) & b1) & 0xff) as u8;
-    let u1: u32 = (s.a as u32) >> 0x1u32;
+    let r0_a: u32 = ((((s.a as u32) & b1) & 0xff) as u8) as u32;
+    let u1: u32 = r0_a >> 0x1u32;
     let u2: u32 = ((s.c as u32) << 0x7u32) & 0xff;
     let u0: u32 = (u1 | u2) & 0xff;
-    s.a = (u0) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u3: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u3 != 0x0u32) as u32) as u8;
+    let r4_a: u32 = ((u0) as u8) as u32;
+    let r5_z: u32 = (((r4_a == 0x0u32) as u32) as u8) as u32;
+    let u3: u32 = (r4_a & 0x80u32) & 0xff;
+    let r7_n: u32 = (((u3 != 0x0u32) as u32) as u8) as u32;
     let u5: u32 = u0 >> 0x6u32;
     let u4: u32 = (u5 & 0x1u32) & 0xff;
     let u7: u32 = u0 >> 0x5u32;
     let u6: u32 = (u7 & 0x1u32) & 0xff;
-    s.c = (u4) as u8;
-    s.v = ((u4 ^ u6) & 0xff) as u8;
+    let r12_c: u32 = ((u4) as u8) as u32;
+    let r13_v: u32 = (((u4 ^ u6) & 0xff) as u8) as u32;
+    s.a = r4_a as u8;
+    s.z = r5_z as u8;
+    s.n = r7_n as u8;
+    s.c = r12_c as u8;
+    s.v = r13_v as u8;
     s.pc = pc.wrapping_add(2);
     2
 }
@@ -1780,16 +2166,18 @@ fn op_6b<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // JMP ind
 #[inline(always)]
 fn op_6c<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
-    s.jmp_ind(bus, w as u16);
+    s.pc = Cpu::jmp_ind(bus, w as u16);
     5
 }
 
 // ADC abs
 #[inline(always)]
 fn op_6d<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
@@ -1803,12 +2191,17 @@ fn op_6d<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u7: u32 = (u5 ^ 0xffu32) & 0xff;
     let u9: u32 = (u7 & u6) & 0xff;
     let u8: u32 = (u9 & 0x80u32) & 0xff;
-    s.v = ((u8 != 0x0u32) as u32) as u8;
-    s.c = ((u2 | u4) & 0xff) as u8;
-    s.a = (u3) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u10: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u10 != 0x0u32) as u32) as u8;
+    let r10_v: u32 = (((u8 != 0x0u32) as u32) as u8) as u32;
+    let r11_c: u32 = (((u2 | u4) & 0xff) as u8) as u32;
+    let r12_a: u32 = ((u3) as u8) as u32;
+    let r13_z: u32 = (((r12_a == 0x0u32) as u32) as u8) as u32;
+    let u10: u32 = (r12_a & 0x80u32) & 0xff;
+    let r15_n: u32 = (((u10 != 0x0u32) as u32) as u8) as u32;
+    s.v = r10_v as u8;
+    s.c = r11_c as u8;
+    s.a = r12_a as u8;
+    s.z = r13_z as u8;
+    s.n = r15_n as u8;
     s.pc = pc.wrapping_add(3);
     4
 }
@@ -1816,20 +2209,24 @@ fn op_6d<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // ROR abs
 #[inline(always)]
 fn op_6e<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
     let u0: u32 = bus.load(w as u16) as u32;
     let u1: u32 = (s.c as u32);
     let u2: u32 = (u0 & 0x1u32) & 0xff;
-    s.c = (u2) as u8;
+    let r3_c: u32 = ((u2) as u8) as u32;
     let u4: u32 = u0 >> 0x1u32;
     let u5: u32 = (u1 << 0x7u32) & 0xff;
     let u3: u32 = (u4 | u5) & 0xff;
     bus.store(w as u16, u3 as u8);
-    s.z = ((u3 == 0x0u32) as u32) as u8;
+    let r8_z: u32 = (((u3 == 0x0u32) as u32) as u8) as u32;
     let u6: u32 = (u3 & 0x80u32) & 0xff;
-    s.n = ((u6 != 0x0u32) as u32) as u8;
+    let r10_n: u32 = (((u6 != 0x0u32) as u32) as u8) as u32;
+    s.c = r3_c as u8;
+    s.z = r8_z as u8;
+    s.n = r10_n as u8;
     s.pc = pc.wrapping_add(3);
     6
 }
@@ -1837,32 +2234,38 @@ fn op_6e<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // RRA abs
 #[inline(always)]
 fn op_6f<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
     let u0: u32 = bus.load(w as u16) as u32;
     let u1: u32 = (s.c as u32);
     let u2: u32 = (u0 & 0x1u32) & 0xff;
-    s.c = (u2) as u8;
+    let r3_c: u32 = ((u2) as u8) as u32;
     let u4: u32 = u0 >> 0x1u32;
     let u5: u32 = (u1 << 0x7u32) & 0xff;
     let u3: u32 = (u4 | u5) & 0xff;
     bus.store(w as u16, u3 as u8);
     let u6: u32 = ((s.a as u32) + u3) & 0xff;
     let u7: u32 = ((s.a as u32) + u3 > 0xff) as u32;
-    let u8: u32 = (u6 + (s.c as u32)) & 0xff;
-    let u9: u32 = (u6 + (s.c as u32) > 0xff) as u32;
+    let u8: u32 = (u6 + r3_c) & 0xff;
+    let u9: u32 = (u6 + r3_c > 0xff) as u32;
     let u10: u32 = ((s.a as u32) ^ u3) & 0xff;
     let u11: u32 = ((s.a as u32) ^ u8) & 0xff;
     let u12: u32 = (u10 ^ 0xffu32) & 0xff;
     let u14: u32 = (u12 & u11) & 0xff;
     let u13: u32 = (u14 & 0x80u32) & 0xff;
-    s.v = ((u13 != 0x0u32) as u32) as u8;
-    s.c = ((u7 | u9) & 0xff) as u8;
-    s.a = (u8) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u15: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u15 != 0x0u32) as u32) as u8;
+    let r17_v: u32 = (((u13 != 0x0u32) as u32) as u8) as u32;
+    let r18_c: u32 = (((u7 | u9) & 0xff) as u8) as u32;
+    let r19_a: u32 = ((u8) as u8) as u32;
+    let r20_z: u32 = (((r19_a == 0x0u32) as u32) as u8) as u32;
+    let u15: u32 = (r19_a & 0x80u32) & 0xff;
+    let r22_n: u32 = (((u15 != 0x0u32) as u32) as u8) as u32;
+    s.c = r18_c as u8;
+    s.v = r17_v as u8;
+    s.a = r19_a as u8;
+    s.z = r20_z as u8;
+    s.n = r22_n as u8;
     s.pc = pc.wrapping_add(3);
     6
 }
@@ -1870,6 +2273,7 @@ fn op_6f<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // BVS rel
 #[inline(always)]
 fn op_70<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     2 + s.branch(s.v == 1, pc, b1)
 }
@@ -1877,6 +2281,7 @@ fn op_70<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // ADC indy
 #[inline(always)]
 fn op_71<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = bus.load(b1 as u16) as u32;
     let u1: u32 = bus.load(((b1 + 1) & 0xff) as u16) as u32;
@@ -1896,12 +2301,17 @@ fn op_71<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u21: u32 = (u19 ^ 0xffu32) & 0xff;
     let u23: u32 = (u21 & u20) & 0xff;
     let u22: u32 = (u23 & 0x80u32) & 0xff;
-    s.v = ((u22 != 0x0u32) as u32) as u8;
-    s.c = ((u16 | u18) & 0xff) as u8;
-    s.a = (u17) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u24: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u24 != 0x0u32) as u32) as u8;
+    let r18_v: u32 = (((u22 != 0x0u32) as u32) as u8) as u32;
+    let r19_c: u32 = (((u16 | u18) & 0xff) as u8) as u32;
+    let r20_a: u32 = ((u17) as u8) as u32;
+    let r21_z: u32 = (((r20_a == 0x0u32) as u32) as u8) as u32;
+    let u24: u32 = (r20_a & 0x80u32) & 0xff;
+    let r23_n: u32 = (((u24 != 0x0u32) as u32) as u8) as u32;
+    s.v = r18_v as u8;
+    s.c = r19_c as u8;
+    s.a = r20_a as u8;
+    s.z = r21_z as u8;
+    s.n = r23_n as u8;
     s.pc = pc.wrapping_add(2);
     5 + cross(u2, s.y)
 }
@@ -1909,6 +2319,7 @@ fn op_71<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // JAM impl
 #[inline(always)]
 fn op_72<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     s.jam(pc);
     2
 }
@@ -1916,6 +2327,7 @@ fn op_72<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // RRA indy
 #[inline(always)]
 fn op_73<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = bus.load(b1 as u16) as u32;
     let u1: u32 = bus.load(((b1 + 1) & 0xff) as u16) as u32;
@@ -1928,26 +2340,31 @@ fn op_73<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u14: u32 = bus.load(u10 as u16) as u32;
     let u15: u32 = (s.c as u32);
     let u16: u32 = (u14 & 0x1u32) & 0xff;
-    s.c = (u16) as u8;
+    let r11_c: u32 = ((u16) as u8) as u32;
     let u18: u32 = u14 >> 0x1u32;
     let u19: u32 = (u15 << 0x7u32) & 0xff;
     let u17: u32 = (u18 | u19) & 0xff;
     bus.store(u10 as u16, u17 as u8);
     let u20: u32 = ((s.a as u32) + u17) & 0xff;
     let u21: u32 = ((s.a as u32) + u17 > 0xff) as u32;
-    let u22: u32 = (u20 + (s.c as u32)) & 0xff;
-    let u23: u32 = (u20 + (s.c as u32) > 0xff) as u32;
+    let u22: u32 = (u20 + r11_c) & 0xff;
+    let u23: u32 = (u20 + r11_c > 0xff) as u32;
     let u24: u32 = ((s.a as u32) ^ u17) & 0xff;
     let u25: u32 = ((s.a as u32) ^ u22) & 0xff;
     let u26: u32 = (u24 ^ 0xffu32) & 0xff;
     let u28: u32 = (u26 & u25) & 0xff;
     let u27: u32 = (u28 & 0x80u32) & 0xff;
-    s.v = ((u27 != 0x0u32) as u32) as u8;
-    s.c = ((u21 | u23) & 0xff) as u8;
-    s.a = (u22) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u29: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u29 != 0x0u32) as u32) as u8;
+    let r25_v: u32 = (((u27 != 0x0u32) as u32) as u8) as u32;
+    let r26_c: u32 = (((u21 | u23) & 0xff) as u8) as u32;
+    let r27_a: u32 = ((u22) as u8) as u32;
+    let r28_z: u32 = (((r27_a == 0x0u32) as u32) as u8) as u32;
+    let u29: u32 = (r27_a & 0x80u32) & 0xff;
+    let r30_n: u32 = (((u29 != 0x0u32) as u32) as u8) as u32;
+    s.c = r26_c as u8;
+    s.v = r25_v as u8;
+    s.a = r27_a as u8;
+    s.z = r28_z as u8;
+    s.n = r30_n as u8;
     s.pc = pc.wrapping_add(2);
     8
 }
@@ -1955,6 +2372,7 @@ fn op_73<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // NOP zpx
 #[inline(always)]
 fn op_74<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u2: u32 = (b1 + (s.x as u32)) & 0xff;
     let u0: u32 = u2;
@@ -1966,6 +2384,7 @@ fn op_74<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // ADC zpx
 #[inline(always)]
 fn op_75<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u2: u32 = (b1 + (s.x as u32)) & 0xff;
     let u0: u32 = u2;
@@ -1979,12 +2398,17 @@ fn op_75<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u10: u32 = (u8 ^ 0xffu32) & 0xff;
     let u12: u32 = (u10 & u9) & 0xff;
     let u11: u32 = (u12 & 0x80u32) & 0xff;
-    s.v = ((u11 != 0x0u32) as u32) as u8;
-    s.c = ((u5 | u7) & 0xff) as u8;
-    s.a = (u6) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u13: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u13 != 0x0u32) as u32) as u8;
+    let r12_v: u32 = (((u11 != 0x0u32) as u32) as u8) as u32;
+    let r13_c: u32 = (((u5 | u7) & 0xff) as u8) as u32;
+    let r14_a: u32 = ((u6) as u8) as u32;
+    let r15_z: u32 = (((r14_a == 0x0u32) as u32) as u8) as u32;
+    let u13: u32 = (r14_a & 0x80u32) & 0xff;
+    let r17_n: u32 = (((u13 != 0x0u32) as u32) as u8) as u32;
+    s.v = r12_v as u8;
+    s.c = r13_c as u8;
+    s.a = r14_a as u8;
+    s.z = r15_z as u8;
+    s.n = r17_n as u8;
     s.pc = pc.wrapping_add(2);
     4
 }
@@ -1992,20 +2416,24 @@ fn op_75<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // ROR zpx
 #[inline(always)]
 fn op_76<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u2: u32 = (b1 + (s.x as u32)) & 0xff;
     let u0: u32 = u2;
     let u3: u32 = bus.load(u0 as u16) as u32;
     let u4: u32 = (s.c as u32);
     let u5: u32 = (u3 & 0x1u32) & 0xff;
-    s.c = (u5) as u8;
+    let r5_c: u32 = ((u5) as u8) as u32;
     let u7: u32 = u3 >> 0x1u32;
     let u8: u32 = (u4 << 0x7u32) & 0xff;
     let u6: u32 = (u7 | u8) & 0xff;
     bus.store(u0 as u16, u6 as u8);
-    s.z = ((u6 == 0x0u32) as u32) as u8;
+    let r10_z: u32 = (((u6 == 0x0u32) as u32) as u8) as u32;
     let u9: u32 = (u6 & 0x80u32) & 0xff;
-    s.n = ((u9 != 0x0u32) as u32) as u8;
+    let r12_n: u32 = (((u9 != 0x0u32) as u32) as u8) as u32;
+    s.c = r5_c as u8;
+    s.z = r10_z as u8;
+    s.n = r12_n as u8;
     s.pc = pc.wrapping_add(2);
     6
 }
@@ -2013,32 +2441,38 @@ fn op_76<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // RRA zpx
 #[inline(always)]
 fn op_77<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u2: u32 = (b1 + (s.x as u32)) & 0xff;
     let u0: u32 = u2;
     let u3: u32 = bus.load(u0 as u16) as u32;
     let u4: u32 = (s.c as u32);
     let u5: u32 = (u3 & 0x1u32) & 0xff;
-    s.c = (u5) as u8;
+    let r5_c: u32 = ((u5) as u8) as u32;
     let u7: u32 = u3 >> 0x1u32;
     let u8: u32 = (u4 << 0x7u32) & 0xff;
     let u6: u32 = (u7 | u8) & 0xff;
     bus.store(u0 as u16, u6 as u8);
     let u9: u32 = ((s.a as u32) + u6) & 0xff;
     let u10: u32 = ((s.a as u32) + u6 > 0xff) as u32;
-    let u11: u32 = (u9 + (s.c as u32)) & 0xff;
-    let u12: u32 = (u9 + (s.c as u32) > 0xff) as u32;
+    let u11: u32 = (u9 + r5_c) & 0xff;
+    let u12: u32 = (u9 + r5_c > 0xff) as u32;
     let u13: u32 = ((s.a as u32) ^ u6) & 0xff;
     let u14: u32 = ((s.a as u32) ^ u11) & 0xff;
     let u15: u32 = (u13 ^ 0xffu32) & 0xff;
     let u17: u32 = (u15 & u14) & 0xff;
     let u16: u32 = (u17 & 0x80u32) & 0xff;
-    s.v = ((u16 != 0x0u32) as u32) as u8;
-    s.c = ((u10 | u12) & 0xff) as u8;
-    s.a = (u11) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u18: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u18 != 0x0u32) as u32) as u8;
+    let r19_v: u32 = (((u16 != 0x0u32) as u32) as u8) as u32;
+    let r20_c: u32 = (((u10 | u12) & 0xff) as u8) as u32;
+    let r21_a: u32 = ((u11) as u8) as u32;
+    let r22_z: u32 = (((r21_a == 0x0u32) as u32) as u8) as u32;
+    let u18: u32 = (r21_a & 0x80u32) & 0xff;
+    let r24_n: u32 = (((u18 != 0x0u32) as u32) as u8) as u32;
+    s.c = r20_c as u8;
+    s.v = r19_v as u8;
+    s.a = r21_a as u8;
+    s.z = r22_z as u8;
+    s.n = r24_n as u8;
     s.pc = pc.wrapping_add(2);
     6
 }
@@ -2046,7 +2480,9 @@ fn op_77<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // SEI impl
 #[inline(always)]
 fn op_78<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
-    s.i = (0x1u32) as u8;
+    bus.sync(s);
+    let r0_i: u32 = ((0x1u32) as u8) as u32;
+    s.i = r0_i as u8;
     s.pc = pc.wrapping_add(1);
     2
 }
@@ -2054,6 +2490,7 @@ fn op_78<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // ADC absy
 #[inline(always)]
 fn op_79<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
@@ -2069,12 +2506,17 @@ fn op_79<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u11: u32 = (u9 ^ 0xffu32) & 0xff;
     let u13: u32 = (u11 & u10) & 0xff;
     let u12: u32 = (u13 & 0x80u32) & 0xff;
-    s.v = ((u12 != 0x0u32) as u32) as u8;
-    s.c = ((u6 | u8) & 0xff) as u8;
-    s.a = (u7) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u14: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u14 != 0x0u32) as u32) as u8;
+    let r12_v: u32 = (((u12 != 0x0u32) as u32) as u8) as u32;
+    let r13_c: u32 = (((u6 | u8) & 0xff) as u8) as u32;
+    let r14_a: u32 = ((u7) as u8) as u32;
+    let r15_z: u32 = (((r14_a == 0x0u32) as u32) as u8) as u32;
+    let u14: u32 = (r14_a & 0x80u32) & 0xff;
+    let r17_n: u32 = (((u14 != 0x0u32) as u32) as u8) as u32;
+    s.v = r12_v as u8;
+    s.c = r13_c as u8;
+    s.a = r14_a as u8;
+    s.z = r15_z as u8;
+    s.n = r17_n as u8;
     s.pc = pc.wrapping_add(3);
     4 + cross(w, s.y)
 }
@@ -2082,6 +2524,7 @@ fn op_79<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // NOP impl
 #[inline(always)]
 fn op_7a<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     s.pc = pc.wrapping_add(1);
     2
 }
@@ -2089,6 +2532,7 @@ fn op_7a<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // RRA absy
 #[inline(always)]
 fn op_7b<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
@@ -2097,26 +2541,31 @@ fn op_7b<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u4: u32 = bus.load(u0 as u16) as u32;
     let u5: u32 = (s.c as u32);
     let u6: u32 = (u4 & 0x1u32) & 0xff;
-    s.c = (u6) as u8;
+    let r5_c: u32 = ((u6) as u8) as u32;
     let u8: u32 = u4 >> 0x1u32;
     let u9: u32 = (u5 << 0x7u32) & 0xff;
     let u7: u32 = (u8 | u9) & 0xff;
     bus.store(u0 as u16, u7 as u8);
     let u10: u32 = ((s.a as u32) + u7) & 0xff;
     let u11: u32 = ((s.a as u32) + u7 > 0xff) as u32;
-    let u12: u32 = (u10 + (s.c as u32)) & 0xff;
-    let u13: u32 = (u10 + (s.c as u32) > 0xff) as u32;
+    let u12: u32 = (u10 + r5_c) & 0xff;
+    let u13: u32 = (u10 + r5_c > 0xff) as u32;
     let u14: u32 = ((s.a as u32) ^ u7) & 0xff;
     let u15: u32 = ((s.a as u32) ^ u12) & 0xff;
     let u16: u32 = (u14 ^ 0xffu32) & 0xff;
     let u18: u32 = (u16 & u15) & 0xff;
     let u17: u32 = (u18 & 0x80u32) & 0xff;
-    s.v = ((u17 != 0x0u32) as u32) as u8;
-    s.c = ((u11 | u13) & 0xff) as u8;
-    s.a = (u12) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u19: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u19 != 0x0u32) as u32) as u8;
+    let r19_v: u32 = (((u17 != 0x0u32) as u32) as u8) as u32;
+    let r20_c: u32 = (((u11 | u13) & 0xff) as u8) as u32;
+    let r21_a: u32 = ((u12) as u8) as u32;
+    let r22_z: u32 = (((r21_a == 0x0u32) as u32) as u8) as u32;
+    let u19: u32 = (r21_a & 0x80u32) & 0xff;
+    let r24_n: u32 = (((u19 != 0x0u32) as u32) as u8) as u32;
+    s.c = r20_c as u8;
+    s.v = r19_v as u8;
+    s.a = r21_a as u8;
+    s.z = r22_z as u8;
+    s.n = r24_n as u8;
     s.pc = pc.wrapping_add(3);
     7
 }
@@ -2124,6 +2573,7 @@ fn op_7b<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // NOP absx
 #[inline(always)]
 fn op_7c<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
@@ -2137,6 +2587,7 @@ fn op_7c<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // ADC absx
 #[inline(always)]
 fn op_7d<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
@@ -2152,12 +2603,17 @@ fn op_7d<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u11: u32 = (u9 ^ 0xffu32) & 0xff;
     let u13: u32 = (u11 & u10) & 0xff;
     let u12: u32 = (u13 & 0x80u32) & 0xff;
-    s.v = ((u12 != 0x0u32) as u32) as u8;
-    s.c = ((u6 | u8) & 0xff) as u8;
-    s.a = (u7) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u14: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u14 != 0x0u32) as u32) as u8;
+    let r12_v: u32 = (((u12 != 0x0u32) as u32) as u8) as u32;
+    let r13_c: u32 = (((u6 | u8) & 0xff) as u8) as u32;
+    let r14_a: u32 = ((u7) as u8) as u32;
+    let r15_z: u32 = (((r14_a == 0x0u32) as u32) as u8) as u32;
+    let u14: u32 = (r14_a & 0x80u32) & 0xff;
+    let r17_n: u32 = (((u14 != 0x0u32) as u32) as u8) as u32;
+    s.v = r12_v as u8;
+    s.c = r13_c as u8;
+    s.a = r14_a as u8;
+    s.z = r15_z as u8;
+    s.n = r17_n as u8;
     s.pc = pc.wrapping_add(3);
     4 + cross(w, s.x)
 }
@@ -2165,6 +2621,7 @@ fn op_7d<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // ROR absx
 #[inline(always)]
 fn op_7e<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
@@ -2173,14 +2630,17 @@ fn op_7e<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u4: u32 = bus.load(u0 as u16) as u32;
     let u5: u32 = (s.c as u32);
     let u6: u32 = (u4 & 0x1u32) & 0xff;
-    s.c = (u6) as u8;
+    let r5_c: u32 = ((u6) as u8) as u32;
     let u8: u32 = u4 >> 0x1u32;
     let u9: u32 = (u5 << 0x7u32) & 0xff;
     let u7: u32 = (u8 | u9) & 0xff;
     bus.store(u0 as u16, u7 as u8);
-    s.z = ((u7 == 0x0u32) as u32) as u8;
+    let r10_z: u32 = (((u7 == 0x0u32) as u32) as u8) as u32;
     let u10: u32 = (u7 & 0x80u32) & 0xff;
-    s.n = ((u10 != 0x0u32) as u32) as u8;
+    let r12_n: u32 = (((u10 != 0x0u32) as u32) as u8) as u32;
+    s.c = r5_c as u8;
+    s.z = r10_z as u8;
+    s.n = r12_n as u8;
     s.pc = pc.wrapping_add(3);
     7
 }
@@ -2188,6 +2648,7 @@ fn op_7e<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // RRA absx
 #[inline(always)]
 fn op_7f<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
@@ -2196,26 +2657,31 @@ fn op_7f<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u4: u32 = bus.load(u0 as u16) as u32;
     let u5: u32 = (s.c as u32);
     let u6: u32 = (u4 & 0x1u32) & 0xff;
-    s.c = (u6) as u8;
+    let r5_c: u32 = ((u6) as u8) as u32;
     let u8: u32 = u4 >> 0x1u32;
     let u9: u32 = (u5 << 0x7u32) & 0xff;
     let u7: u32 = (u8 | u9) & 0xff;
     bus.store(u0 as u16, u7 as u8);
     let u10: u32 = ((s.a as u32) + u7) & 0xff;
     let u11: u32 = ((s.a as u32) + u7 > 0xff) as u32;
-    let u12: u32 = (u10 + (s.c as u32)) & 0xff;
-    let u13: u32 = (u10 + (s.c as u32) > 0xff) as u32;
+    let u12: u32 = (u10 + r5_c) & 0xff;
+    let u13: u32 = (u10 + r5_c > 0xff) as u32;
     let u14: u32 = ((s.a as u32) ^ u7) & 0xff;
     let u15: u32 = ((s.a as u32) ^ u12) & 0xff;
     let u16: u32 = (u14 ^ 0xffu32) & 0xff;
     let u18: u32 = (u16 & u15) & 0xff;
     let u17: u32 = (u18 & 0x80u32) & 0xff;
-    s.v = ((u17 != 0x0u32) as u32) as u8;
-    s.c = ((u11 | u13) & 0xff) as u8;
-    s.a = (u12) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u19: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u19 != 0x0u32) as u32) as u8;
+    let r19_v: u32 = (((u17 != 0x0u32) as u32) as u8) as u32;
+    let r20_c: u32 = (((u11 | u13) & 0xff) as u8) as u32;
+    let r21_a: u32 = ((u12) as u8) as u32;
+    let r22_z: u32 = (((r21_a == 0x0u32) as u32) as u8) as u32;
+    let u19: u32 = (r21_a & 0x80u32) & 0xff;
+    let r24_n: u32 = (((u19 != 0x0u32) as u32) as u8) as u32;
+    s.c = r20_c as u8;
+    s.v = r19_v as u8;
+    s.a = r21_a as u8;
+    s.z = r22_z as u8;
+    s.n = r24_n as u8;
     s.pc = pc.wrapping_add(3);
     7
 }
@@ -2223,6 +2689,7 @@ fn op_7f<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // NOP imm
 #[inline(always)]
 fn op_80<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     s.pc = pc.wrapping_add(2);
     2
@@ -2231,6 +2698,7 @@ fn op_80<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // STA indx
 #[inline(always)]
 fn op_81<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = (b1 + (s.x as u32)) & 0xff;
     let u1: u32 = (u0 + 0x1u32) & 0xff;
@@ -2250,6 +2718,7 @@ fn op_81<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // NOP imm
 #[inline(always)]
 fn op_82<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     s.pc = pc.wrapping_add(2);
     2
@@ -2258,6 +2727,7 @@ fn op_82<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // SAX indx
 #[inline(always)]
 fn op_83<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = (b1 + (s.x as u32)) & 0xff;
     let u1: u32 = (u0 + 0x1u32) & 0xff;
@@ -2278,6 +2748,7 @@ fn op_83<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // STY zp
 #[inline(always)]
 fn op_84<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     bus.store(b1 as u16, (s.y as u32) as u8);
     s.pc = pc.wrapping_add(2);
@@ -2287,6 +2758,7 @@ fn op_84<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // STA zp
 #[inline(always)]
 fn op_85<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     bus.store(b1 as u16, (s.a as u32) as u8);
     s.pc = pc.wrapping_add(2);
@@ -2296,6 +2768,7 @@ fn op_85<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // STX zp
 #[inline(always)]
 fn op_86<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     bus.store(b1 as u16, (s.x as u32) as u8);
     s.pc = pc.wrapping_add(2);
@@ -2305,6 +2778,7 @@ fn op_86<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // SAX zp
 #[inline(always)]
 fn op_87<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = ((s.a as u32) & (s.x as u32)) & 0xff;
     bus.store(b1 as u16, u0 as u8);
@@ -2315,10 +2789,14 @@ fn op_87<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // DEY impl
 #[inline(always)]
 fn op_88<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
-    s.y = ((s.y as u32).wrapping_sub(0x1u32) & 0xff) as u8;
-    s.z = (((s.y as u32) == 0x0u32) as u32) as u8;
-    let u0: u32 = ((s.y as u32) & 0x80u32) & 0xff;
-    s.n = ((u0 != 0x0u32) as u32) as u8;
+    bus.sync(s);
+    let r0_y: u32 = (((s.y as u32).wrapping_sub(0x1u32) & 0xff) as u8) as u32;
+    let r1_z: u32 = (((r0_y == 0x0u32) as u32) as u8) as u32;
+    let u0: u32 = (r0_y & 0x80u32) & 0xff;
+    let r3_n: u32 = (((u0 != 0x0u32) as u32) as u8) as u32;
+    s.y = r0_y as u8;
+    s.z = r1_z as u8;
+    s.n = r3_n as u8;
     s.pc = pc.wrapping_add(1);
     2
 }
@@ -2326,6 +2804,7 @@ fn op_88<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // NOP imm
 #[inline(always)]
 fn op_89<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     s.pc = pc.wrapping_add(2);
     2
@@ -2334,10 +2813,14 @@ fn op_89<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // TXA impl
 #[inline(always)]
 fn op_8a<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
-    s.a = ((s.x as u32)) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u0: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u0 != 0x0u32) as u32) as u8;
+    bus.sync(s);
+    let r0_a: u32 = (((s.x as u32)) as u8) as u32;
+    let r1_z: u32 = (((r0_a == 0x0u32) as u32) as u8) as u32;
+    let u0: u32 = (r0_a & 0x80u32) & 0xff;
+    let r3_n: u32 = (((u0 != 0x0u32) as u32) as u8) as u32;
+    s.a = r0_a as u8;
+    s.z = r1_z as u8;
+    s.n = r3_n as u8;
     s.pc = pc.wrapping_add(1);
     2
 }
@@ -2345,13 +2828,17 @@ fn op_8a<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // ANE imm
 #[inline(always)]
 fn op_8b<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u1: u32 = ((s.a as u32) | 0xeeu32) & 0xff;
     let u0: u32 = (u1 & (s.x as u32)) & 0xff;
-    s.a = ((u0 & b1) & 0xff) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u2: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u2 != 0x0u32) as u32) as u8;
+    let r2_a: u32 = (((u0 & b1) & 0xff) as u8) as u32;
+    let r3_z: u32 = (((r2_a == 0x0u32) as u32) as u8) as u32;
+    let u2: u32 = (r2_a & 0x80u32) & 0xff;
+    let r5_n: u32 = (((u2 != 0x0u32) as u32) as u8) as u32;
+    s.a = r2_a as u8;
+    s.z = r3_z as u8;
+    s.n = r5_n as u8;
     s.pc = pc.wrapping_add(2);
     2
 }
@@ -2359,6 +2846,7 @@ fn op_8b<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // STY abs
 #[inline(always)]
 fn op_8c<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
@@ -2370,6 +2858,7 @@ fn op_8c<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // STA abs
 #[inline(always)]
 fn op_8d<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
@@ -2381,6 +2870,7 @@ fn op_8d<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // STX abs
 #[inline(always)]
 fn op_8e<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
@@ -2392,6 +2882,7 @@ fn op_8e<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // SAX abs
 #[inline(always)]
 fn op_8f<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
@@ -2404,6 +2895,7 @@ fn op_8f<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // BCC rel
 #[inline(always)]
 fn op_90<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     2 + s.branch(s.c == 0, pc, b1)
 }
@@ -2411,6 +2903,7 @@ fn op_90<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // STA indy
 #[inline(always)]
 fn op_91<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = bus.load(b1 as u16) as u32;
     let u1: u32 = bus.load(((b1 + 1) & 0xff) as u16) as u32;
@@ -2428,6 +2921,7 @@ fn op_91<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // JAM impl
 #[inline(always)]
 fn op_92<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     s.jam(pc);
     2
 }
@@ -2435,6 +2929,7 @@ fn op_92<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // SHA indy
 #[inline(always)]
 fn op_93<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = bus.load(b1 as u16) as u32;
     let u1: u32 = bus.load(((b1 + 1) & 0xff) as u16) as u32;
@@ -2455,6 +2950,7 @@ fn op_93<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // STY zpx
 #[inline(always)]
 fn op_94<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u2: u32 = (b1 + (s.x as u32)) & 0xff;
     let u0: u32 = u2;
@@ -2466,6 +2962,7 @@ fn op_94<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // STA zpx
 #[inline(always)]
 fn op_95<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u2: u32 = (b1 + (s.x as u32)) & 0xff;
     let u0: u32 = u2;
@@ -2477,6 +2974,7 @@ fn op_95<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // STX zpy
 #[inline(always)]
 fn op_96<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u2: u32 = (b1 + (s.y as u32)) & 0xff;
     let u0: u32 = u2;
@@ -2488,6 +2986,7 @@ fn op_96<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // SAX zpy
 #[inline(always)]
 fn op_97<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u2: u32 = (b1 + (s.y as u32)) & 0xff;
     let u0: u32 = u2;
@@ -2500,10 +2999,14 @@ fn op_97<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // TYA impl
 #[inline(always)]
 fn op_98<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
-    s.a = ((s.y as u32)) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u0: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u0 != 0x0u32) as u32) as u8;
+    bus.sync(s);
+    let r0_a: u32 = (((s.y as u32)) as u8) as u32;
+    let r1_z: u32 = (((r0_a == 0x0u32) as u32) as u8) as u32;
+    let u0: u32 = (r0_a & 0x80u32) & 0xff;
+    let r3_n: u32 = (((u0 != 0x0u32) as u32) as u8) as u32;
+    s.a = r0_a as u8;
+    s.z = r1_z as u8;
+    s.n = r3_n as u8;
     s.pc = pc.wrapping_add(1);
     2
 }
@@ -2511,6 +3014,7 @@ fn op_98<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // STA absy
 #[inline(always)]
 fn op_99<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
@@ -2524,7 +3028,9 @@ fn op_99<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // TXS impl
 #[inline(always)]
 fn op_9a<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
-    s.sp = ((s.x as u32)) as u8;
+    bus.sync(s);
+    let r0_sp: u32 = (((s.x as u32)) as u8) as u32;
+    s.sp = r0_sp as u8;
     s.pc = pc.wrapping_add(1);
     2
 }
@@ -2532,14 +3038,16 @@ fn op_9a<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // TAS absy
 #[inline(always)]
 fn op_9b<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
     let u2: u32 = (s.y as u32);
     let u0: u32 = (w + u2) & 0xffff;
-    s.sp = (((s.a as u32) & (s.x as u32)) & 0xff) as u8;
-    let u4: u32 = ((s.sp as u32) & ((b2 + 1) & 0xff)) & 0xff;
+    let r2_sp: u32 = ((((s.a as u32) & (s.x as u32)) & 0xff) as u8) as u32;
+    let u4: u32 = (r2_sp & ((b2 + 1) & 0xff)) & 0xff;
     bus.store(u0 as u16, u4 as u8);
+    s.sp = r2_sp as u8;
     s.pc = pc.wrapping_add(3);
     5
 }
@@ -2547,6 +3055,7 @@ fn op_9b<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // SHY absx
 #[inline(always)]
 fn op_9c<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
@@ -2561,6 +3070,7 @@ fn op_9c<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // STA absx
 #[inline(always)]
 fn op_9d<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
@@ -2574,6 +3084,7 @@ fn op_9d<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // SHX absy
 #[inline(always)]
 fn op_9e<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
@@ -2588,6 +3099,7 @@ fn op_9e<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // SHA absy
 #[inline(always)]
 fn op_9f<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
@@ -2603,11 +3115,15 @@ fn op_9f<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // LDY imm
 #[inline(always)]
 fn op_a0<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
-    s.y = (b1) as u8;
-    s.z = (((s.y as u32) == 0x0u32) as u32) as u8;
-    let u0: u32 = ((s.y as u32) & 0x80u32) & 0xff;
-    s.n = ((u0 != 0x0u32) as u32) as u8;
+    let r0_y: u32 = ((b1) as u8) as u32;
+    let r1_z: u32 = (((r0_y == 0x0u32) as u32) as u8) as u32;
+    let u0: u32 = (r0_y & 0x80u32) & 0xff;
+    let r3_n: u32 = (((u0 != 0x0u32) as u32) as u8) as u32;
+    s.y = r0_y as u8;
+    s.z = r1_z as u8;
+    s.n = r3_n as u8;
     s.pc = pc.wrapping_add(2);
     2
 }
@@ -2615,6 +3131,7 @@ fn op_a0<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // LDA indx
 #[inline(always)]
 fn op_a1<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = (b1 + (s.x as u32)) & 0xff;
     let u1: u32 = (u0 + 0x1u32) & 0xff;
@@ -2627,10 +3144,13 @@ fn op_a1<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u14: u32 = u2;
     let u8: u32 = (u10 | u14) & 0xffff;
     let u16: u32 = bus.load(u8 as u16) as u32;
-    s.a = (u16) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u17: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u17 != 0x0u32) as u32) as u8;
+    let r11_a: u32 = ((u16) as u8) as u32;
+    let r12_z: u32 = (((r11_a == 0x0u32) as u32) as u8) as u32;
+    let u17: u32 = (r11_a & 0x80u32) & 0xff;
+    let r14_n: u32 = (((u17 != 0x0u32) as u32) as u8) as u32;
+    s.a = r11_a as u8;
+    s.z = r12_z as u8;
+    s.n = r14_n as u8;
     s.pc = pc.wrapping_add(2);
     6
 }
@@ -2638,11 +3158,15 @@ fn op_a1<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // LDX imm
 #[inline(always)]
 fn op_a2<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
-    s.x = (b1) as u8;
-    s.z = (((s.x as u32) == 0x0u32) as u32) as u8;
-    let u0: u32 = ((s.x as u32) & 0x80u32) & 0xff;
-    s.n = ((u0 != 0x0u32) as u32) as u8;
+    let r0_x: u32 = ((b1) as u8) as u32;
+    let r1_z: u32 = (((r0_x == 0x0u32) as u32) as u8) as u32;
+    let u0: u32 = (r0_x & 0x80u32) & 0xff;
+    let r3_n: u32 = (((u0 != 0x0u32) as u32) as u8) as u32;
+    s.x = r0_x as u8;
+    s.z = r1_z as u8;
+    s.n = r3_n as u8;
     s.pc = pc.wrapping_add(2);
     2
 }
@@ -2650,6 +3174,7 @@ fn op_a2<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // LAX indx
 #[inline(always)]
 fn op_a3<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = (b1 + (s.x as u32)) & 0xff;
     let u1: u32 = (u0 + 0x1u32) & 0xff;
@@ -2662,11 +3187,15 @@ fn op_a3<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u14: u32 = u2;
     let u8: u32 = (u10 | u14) & 0xffff;
     let u16: u32 = bus.load(u8 as u16) as u32;
-    s.a = (u16) as u8;
-    s.x = (u16) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u17: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u17 != 0x0u32) as u32) as u8;
+    let r11_a: u32 = ((u16) as u8) as u32;
+    let r12_x: u32 = ((u16) as u8) as u32;
+    let r13_z: u32 = (((r11_a == 0x0u32) as u32) as u8) as u32;
+    let u17: u32 = (r11_a & 0x80u32) & 0xff;
+    let r15_n: u32 = (((u17 != 0x0u32) as u32) as u8) as u32;
+    s.a = r11_a as u8;
+    s.x = r12_x as u8;
+    s.z = r13_z as u8;
+    s.n = r15_n as u8;
     s.pc = pc.wrapping_add(2);
     6
 }
@@ -2674,12 +3203,16 @@ fn op_a3<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // LDY zp
 #[inline(always)]
 fn op_a4<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = bus.load(b1 as u16) as u32;
-    s.y = (u0) as u8;
-    s.z = (((s.y as u32) == 0x0u32) as u32) as u8;
-    let u1: u32 = ((s.y as u32) & 0x80u32) & 0xff;
-    s.n = ((u1 != 0x0u32) as u32) as u8;
+    let r1_y: u32 = ((u0) as u8) as u32;
+    let r2_z: u32 = (((r1_y == 0x0u32) as u32) as u8) as u32;
+    let u1: u32 = (r1_y & 0x80u32) & 0xff;
+    let r4_n: u32 = (((u1 != 0x0u32) as u32) as u8) as u32;
+    s.y = r1_y as u8;
+    s.z = r2_z as u8;
+    s.n = r4_n as u8;
     s.pc = pc.wrapping_add(2);
     3
 }
@@ -2687,12 +3220,16 @@ fn op_a4<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // LDA zp
 #[inline(always)]
 fn op_a5<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = bus.load(b1 as u16) as u32;
-    s.a = (u0) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u1: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u1 != 0x0u32) as u32) as u8;
+    let r1_a: u32 = ((u0) as u8) as u32;
+    let r2_z: u32 = (((r1_a == 0x0u32) as u32) as u8) as u32;
+    let u1: u32 = (r1_a & 0x80u32) & 0xff;
+    let r4_n: u32 = (((u1 != 0x0u32) as u32) as u8) as u32;
+    s.a = r1_a as u8;
+    s.z = r2_z as u8;
+    s.n = r4_n as u8;
     s.pc = pc.wrapping_add(2);
     3
 }
@@ -2700,12 +3237,16 @@ fn op_a5<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // LDX zp
 #[inline(always)]
 fn op_a6<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = bus.load(b1 as u16) as u32;
-    s.x = (u0) as u8;
-    s.z = (((s.x as u32) == 0x0u32) as u32) as u8;
-    let u1: u32 = ((s.x as u32) & 0x80u32) & 0xff;
-    s.n = ((u1 != 0x0u32) as u32) as u8;
+    let r1_x: u32 = ((u0) as u8) as u32;
+    let r2_z: u32 = (((r1_x == 0x0u32) as u32) as u8) as u32;
+    let u1: u32 = (r1_x & 0x80u32) & 0xff;
+    let r4_n: u32 = (((u1 != 0x0u32) as u32) as u8) as u32;
+    s.x = r1_x as u8;
+    s.z = r2_z as u8;
+    s.n = r4_n as u8;
     s.pc = pc.wrapping_add(2);
     3
 }
@@ -2713,13 +3254,18 @@ fn op_a6<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // LAX zp
 #[inline(always)]
 fn op_a7<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = bus.load(b1 as u16) as u32;
-    s.a = (u0) as u8;
-    s.x = (u0) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u1: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u1 != 0x0u32) as u32) as u8;
+    let r1_a: u32 = ((u0) as u8) as u32;
+    let r2_x: u32 = ((u0) as u8) as u32;
+    let r3_z: u32 = (((r1_a == 0x0u32) as u32) as u8) as u32;
+    let u1: u32 = (r1_a & 0x80u32) & 0xff;
+    let r5_n: u32 = (((u1 != 0x0u32) as u32) as u8) as u32;
+    s.a = r1_a as u8;
+    s.x = r2_x as u8;
+    s.z = r3_z as u8;
+    s.n = r5_n as u8;
     s.pc = pc.wrapping_add(2);
     3
 }
@@ -2727,10 +3273,14 @@ fn op_a7<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // TAY impl
 #[inline(always)]
 fn op_a8<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
-    s.y = ((s.a as u32)) as u8;
-    s.z = (((s.y as u32) == 0x0u32) as u32) as u8;
-    let u0: u32 = ((s.y as u32) & 0x80u32) & 0xff;
-    s.n = ((u0 != 0x0u32) as u32) as u8;
+    bus.sync(s);
+    let r0_y: u32 = (((s.a as u32)) as u8) as u32;
+    let r1_z: u32 = (((r0_y == 0x0u32) as u32) as u8) as u32;
+    let u0: u32 = (r0_y & 0x80u32) & 0xff;
+    let r3_n: u32 = (((u0 != 0x0u32) as u32) as u8) as u32;
+    s.y = r0_y as u8;
+    s.z = r1_z as u8;
+    s.n = r3_n as u8;
     s.pc = pc.wrapping_add(1);
     2
 }
@@ -2738,11 +3288,15 @@ fn op_a8<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // LDA imm
 #[inline(always)]
 fn op_a9<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
-    s.a = (b1) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u0: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u0 != 0x0u32) as u32) as u8;
+    let r0_a: u32 = ((b1) as u8) as u32;
+    let r1_z: u32 = (((r0_a == 0x0u32) as u32) as u8) as u32;
+    let u0: u32 = (r0_a & 0x80u32) & 0xff;
+    let r3_n: u32 = (((u0 != 0x0u32) as u32) as u8) as u32;
+    s.a = r0_a as u8;
+    s.z = r1_z as u8;
+    s.n = r3_n as u8;
     s.pc = pc.wrapping_add(2);
     2
 }
@@ -2750,10 +3304,14 @@ fn op_a9<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // TAX impl
 #[inline(always)]
 fn op_aa<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
-    s.x = ((s.a as u32)) as u8;
-    s.z = (((s.x as u32) == 0x0u32) as u32) as u8;
-    let u0: u32 = ((s.x as u32) & 0x80u32) & 0xff;
-    s.n = ((u0 != 0x0u32) as u32) as u8;
+    bus.sync(s);
+    let r0_x: u32 = (((s.a as u32)) as u8) as u32;
+    let r1_z: u32 = (((r0_x == 0x0u32) as u32) as u8) as u32;
+    let u0: u32 = (r0_x & 0x80u32) & 0xff;
+    let r3_n: u32 = (((u0 != 0x0u32) as u32) as u8) as u32;
+    s.x = r0_x as u8;
+    s.z = r1_z as u8;
+    s.n = r3_n as u8;
     s.pc = pc.wrapping_add(1);
     2
 }
@@ -2761,14 +3319,19 @@ fn op_aa<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // LXA imm
 #[inline(always)]
 fn op_ab<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u1: u32 = ((s.a as u32) | 0xeeu32) & 0xff;
     let u0: u32 = (u1 & b1) & 0xff;
-    s.a = (u0) as u8;
-    s.x = (u0) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u2: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u2 != 0x0u32) as u32) as u8;
+    let r2_a: u32 = ((u0) as u8) as u32;
+    let r3_x: u32 = ((u0) as u8) as u32;
+    let r4_z: u32 = (((r2_a == 0x0u32) as u32) as u8) as u32;
+    let u2: u32 = (r2_a & 0x80u32) & 0xff;
+    let r6_n: u32 = (((u2 != 0x0u32) as u32) as u8) as u32;
+    s.a = r2_a as u8;
+    s.x = r3_x as u8;
+    s.z = r4_z as u8;
+    s.n = r6_n as u8;
     s.pc = pc.wrapping_add(2);
     2
 }
@@ -2776,14 +3339,18 @@ fn op_ab<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // LDY abs
 #[inline(always)]
 fn op_ac<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
     let u0: u32 = bus.load(w as u16) as u32;
-    s.y = (u0) as u8;
-    s.z = (((s.y as u32) == 0x0u32) as u32) as u8;
-    let u1: u32 = ((s.y as u32) & 0x80u32) & 0xff;
-    s.n = ((u1 != 0x0u32) as u32) as u8;
+    let r1_y: u32 = ((u0) as u8) as u32;
+    let r2_z: u32 = (((r1_y == 0x0u32) as u32) as u8) as u32;
+    let u1: u32 = (r1_y & 0x80u32) & 0xff;
+    let r4_n: u32 = (((u1 != 0x0u32) as u32) as u8) as u32;
+    s.y = r1_y as u8;
+    s.z = r2_z as u8;
+    s.n = r4_n as u8;
     s.pc = pc.wrapping_add(3);
     4
 }
@@ -2791,14 +3358,18 @@ fn op_ac<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // LDA abs
 #[inline(always)]
 fn op_ad<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
     let u0: u32 = bus.load(w as u16) as u32;
-    s.a = (u0) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u1: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u1 != 0x0u32) as u32) as u8;
+    let r1_a: u32 = ((u0) as u8) as u32;
+    let r2_z: u32 = (((r1_a == 0x0u32) as u32) as u8) as u32;
+    let u1: u32 = (r1_a & 0x80u32) & 0xff;
+    let r4_n: u32 = (((u1 != 0x0u32) as u32) as u8) as u32;
+    s.a = r1_a as u8;
+    s.z = r2_z as u8;
+    s.n = r4_n as u8;
     s.pc = pc.wrapping_add(3);
     4
 }
@@ -2806,14 +3377,18 @@ fn op_ad<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // LDX abs
 #[inline(always)]
 fn op_ae<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
     let u0: u32 = bus.load(w as u16) as u32;
-    s.x = (u0) as u8;
-    s.z = (((s.x as u32) == 0x0u32) as u32) as u8;
-    let u1: u32 = ((s.x as u32) & 0x80u32) & 0xff;
-    s.n = ((u1 != 0x0u32) as u32) as u8;
+    let r1_x: u32 = ((u0) as u8) as u32;
+    let r2_z: u32 = (((r1_x == 0x0u32) as u32) as u8) as u32;
+    let u1: u32 = (r1_x & 0x80u32) & 0xff;
+    let r4_n: u32 = (((u1 != 0x0u32) as u32) as u8) as u32;
+    s.x = r1_x as u8;
+    s.z = r2_z as u8;
+    s.n = r4_n as u8;
     s.pc = pc.wrapping_add(3);
     4
 }
@@ -2821,15 +3396,20 @@ fn op_ae<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // LAX abs
 #[inline(always)]
 fn op_af<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
     let u0: u32 = bus.load(w as u16) as u32;
-    s.a = (u0) as u8;
-    s.x = (u0) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u1: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u1 != 0x0u32) as u32) as u8;
+    let r1_a: u32 = ((u0) as u8) as u32;
+    let r2_x: u32 = ((u0) as u8) as u32;
+    let r3_z: u32 = (((r1_a == 0x0u32) as u32) as u8) as u32;
+    let u1: u32 = (r1_a & 0x80u32) & 0xff;
+    let r5_n: u32 = (((u1 != 0x0u32) as u32) as u8) as u32;
+    s.a = r1_a as u8;
+    s.x = r2_x as u8;
+    s.z = r3_z as u8;
+    s.n = r5_n as u8;
     s.pc = pc.wrapping_add(3);
     4
 }
@@ -2837,6 +3417,7 @@ fn op_af<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // BCS rel
 #[inline(always)]
 fn op_b0<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     2 + s.branch(s.c == 1, pc, b1)
 }
@@ -2844,6 +3425,7 @@ fn op_b0<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // LDA indy
 #[inline(always)]
 fn op_b1<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = bus.load(b1 as u16) as u32;
     let u1: u32 = bus.load(((b1 + 1) & 0xff) as u16) as u32;
@@ -2854,10 +3436,13 @@ fn op_b1<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u12: u32 = (s.y as u32);
     let u10: u32 = (u2 + u12) & 0xffff;
     let u14: u32 = bus.load(u10 as u16) as u32;
-    s.a = (u14) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u15: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u15 != 0x0u32) as u32) as u8;
+    let r9_a: u32 = ((u14) as u8) as u32;
+    let r10_z: u32 = (((r9_a == 0x0u32) as u32) as u8) as u32;
+    let u15: u32 = (r9_a & 0x80u32) & 0xff;
+    let r12_n: u32 = (((u15 != 0x0u32) as u32) as u8) as u32;
+    s.a = r9_a as u8;
+    s.z = r10_z as u8;
+    s.n = r12_n as u8;
     s.pc = pc.wrapping_add(2);
     5 + cross(u2, s.y)
 }
@@ -2865,6 +3450,7 @@ fn op_b1<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // JAM impl
 #[inline(always)]
 fn op_b2<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     s.jam(pc);
     2
 }
@@ -2872,6 +3458,7 @@ fn op_b2<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // LAX indy
 #[inline(always)]
 fn op_b3<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = bus.load(b1 as u16) as u32;
     let u1: u32 = bus.load(((b1 + 1) & 0xff) as u16) as u32;
@@ -2882,11 +3469,15 @@ fn op_b3<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u12: u32 = (s.y as u32);
     let u10: u32 = (u2 + u12) & 0xffff;
     let u14: u32 = bus.load(u10 as u16) as u32;
-    s.a = (u14) as u8;
-    s.x = (u14) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u15: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u15 != 0x0u32) as u32) as u8;
+    let r9_a: u32 = ((u14) as u8) as u32;
+    let r10_x: u32 = ((u14) as u8) as u32;
+    let r11_z: u32 = (((r9_a == 0x0u32) as u32) as u8) as u32;
+    let u15: u32 = (r9_a & 0x80u32) & 0xff;
+    let r13_n: u32 = (((u15 != 0x0u32) as u32) as u8) as u32;
+    s.a = r9_a as u8;
+    s.x = r10_x as u8;
+    s.z = r11_z as u8;
+    s.n = r13_n as u8;
     s.pc = pc.wrapping_add(2);
     5 + cross(u2, s.y)
 }
@@ -2894,14 +3485,18 @@ fn op_b3<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // LDY zpx
 #[inline(always)]
 fn op_b4<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u2: u32 = (b1 + (s.x as u32)) & 0xff;
     let u0: u32 = u2;
     let u3: u32 = bus.load(u0 as u16) as u32;
-    s.y = (u3) as u8;
-    s.z = (((s.y as u32) == 0x0u32) as u32) as u8;
-    let u4: u32 = ((s.y as u32) & 0x80u32) & 0xff;
-    s.n = ((u4 != 0x0u32) as u32) as u8;
+    let r3_y: u32 = ((u3) as u8) as u32;
+    let r4_z: u32 = (((r3_y == 0x0u32) as u32) as u8) as u32;
+    let u4: u32 = (r3_y & 0x80u32) & 0xff;
+    let r6_n: u32 = (((u4 != 0x0u32) as u32) as u8) as u32;
+    s.y = r3_y as u8;
+    s.z = r4_z as u8;
+    s.n = r6_n as u8;
     s.pc = pc.wrapping_add(2);
     4
 }
@@ -2909,14 +3504,18 @@ fn op_b4<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // LDA zpx
 #[inline(always)]
 fn op_b5<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u2: u32 = (b1 + (s.x as u32)) & 0xff;
     let u0: u32 = u2;
     let u3: u32 = bus.load(u0 as u16) as u32;
-    s.a = (u3) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u4: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u4 != 0x0u32) as u32) as u8;
+    let r3_a: u32 = ((u3) as u8) as u32;
+    let r4_z: u32 = (((r3_a == 0x0u32) as u32) as u8) as u32;
+    let u4: u32 = (r3_a & 0x80u32) & 0xff;
+    let r6_n: u32 = (((u4 != 0x0u32) as u32) as u8) as u32;
+    s.a = r3_a as u8;
+    s.z = r4_z as u8;
+    s.n = r6_n as u8;
     s.pc = pc.wrapping_add(2);
     4
 }
@@ -2924,14 +3523,18 @@ fn op_b5<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // LDX zpy
 #[inline(always)]
 fn op_b6<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u2: u32 = (b1 + (s.y as u32)) & 0xff;
     let u0: u32 = u2;
     let u3: u32 = bus.load(u0 as u16) as u32;
-    s.x = (u3) as u8;
-    s.z = (((s.x as u32) == 0x0u32) as u32) as u8;
-    let u4: u32 = ((s.x as u32) & 0x80u32) & 0xff;
-    s.n = ((u4 != 0x0u32) as u32) as u8;
+    let r3_x: u32 = ((u3) as u8) as u32;
+    let r4_z: u32 = (((r3_x == 0x0u32) as u32) as u8) as u32;
+    let u4: u32 = (r3_x & 0x80u32) & 0xff;
+    let r6_n: u32 = (((u4 != 0x0u32) as u32) as u8) as u32;
+    s.x = r3_x as u8;
+    s.z = r4_z as u8;
+    s.n = r6_n as u8;
     s.pc = pc.wrapping_add(2);
     4
 }
@@ -2939,15 +3542,20 @@ fn op_b6<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // LAX zpy
 #[inline(always)]
 fn op_b7<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u2: u32 = (b1 + (s.y as u32)) & 0xff;
     let u0: u32 = u2;
     let u3: u32 = bus.load(u0 as u16) as u32;
-    s.a = (u3) as u8;
-    s.x = (u3) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u4: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u4 != 0x0u32) as u32) as u8;
+    let r3_a: u32 = ((u3) as u8) as u32;
+    let r4_x: u32 = ((u3) as u8) as u32;
+    let r5_z: u32 = (((r3_a == 0x0u32) as u32) as u8) as u32;
+    let u4: u32 = (r3_a & 0x80u32) & 0xff;
+    let r7_n: u32 = (((u4 != 0x0u32) as u32) as u8) as u32;
+    s.a = r3_a as u8;
+    s.x = r4_x as u8;
+    s.z = r5_z as u8;
+    s.n = r7_n as u8;
     s.pc = pc.wrapping_add(2);
     4
 }
@@ -2955,7 +3563,9 @@ fn op_b7<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // CLV impl
 #[inline(always)]
 fn op_b8<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
-    s.v = (0x0u32) as u8;
+    bus.sync(s);
+    let r0_v: u32 = ((0x0u32) as u8) as u32;
+    s.v = r0_v as u8;
     s.pc = pc.wrapping_add(1);
     2
 }
@@ -2963,16 +3573,20 @@ fn op_b8<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // LDA absy
 #[inline(always)]
 fn op_b9<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
     let u2: u32 = (s.y as u32);
     let u0: u32 = (w + u2) & 0xffff;
     let u4: u32 = bus.load(u0 as u16) as u32;
-    s.a = (u4) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u5: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u5 != 0x0u32) as u32) as u8;
+    let r3_a: u32 = ((u4) as u8) as u32;
+    let r4_z: u32 = (((r3_a == 0x0u32) as u32) as u8) as u32;
+    let u5: u32 = (r3_a & 0x80u32) & 0xff;
+    let r6_n: u32 = (((u5 != 0x0u32) as u32) as u8) as u32;
+    s.a = r3_a as u8;
+    s.z = r4_z as u8;
+    s.n = r6_n as u8;
     s.pc = pc.wrapping_add(3);
     4 + cross(w, s.y)
 }
@@ -2980,10 +3594,14 @@ fn op_b9<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // TSX impl
 #[inline(always)]
 fn op_ba<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
-    s.x = ((s.sp as u32)) as u8;
-    s.z = (((s.x as u32) == 0x0u32) as u32) as u8;
-    let u0: u32 = ((s.x as u32) & 0x80u32) & 0xff;
-    s.n = ((u0 != 0x0u32) as u32) as u8;
+    bus.sync(s);
+    let r0_x: u32 = (((s.sp as u32)) as u8) as u32;
+    let r1_z: u32 = (((r0_x == 0x0u32) as u32) as u8) as u32;
+    let u0: u32 = (r0_x & 0x80u32) & 0xff;
+    let r3_n: u32 = (((u0 != 0x0u32) as u32) as u8) as u32;
+    s.x = r0_x as u8;
+    s.z = r1_z as u8;
+    s.n = r3_n as u8;
     s.pc = pc.wrapping_add(1);
     2
 }
@@ -2991,6 +3609,7 @@ fn op_ba<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // LAS absy
 #[inline(always)]
 fn op_bb<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
@@ -2998,12 +3617,17 @@ fn op_bb<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u0: u32 = (w + u2) & 0xffff;
     let u5: u32 = bus.load(u0 as u16) as u32;
     let u4: u32 = (u5 & (s.sp as u32)) & 0xff;
-    s.a = (u4) as u8;
-    s.x = (u4) as u8;
-    s.sp = (u4) as u8;
-    s.z = ((u4 == 0x0u32) as u32) as u8;
+    let r4_a: u32 = ((u4) as u8) as u32;
+    let r5_x: u32 = ((u4) as u8) as u32;
+    let r6_sp: u32 = ((u4) as u8) as u32;
+    let r7_z: u32 = (((u4 == 0x0u32) as u32) as u8) as u32;
     let u6: u32 = (u4 & 0x80u32) & 0xff;
-    s.n = ((u6 != 0x0u32) as u32) as u8;
+    let r9_n: u32 = (((u6 != 0x0u32) as u32) as u8) as u32;
+    s.a = r4_a as u8;
+    s.x = r5_x as u8;
+    s.sp = r6_sp as u8;
+    s.z = r7_z as u8;
+    s.n = r9_n as u8;
     s.pc = pc.wrapping_add(3);
     4 + cross(w, s.y)
 }
@@ -3011,16 +3635,20 @@ fn op_bb<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // LDY absx
 #[inline(always)]
 fn op_bc<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
     let u2: u32 = (s.x as u32);
     let u0: u32 = (w + u2) & 0xffff;
     let u4: u32 = bus.load(u0 as u16) as u32;
-    s.y = (u4) as u8;
-    s.z = (((s.y as u32) == 0x0u32) as u32) as u8;
-    let u5: u32 = ((s.y as u32) & 0x80u32) & 0xff;
-    s.n = ((u5 != 0x0u32) as u32) as u8;
+    let r3_y: u32 = ((u4) as u8) as u32;
+    let r4_z: u32 = (((r3_y == 0x0u32) as u32) as u8) as u32;
+    let u5: u32 = (r3_y & 0x80u32) & 0xff;
+    let r6_n: u32 = (((u5 != 0x0u32) as u32) as u8) as u32;
+    s.y = r3_y as u8;
+    s.z = r4_z as u8;
+    s.n = r6_n as u8;
     s.pc = pc.wrapping_add(3);
     4 + cross(w, s.x)
 }
@@ -3028,16 +3656,20 @@ fn op_bc<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // LDA absx
 #[inline(always)]
 fn op_bd<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
     let u2: u32 = (s.x as u32);
     let u0: u32 = (w + u2) & 0xffff;
     let u4: u32 = bus.load(u0 as u16) as u32;
-    s.a = (u4) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u5: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u5 != 0x0u32) as u32) as u8;
+    let r3_a: u32 = ((u4) as u8) as u32;
+    let r4_z: u32 = (((r3_a == 0x0u32) as u32) as u8) as u32;
+    let u5: u32 = (r3_a & 0x80u32) & 0xff;
+    let r6_n: u32 = (((u5 != 0x0u32) as u32) as u8) as u32;
+    s.a = r3_a as u8;
+    s.z = r4_z as u8;
+    s.n = r6_n as u8;
     s.pc = pc.wrapping_add(3);
     4 + cross(w, s.x)
 }
@@ -3045,16 +3677,20 @@ fn op_bd<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // LDX absy
 #[inline(always)]
 fn op_be<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
     let u2: u32 = (s.y as u32);
     let u0: u32 = (w + u2) & 0xffff;
     let u4: u32 = bus.load(u0 as u16) as u32;
-    s.x = (u4) as u8;
-    s.z = (((s.x as u32) == 0x0u32) as u32) as u8;
-    let u5: u32 = ((s.x as u32) & 0x80u32) & 0xff;
-    s.n = ((u5 != 0x0u32) as u32) as u8;
+    let r3_x: u32 = ((u4) as u8) as u32;
+    let r4_z: u32 = (((r3_x == 0x0u32) as u32) as u8) as u32;
+    let u5: u32 = (r3_x & 0x80u32) & 0xff;
+    let r6_n: u32 = (((u5 != 0x0u32) as u32) as u8) as u32;
+    s.x = r3_x as u8;
+    s.z = r4_z as u8;
+    s.n = r6_n as u8;
     s.pc = pc.wrapping_add(3);
     4 + cross(w, s.y)
 }
@@ -3062,17 +3698,22 @@ fn op_be<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // LAX absy
 #[inline(always)]
 fn op_bf<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
     let u2: u32 = (s.y as u32);
     let u0: u32 = (w + u2) & 0xffff;
     let u4: u32 = bus.load(u0 as u16) as u32;
-    s.a = (u4) as u8;
-    s.x = (u4) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u5: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u5 != 0x0u32) as u32) as u8;
+    let r3_a: u32 = ((u4) as u8) as u32;
+    let r4_x: u32 = ((u4) as u8) as u32;
+    let r5_z: u32 = (((r3_a == 0x0u32) as u32) as u8) as u32;
+    let u5: u32 = (r3_a & 0x80u32) & 0xff;
+    let r7_n: u32 = (((u5 != 0x0u32) as u32) as u8) as u32;
+    s.a = r3_a as u8;
+    s.x = r4_x as u8;
+    s.z = r5_z as u8;
+    s.n = r7_n as u8;
     s.pc = pc.wrapping_add(3);
     4 + cross(w, s.y)
 }
@@ -3080,12 +3721,16 @@ fn op_bf<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // CPY imm
 #[inline(always)]
 fn op_c0<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
-    s.c = ((b1 <= (s.y as u32)) as u32) as u8;
+    let r0_c: u32 = (((b1 <= (s.y as u32)) as u32) as u8) as u32;
     let u0: u32 = (s.y as u32).wrapping_sub(b1) & 0xff;
-    s.z = ((u0 == 0x0u32) as u32) as u8;
+    let r2_z: u32 = (((u0 == 0x0u32) as u32) as u8) as u32;
     let u1: u32 = (u0 & 0x80u32) & 0xff;
-    s.n = ((u1 != 0x0u32) as u32) as u8;
+    let r4_n: u32 = (((u1 != 0x0u32) as u32) as u8) as u32;
+    s.c = r0_c as u8;
+    s.z = r2_z as u8;
+    s.n = r4_n as u8;
     s.pc = pc.wrapping_add(2);
     2
 }
@@ -3093,6 +3738,7 @@ fn op_c0<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // CMP indx
 #[inline(always)]
 fn op_c1<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = (b1 + (s.x as u32)) & 0xff;
     let u1: u32 = (u0 + 0x1u32) & 0xff;
@@ -3105,11 +3751,14 @@ fn op_c1<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u14: u32 = u2;
     let u8: u32 = (u10 | u14) & 0xffff;
     let u16: u32 = bus.load(u8 as u16) as u32;
-    s.c = ((u16 <= (s.a as u32)) as u32) as u8;
+    let r11_c: u32 = (((u16 <= (s.a as u32)) as u32) as u8) as u32;
     let u17: u32 = (s.a as u32).wrapping_sub(u16) & 0xff;
-    s.z = ((u17 == 0x0u32) as u32) as u8;
+    let r13_z: u32 = (((u17 == 0x0u32) as u32) as u8) as u32;
     let u18: u32 = (u17 & 0x80u32) & 0xff;
-    s.n = ((u18 != 0x0u32) as u32) as u8;
+    let r15_n: u32 = (((u18 != 0x0u32) as u32) as u8) as u32;
+    s.c = r11_c as u8;
+    s.z = r13_z as u8;
+    s.n = r15_n as u8;
     s.pc = pc.wrapping_add(2);
     6
 }
@@ -3117,6 +3766,7 @@ fn op_c1<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // NOP imm
 #[inline(always)]
 fn op_c2<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     s.pc = pc.wrapping_add(2);
     2
@@ -3125,6 +3775,7 @@ fn op_c2<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // DCP indx
 #[inline(always)]
 fn op_c3<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = (b1 + (s.x as u32)) & 0xff;
     let u1: u32 = (u0 + 0x1u32) & 0xff;
@@ -3139,11 +3790,14 @@ fn op_c3<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u17: u32 = bus.load(u8 as u16) as u32;
     let u16: u32 = u17.wrapping_sub(0x1u32) & 0xff;
     bus.store(u8 as u16, u16 as u8);
-    s.c = ((u16 <= (s.a as u32)) as u32) as u8;
+    let r13_c: u32 = (((u16 <= (s.a as u32)) as u32) as u8) as u32;
     let u18: u32 = (s.a as u32).wrapping_sub(u16) & 0xff;
-    s.z = ((u18 == 0x0u32) as u32) as u8;
+    let r15_z: u32 = (((u18 == 0x0u32) as u32) as u8) as u32;
     let u19: u32 = (u18 & 0x80u32) & 0xff;
-    s.n = ((u19 != 0x0u32) as u32) as u8;
+    let r17_n: u32 = (((u19 != 0x0u32) as u32) as u8) as u32;
+    s.c = r13_c as u8;
+    s.z = r15_z as u8;
+    s.n = r17_n as u8;
     s.pc = pc.wrapping_add(2);
     8
 }
@@ -3151,13 +3805,17 @@ fn op_c3<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // CPY zp
 #[inline(always)]
 fn op_c4<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = bus.load(b1 as u16) as u32;
-    s.c = ((u0 <= (s.y as u32)) as u32) as u8;
+    let r1_c: u32 = (((u0 <= (s.y as u32)) as u32) as u8) as u32;
     let u1: u32 = (s.y as u32).wrapping_sub(u0) & 0xff;
-    s.z = ((u1 == 0x0u32) as u32) as u8;
+    let r3_z: u32 = (((u1 == 0x0u32) as u32) as u8) as u32;
     let u2: u32 = (u1 & 0x80u32) & 0xff;
-    s.n = ((u2 != 0x0u32) as u32) as u8;
+    let r5_n: u32 = (((u2 != 0x0u32) as u32) as u8) as u32;
+    s.c = r1_c as u8;
+    s.z = r3_z as u8;
+    s.n = r5_n as u8;
     s.pc = pc.wrapping_add(2);
     3
 }
@@ -3165,13 +3823,17 @@ fn op_c4<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // CMP zp
 #[inline(always)]
 fn op_c5<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = bus.load(b1 as u16) as u32;
-    s.c = ((u0 <= (s.a as u32)) as u32) as u8;
+    let r1_c: u32 = (((u0 <= (s.a as u32)) as u32) as u8) as u32;
     let u1: u32 = (s.a as u32).wrapping_sub(u0) & 0xff;
-    s.z = ((u1 == 0x0u32) as u32) as u8;
+    let r3_z: u32 = (((u1 == 0x0u32) as u32) as u8) as u32;
     let u2: u32 = (u1 & 0x80u32) & 0xff;
-    s.n = ((u2 != 0x0u32) as u32) as u8;
+    let r5_n: u32 = (((u2 != 0x0u32) as u32) as u8) as u32;
+    s.c = r1_c as u8;
+    s.z = r3_z as u8;
+    s.n = r5_n as u8;
     s.pc = pc.wrapping_add(2);
     3
 }
@@ -3179,13 +3841,16 @@ fn op_c5<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // DEC zp
 #[inline(always)]
 fn op_c6<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = bus.load(b1 as u16) as u32;
     let u1: u32 = u0.wrapping_sub(0x1u32) & 0xff;
     bus.store(b1 as u16, u1 as u8);
-    s.z = ((u1 == 0x0u32) as u32) as u8;
+    let r3_z: u32 = (((u1 == 0x0u32) as u32) as u8) as u32;
     let u2: u32 = (u1 & 0x80u32) & 0xff;
-    s.n = ((u2 != 0x0u32) as u32) as u8;
+    let r5_n: u32 = (((u2 != 0x0u32) as u32) as u8) as u32;
+    s.z = r3_z as u8;
+    s.n = r5_n as u8;
     s.pc = pc.wrapping_add(2);
     5
 }
@@ -3193,15 +3858,19 @@ fn op_c6<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // DCP zp
 #[inline(always)]
 fn op_c7<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u1: u32 = bus.load(b1 as u16) as u32;
     let u0: u32 = u1.wrapping_sub(0x1u32) & 0xff;
     bus.store(b1 as u16, u0 as u8);
-    s.c = ((u0 <= (s.a as u32)) as u32) as u8;
+    let r3_c: u32 = (((u0 <= (s.a as u32)) as u32) as u8) as u32;
     let u2: u32 = (s.a as u32).wrapping_sub(u0) & 0xff;
-    s.z = ((u2 == 0x0u32) as u32) as u8;
+    let r5_z: u32 = (((u2 == 0x0u32) as u32) as u8) as u32;
     let u3: u32 = (u2 & 0x80u32) & 0xff;
-    s.n = ((u3 != 0x0u32) as u32) as u8;
+    let r7_n: u32 = (((u3 != 0x0u32) as u32) as u8) as u32;
+    s.c = r3_c as u8;
+    s.z = r5_z as u8;
+    s.n = r7_n as u8;
     s.pc = pc.wrapping_add(2);
     5
 }
@@ -3209,10 +3878,14 @@ fn op_c7<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // INY impl
 #[inline(always)]
 fn op_c8<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
-    s.y = (((s.y as u32) + 0x1u32) & 0xff) as u8;
-    s.z = (((s.y as u32) == 0x0u32) as u32) as u8;
-    let u0: u32 = ((s.y as u32) & 0x80u32) & 0xff;
-    s.n = ((u0 != 0x0u32) as u32) as u8;
+    bus.sync(s);
+    let r0_y: u32 = ((((s.y as u32) + 0x1u32) & 0xff) as u8) as u32;
+    let r1_z: u32 = (((r0_y == 0x0u32) as u32) as u8) as u32;
+    let u0: u32 = (r0_y & 0x80u32) & 0xff;
+    let r3_n: u32 = (((u0 != 0x0u32) as u32) as u8) as u32;
+    s.y = r0_y as u8;
+    s.z = r1_z as u8;
+    s.n = r3_n as u8;
     s.pc = pc.wrapping_add(1);
     2
 }
@@ -3220,12 +3893,16 @@ fn op_c8<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // CMP imm
 #[inline(always)]
 fn op_c9<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
-    s.c = ((b1 <= (s.a as u32)) as u32) as u8;
+    let r0_c: u32 = (((b1 <= (s.a as u32)) as u32) as u8) as u32;
     let u0: u32 = (s.a as u32).wrapping_sub(b1) & 0xff;
-    s.z = ((u0 == 0x0u32) as u32) as u8;
+    let r2_z: u32 = (((u0 == 0x0u32) as u32) as u8) as u32;
     let u1: u32 = (u0 & 0x80u32) & 0xff;
-    s.n = ((u1 != 0x0u32) as u32) as u8;
+    let r4_n: u32 = (((u1 != 0x0u32) as u32) as u8) as u32;
+    s.c = r0_c as u8;
+    s.z = r2_z as u8;
+    s.n = r4_n as u8;
     s.pc = pc.wrapping_add(2);
     2
 }
@@ -3233,10 +3910,14 @@ fn op_c9<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // DEX impl
 #[inline(always)]
 fn op_ca<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
-    s.x = ((s.x as u32).wrapping_sub(0x1u32) & 0xff) as u8;
-    s.z = (((s.x as u32) == 0x0u32) as u32) as u8;
-    let u0: u32 = ((s.x as u32) & 0x80u32) & 0xff;
-    s.n = ((u0 != 0x0u32) as u32) as u8;
+    bus.sync(s);
+    let r0_x: u32 = (((s.x as u32).wrapping_sub(0x1u32) & 0xff) as u8) as u32;
+    let r1_z: u32 = (((r0_x == 0x0u32) as u32) as u8) as u32;
+    let u0: u32 = (r0_x & 0x80u32) & 0xff;
+    let r3_n: u32 = (((u0 != 0x0u32) as u32) as u8) as u32;
+    s.x = r0_x as u8;
+    s.z = r1_z as u8;
+    s.n = r3_n as u8;
     s.pc = pc.wrapping_add(1);
     2
 }
@@ -3244,13 +3925,18 @@ fn op_ca<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // SBX imm
 #[inline(always)]
 fn op_cb<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = ((s.a as u32) & (s.x as u32)) & 0xff;
-    s.c = ((b1 <= u0) as u32) as u8;
-    s.x = (u0.wrapping_sub(b1) & 0xff) as u8;
-    s.z = (((s.x as u32) == 0x0u32) as u32) as u8;
-    let u1: u32 = ((s.x as u32) & 0x80u32) & 0xff;
-    s.n = ((u1 != 0x0u32) as u32) as u8;
+    let r1_c: u32 = (((b1 <= u0) as u32) as u8) as u32;
+    let r2_x: u32 = ((u0.wrapping_sub(b1) & 0xff) as u8) as u32;
+    let r3_z: u32 = (((r2_x == 0x0u32) as u32) as u8) as u32;
+    let u1: u32 = (r2_x & 0x80u32) & 0xff;
+    let r5_n: u32 = (((u1 != 0x0u32) as u32) as u8) as u32;
+    s.c = r1_c as u8;
+    s.x = r2_x as u8;
+    s.z = r3_z as u8;
+    s.n = r5_n as u8;
     s.pc = pc.wrapping_add(2);
     2
 }
@@ -3258,15 +3944,19 @@ fn op_cb<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // CPY abs
 #[inline(always)]
 fn op_cc<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
     let u0: u32 = bus.load(w as u16) as u32;
-    s.c = ((u0 <= (s.y as u32)) as u32) as u8;
+    let r1_c: u32 = (((u0 <= (s.y as u32)) as u32) as u8) as u32;
     let u1: u32 = (s.y as u32).wrapping_sub(u0) & 0xff;
-    s.z = ((u1 == 0x0u32) as u32) as u8;
+    let r3_z: u32 = (((u1 == 0x0u32) as u32) as u8) as u32;
     let u2: u32 = (u1 & 0x80u32) & 0xff;
-    s.n = ((u2 != 0x0u32) as u32) as u8;
+    let r5_n: u32 = (((u2 != 0x0u32) as u32) as u8) as u32;
+    s.c = r1_c as u8;
+    s.z = r3_z as u8;
+    s.n = r5_n as u8;
     s.pc = pc.wrapping_add(3);
     4
 }
@@ -3274,15 +3964,19 @@ fn op_cc<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // CMP abs
 #[inline(always)]
 fn op_cd<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
     let u0: u32 = bus.load(w as u16) as u32;
-    s.c = ((u0 <= (s.a as u32)) as u32) as u8;
+    let r1_c: u32 = (((u0 <= (s.a as u32)) as u32) as u8) as u32;
     let u1: u32 = (s.a as u32).wrapping_sub(u0) & 0xff;
-    s.z = ((u1 == 0x0u32) as u32) as u8;
+    let r3_z: u32 = (((u1 == 0x0u32) as u32) as u8) as u32;
     let u2: u32 = (u1 & 0x80u32) & 0xff;
-    s.n = ((u2 != 0x0u32) as u32) as u8;
+    let r5_n: u32 = (((u2 != 0x0u32) as u32) as u8) as u32;
+    s.c = r1_c as u8;
+    s.z = r3_z as u8;
+    s.n = r5_n as u8;
     s.pc = pc.wrapping_add(3);
     4
 }
@@ -3290,15 +3984,18 @@ fn op_cd<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // DEC abs
 #[inline(always)]
 fn op_ce<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
     let u0: u32 = bus.load(w as u16) as u32;
     let u1: u32 = u0.wrapping_sub(0x1u32) & 0xff;
     bus.store(w as u16, u1 as u8);
-    s.z = ((u1 == 0x0u32) as u32) as u8;
+    let r3_z: u32 = (((u1 == 0x0u32) as u32) as u8) as u32;
     let u2: u32 = (u1 & 0x80u32) & 0xff;
-    s.n = ((u2 != 0x0u32) as u32) as u8;
+    let r5_n: u32 = (((u2 != 0x0u32) as u32) as u8) as u32;
+    s.z = r3_z as u8;
+    s.n = r5_n as u8;
     s.pc = pc.wrapping_add(3);
     6
 }
@@ -3306,17 +4003,21 @@ fn op_ce<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // DCP abs
 #[inline(always)]
 fn op_cf<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
     let u1: u32 = bus.load(w as u16) as u32;
     let u0: u32 = u1.wrapping_sub(0x1u32) & 0xff;
     bus.store(w as u16, u0 as u8);
-    s.c = ((u0 <= (s.a as u32)) as u32) as u8;
+    let r3_c: u32 = (((u0 <= (s.a as u32)) as u32) as u8) as u32;
     let u2: u32 = (s.a as u32).wrapping_sub(u0) & 0xff;
-    s.z = ((u2 == 0x0u32) as u32) as u8;
+    let r5_z: u32 = (((u2 == 0x0u32) as u32) as u8) as u32;
     let u3: u32 = (u2 & 0x80u32) & 0xff;
-    s.n = ((u3 != 0x0u32) as u32) as u8;
+    let r7_n: u32 = (((u3 != 0x0u32) as u32) as u8) as u32;
+    s.c = r3_c as u8;
+    s.z = r5_z as u8;
+    s.n = r7_n as u8;
     s.pc = pc.wrapping_add(3);
     6
 }
@@ -3324,6 +4025,7 @@ fn op_cf<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // BNE rel
 #[inline(always)]
 fn op_d0<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     2 + s.branch(s.z == 0, pc, b1)
 }
@@ -3331,6 +4033,7 @@ fn op_d0<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // CMP indy
 #[inline(always)]
 fn op_d1<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = bus.load(b1 as u16) as u32;
     let u1: u32 = bus.load(((b1 + 1) & 0xff) as u16) as u32;
@@ -3341,11 +4044,14 @@ fn op_d1<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u12: u32 = (s.y as u32);
     let u10: u32 = (u2 + u12) & 0xffff;
     let u14: u32 = bus.load(u10 as u16) as u32;
-    s.c = ((u14 <= (s.a as u32)) as u32) as u8;
+    let r9_c: u32 = (((u14 <= (s.a as u32)) as u32) as u8) as u32;
     let u15: u32 = (s.a as u32).wrapping_sub(u14) & 0xff;
-    s.z = ((u15 == 0x0u32) as u32) as u8;
+    let r11_z: u32 = (((u15 == 0x0u32) as u32) as u8) as u32;
     let u16: u32 = (u15 & 0x80u32) & 0xff;
-    s.n = ((u16 != 0x0u32) as u32) as u8;
+    let r13_n: u32 = (((u16 != 0x0u32) as u32) as u8) as u32;
+    s.c = r9_c as u8;
+    s.z = r11_z as u8;
+    s.n = r13_n as u8;
     s.pc = pc.wrapping_add(2);
     5 + cross(u2, s.y)
 }
@@ -3353,6 +4059,7 @@ fn op_d1<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // JAM impl
 #[inline(always)]
 fn op_d2<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     s.jam(pc);
     2
 }
@@ -3360,6 +4067,7 @@ fn op_d2<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // DCP indy
 #[inline(always)]
 fn op_d3<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = bus.load(b1 as u16) as u32;
     let u1: u32 = bus.load(((b1 + 1) & 0xff) as u16) as u32;
@@ -3372,11 +4080,14 @@ fn op_d3<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u15: u32 = bus.load(u10 as u16) as u32;
     let u14: u32 = u15.wrapping_sub(0x1u32) & 0xff;
     bus.store(u10 as u16, u14 as u8);
-    s.c = ((u14 <= (s.a as u32)) as u32) as u8;
+    let r11_c: u32 = (((u14 <= (s.a as u32)) as u32) as u8) as u32;
     let u16: u32 = (s.a as u32).wrapping_sub(u14) & 0xff;
-    s.z = ((u16 == 0x0u32) as u32) as u8;
+    let r13_z: u32 = (((u16 == 0x0u32) as u32) as u8) as u32;
     let u17: u32 = (u16 & 0x80u32) & 0xff;
-    s.n = ((u17 != 0x0u32) as u32) as u8;
+    let r15_n: u32 = (((u17 != 0x0u32) as u32) as u8) as u32;
+    s.c = r11_c as u8;
+    s.z = r13_z as u8;
+    s.n = r15_n as u8;
     s.pc = pc.wrapping_add(2);
     8
 }
@@ -3384,6 +4095,7 @@ fn op_d3<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // NOP zpx
 #[inline(always)]
 fn op_d4<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u2: u32 = (b1 + (s.x as u32)) & 0xff;
     let u0: u32 = u2;
@@ -3395,15 +4107,19 @@ fn op_d4<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // CMP zpx
 #[inline(always)]
 fn op_d5<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u2: u32 = (b1 + (s.x as u32)) & 0xff;
     let u0: u32 = u2;
     let u3: u32 = bus.load(u0 as u16) as u32;
-    s.c = ((u3 <= (s.a as u32)) as u32) as u8;
+    let r3_c: u32 = (((u3 <= (s.a as u32)) as u32) as u8) as u32;
     let u4: u32 = (s.a as u32).wrapping_sub(u3) & 0xff;
-    s.z = ((u4 == 0x0u32) as u32) as u8;
+    let r5_z: u32 = (((u4 == 0x0u32) as u32) as u8) as u32;
     let u5: u32 = (u4 & 0x80u32) & 0xff;
-    s.n = ((u5 != 0x0u32) as u32) as u8;
+    let r7_n: u32 = (((u5 != 0x0u32) as u32) as u8) as u32;
+    s.c = r3_c as u8;
+    s.z = r5_z as u8;
+    s.n = r7_n as u8;
     s.pc = pc.wrapping_add(2);
     4
 }
@@ -3411,15 +4127,18 @@ fn op_d5<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // DEC zpx
 #[inline(always)]
 fn op_d6<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u2: u32 = (b1 + (s.x as u32)) & 0xff;
     let u0: u32 = u2;
     let u3: u32 = bus.load(u0 as u16) as u32;
     let u4: u32 = u3.wrapping_sub(0x1u32) & 0xff;
     bus.store(u0 as u16, u4 as u8);
-    s.z = ((u4 == 0x0u32) as u32) as u8;
+    let r5_z: u32 = (((u4 == 0x0u32) as u32) as u8) as u32;
     let u5: u32 = (u4 & 0x80u32) & 0xff;
-    s.n = ((u5 != 0x0u32) as u32) as u8;
+    let r7_n: u32 = (((u5 != 0x0u32) as u32) as u8) as u32;
+    s.z = r5_z as u8;
+    s.n = r7_n as u8;
     s.pc = pc.wrapping_add(2);
     6
 }
@@ -3427,17 +4146,21 @@ fn op_d6<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // DCP zpx
 #[inline(always)]
 fn op_d7<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u2: u32 = (b1 + (s.x as u32)) & 0xff;
     let u0: u32 = u2;
     let u4: u32 = bus.load(u0 as u16) as u32;
     let u3: u32 = u4.wrapping_sub(0x1u32) & 0xff;
     bus.store(u0 as u16, u3 as u8);
-    s.c = ((u3 <= (s.a as u32)) as u32) as u8;
+    let r5_c: u32 = (((u3 <= (s.a as u32)) as u32) as u8) as u32;
     let u5: u32 = (s.a as u32).wrapping_sub(u3) & 0xff;
-    s.z = ((u5 == 0x0u32) as u32) as u8;
+    let r7_z: u32 = (((u5 == 0x0u32) as u32) as u8) as u32;
     let u6: u32 = (u5 & 0x80u32) & 0xff;
-    s.n = ((u6 != 0x0u32) as u32) as u8;
+    let r9_n: u32 = (((u6 != 0x0u32) as u32) as u8) as u32;
+    s.c = r5_c as u8;
+    s.z = r7_z as u8;
+    s.n = r9_n as u8;
     s.pc = pc.wrapping_add(2);
     6
 }
@@ -3445,7 +4168,9 @@ fn op_d7<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // CLD impl
 #[inline(always)]
 fn op_d8<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
-    s.d = (0x0u32) as u8;
+    bus.sync(s);
+    let r0_d: u32 = ((0x0u32) as u8) as u32;
+    s.d = r0_d as u8;
     s.pc = pc.wrapping_add(1);
     2
 }
@@ -3453,17 +4178,21 @@ fn op_d8<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // CMP absy
 #[inline(always)]
 fn op_d9<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
     let u2: u32 = (s.y as u32);
     let u0: u32 = (w + u2) & 0xffff;
     let u4: u32 = bus.load(u0 as u16) as u32;
-    s.c = ((u4 <= (s.a as u32)) as u32) as u8;
+    let r3_c: u32 = (((u4 <= (s.a as u32)) as u32) as u8) as u32;
     let u5: u32 = (s.a as u32).wrapping_sub(u4) & 0xff;
-    s.z = ((u5 == 0x0u32) as u32) as u8;
+    let r5_z: u32 = (((u5 == 0x0u32) as u32) as u8) as u32;
     let u6: u32 = (u5 & 0x80u32) & 0xff;
-    s.n = ((u6 != 0x0u32) as u32) as u8;
+    let r7_n: u32 = (((u6 != 0x0u32) as u32) as u8) as u32;
+    s.c = r3_c as u8;
+    s.z = r5_z as u8;
+    s.n = r7_n as u8;
     s.pc = pc.wrapping_add(3);
     4 + cross(w, s.y)
 }
@@ -3471,6 +4200,7 @@ fn op_d9<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // NOP impl
 #[inline(always)]
 fn op_da<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     s.pc = pc.wrapping_add(1);
     2
 }
@@ -3478,6 +4208,7 @@ fn op_da<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // DCP absy
 #[inline(always)]
 fn op_db<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
@@ -3486,11 +4217,14 @@ fn op_db<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u5: u32 = bus.load(u0 as u16) as u32;
     let u4: u32 = u5.wrapping_sub(0x1u32) & 0xff;
     bus.store(u0 as u16, u4 as u8);
-    s.c = ((u4 <= (s.a as u32)) as u32) as u8;
+    let r5_c: u32 = (((u4 <= (s.a as u32)) as u32) as u8) as u32;
     let u6: u32 = (s.a as u32).wrapping_sub(u4) & 0xff;
-    s.z = ((u6 == 0x0u32) as u32) as u8;
+    let r7_z: u32 = (((u6 == 0x0u32) as u32) as u8) as u32;
     let u7: u32 = (u6 & 0x80u32) & 0xff;
-    s.n = ((u7 != 0x0u32) as u32) as u8;
+    let r9_n: u32 = (((u7 != 0x0u32) as u32) as u8) as u32;
+    s.c = r5_c as u8;
+    s.z = r7_z as u8;
+    s.n = r9_n as u8;
     s.pc = pc.wrapping_add(3);
     7
 }
@@ -3498,6 +4232,7 @@ fn op_db<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // NOP absx
 #[inline(always)]
 fn op_dc<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
@@ -3511,17 +4246,21 @@ fn op_dc<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // CMP absx
 #[inline(always)]
 fn op_dd<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
     let u2: u32 = (s.x as u32);
     let u0: u32 = (w + u2) & 0xffff;
     let u4: u32 = bus.load(u0 as u16) as u32;
-    s.c = ((u4 <= (s.a as u32)) as u32) as u8;
+    let r3_c: u32 = (((u4 <= (s.a as u32)) as u32) as u8) as u32;
     let u5: u32 = (s.a as u32).wrapping_sub(u4) & 0xff;
-    s.z = ((u5 == 0x0u32) as u32) as u8;
+    let r5_z: u32 = (((u5 == 0x0u32) as u32) as u8) as u32;
     let u6: u32 = (u5 & 0x80u32) & 0xff;
-    s.n = ((u6 != 0x0u32) as u32) as u8;
+    let r7_n: u32 = (((u6 != 0x0u32) as u32) as u8) as u32;
+    s.c = r3_c as u8;
+    s.z = r5_z as u8;
+    s.n = r7_n as u8;
     s.pc = pc.wrapping_add(3);
     4 + cross(w, s.x)
 }
@@ -3529,6 +4268,7 @@ fn op_dd<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // DEC absx
 #[inline(always)]
 fn op_de<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
@@ -3537,9 +4277,11 @@ fn op_de<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u4: u32 = bus.load(u0 as u16) as u32;
     let u5: u32 = u4.wrapping_sub(0x1u32) & 0xff;
     bus.store(u0 as u16, u5 as u8);
-    s.z = ((u5 == 0x0u32) as u32) as u8;
+    let r5_z: u32 = (((u5 == 0x0u32) as u32) as u8) as u32;
     let u6: u32 = (u5 & 0x80u32) & 0xff;
-    s.n = ((u6 != 0x0u32) as u32) as u8;
+    let r7_n: u32 = (((u6 != 0x0u32) as u32) as u8) as u32;
+    s.z = r5_z as u8;
+    s.n = r7_n as u8;
     s.pc = pc.wrapping_add(3);
     7
 }
@@ -3547,6 +4289,7 @@ fn op_de<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // DCP absx
 #[inline(always)]
 fn op_df<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
@@ -3555,11 +4298,14 @@ fn op_df<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u5: u32 = bus.load(u0 as u16) as u32;
     let u4: u32 = u5.wrapping_sub(0x1u32) & 0xff;
     bus.store(u0 as u16, u4 as u8);
-    s.c = ((u4 <= (s.a as u32)) as u32) as u8;
+    let r5_c: u32 = (((u4 <= (s.a as u32)) as u32) as u8) as u32;
     let u6: u32 = (s.a as u32).wrapping_sub(u4) & 0xff;
-    s.z = ((u6 == 0x0u32) as u32) as u8;
+    let r7_z: u32 = (((u6 == 0x0u32) as u32) as u8) as u32;
     let u7: u32 = (u6 & 0x80u32) & 0xff;
-    s.n = ((u7 != 0x0u32) as u32) as u8;
+    let r9_n: u32 = (((u7 != 0x0u32) as u32) as u8) as u32;
+    s.c = r5_c as u8;
+    s.z = r7_z as u8;
+    s.n = r9_n as u8;
     s.pc = pc.wrapping_add(3);
     7
 }
@@ -3567,12 +4313,16 @@ fn op_df<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // CPX imm
 #[inline(always)]
 fn op_e0<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
-    s.c = ((b1 <= (s.x as u32)) as u32) as u8;
+    let r0_c: u32 = (((b1 <= (s.x as u32)) as u32) as u8) as u32;
     let u0: u32 = (s.x as u32).wrapping_sub(b1) & 0xff;
-    s.z = ((u0 == 0x0u32) as u32) as u8;
+    let r2_z: u32 = (((u0 == 0x0u32) as u32) as u8) as u32;
     let u1: u32 = (u0 & 0x80u32) & 0xff;
-    s.n = ((u1 != 0x0u32) as u32) as u8;
+    let r4_n: u32 = (((u1 != 0x0u32) as u32) as u8) as u32;
+    s.c = r0_c as u8;
+    s.z = r2_z as u8;
+    s.n = r4_n as u8;
     s.pc = pc.wrapping_add(2);
     2
 }
@@ -3580,6 +4330,7 @@ fn op_e0<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // SBC indx
 #[inline(always)]
 fn op_e1<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = (b1 + (s.x as u32)) & 0xff;
     let u1: u32 = (u0 + 0x1u32) & 0xff;
@@ -3597,18 +4348,23 @@ fn op_e1<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u22: u32 = u17;
     let u18: u32 = (u20 + u22) & 0xffff;
     let u24: u32 = (s.a as u32);
-    s.c = ((u18 <= u24) as u32) as u8;
+    let r16_c: u32 = (((u18 <= u24) as u32) as u8) as u32;
     let u27: u32 = (u16 + u17) & 0xff;
     let u26: u32 = (s.a as u32).wrapping_sub(u27) & 0xff;
     let u28: u32 = ((s.a as u32) ^ u16) & 0xff;
     let u29: u32 = ((s.a as u32) ^ u26) & 0xff;
     let u31: u32 = (u28 & u29) & 0xff;
     let u30: u32 = (u31 & 0x80u32) & 0xff;
-    s.v = ((u30 != 0x0u32) as u32) as u8;
-    s.a = (u26) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u32: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u32 != 0x0u32) as u32) as u8;
+    let r23_v: u32 = (((u30 != 0x0u32) as u32) as u8) as u32;
+    let r24_a: u32 = ((u26) as u8) as u32;
+    let r25_z: u32 = (((r24_a == 0x0u32) as u32) as u8) as u32;
+    let u32: u32 = (r24_a & 0x80u32) & 0xff;
+    let r27_n: u32 = (((u32 != 0x0u32) as u32) as u8) as u32;
+    s.c = r16_c as u8;
+    s.v = r23_v as u8;
+    s.a = r24_a as u8;
+    s.z = r25_z as u8;
+    s.n = r27_n as u8;
     s.pc = pc.wrapping_add(2);
     6
 }
@@ -3616,6 +4372,7 @@ fn op_e1<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // NOP imm
 #[inline(always)]
 fn op_e2<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     s.pc = pc.wrapping_add(2);
     2
@@ -3624,6 +4381,7 @@ fn op_e2<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // ISC indx
 #[inline(always)]
 fn op_e3<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = (b1 + (s.x as u32)) & 0xff;
     let u1: u32 = (u0 + 0x1u32) & 0xff;
@@ -3643,18 +4401,23 @@ fn op_e3<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u23: u32 = u18;
     let u19: u32 = (u21 + u23) & 0xffff;
     let u25: u32 = (s.a as u32);
-    s.c = ((u19 <= u25) as u32) as u8;
+    let r18_c: u32 = (((u19 <= u25) as u32) as u8) as u32;
     let u28: u32 = (u16 + u18) & 0xff;
     let u27: u32 = (s.a as u32).wrapping_sub(u28) & 0xff;
     let u29: u32 = ((s.a as u32) ^ u16) & 0xff;
     let u30: u32 = ((s.a as u32) ^ u27) & 0xff;
     let u32: u32 = (u29 & u30) & 0xff;
     let u31: u32 = (u32 & 0x80u32) & 0xff;
-    s.v = ((u31 != 0x0u32) as u32) as u8;
-    s.a = (u27) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u33: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u33 != 0x0u32) as u32) as u8;
+    let r25_v: u32 = (((u31 != 0x0u32) as u32) as u8) as u32;
+    let r26_a: u32 = ((u27) as u8) as u32;
+    let r27_z: u32 = (((r26_a == 0x0u32) as u32) as u8) as u32;
+    let u33: u32 = (r26_a & 0x80u32) & 0xff;
+    let r29_n: u32 = (((u33 != 0x0u32) as u32) as u8) as u32;
+    s.c = r18_c as u8;
+    s.v = r25_v as u8;
+    s.a = r26_a as u8;
+    s.z = r27_z as u8;
+    s.n = r29_n as u8;
     s.pc = pc.wrapping_add(2);
     8
 }
@@ -3662,13 +4425,17 @@ fn op_e3<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // CPX zp
 #[inline(always)]
 fn op_e4<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = bus.load(b1 as u16) as u32;
-    s.c = ((u0 <= (s.x as u32)) as u32) as u8;
+    let r1_c: u32 = (((u0 <= (s.x as u32)) as u32) as u8) as u32;
     let u1: u32 = (s.x as u32).wrapping_sub(u0) & 0xff;
-    s.z = ((u1 == 0x0u32) as u32) as u8;
+    let r3_z: u32 = (((u1 == 0x0u32) as u32) as u8) as u32;
     let u2: u32 = (u1 & 0x80u32) & 0xff;
-    s.n = ((u2 != 0x0u32) as u32) as u8;
+    let r5_n: u32 = (((u2 != 0x0u32) as u32) as u8) as u32;
+    s.c = r1_c as u8;
+    s.z = r3_z as u8;
+    s.n = r5_n as u8;
     s.pc = pc.wrapping_add(2);
     3
 }
@@ -3676,6 +4443,7 @@ fn op_e4<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // SBC zp
 #[inline(always)]
 fn op_e5<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = bus.load(b1 as u16) as u32;
     let u1: u32 = 0x1u32.wrapping_sub((s.c as u32)) & 0xff;
@@ -3683,18 +4451,23 @@ fn op_e5<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u6: u32 = u1;
     let u2: u32 = (u4 + u6) & 0xffff;
     let u8: u32 = (s.a as u32);
-    s.c = ((u2 <= u8) as u32) as u8;
+    let r6_c: u32 = (((u2 <= u8) as u32) as u8) as u32;
     let u11: u32 = (u0 + u1) & 0xff;
     let u10: u32 = (s.a as u32).wrapping_sub(u11) & 0xff;
     let u12: u32 = ((s.a as u32) ^ u0) & 0xff;
     let u13: u32 = ((s.a as u32) ^ u10) & 0xff;
     let u15: u32 = (u12 & u13) & 0xff;
     let u14: u32 = (u15 & 0x80u32) & 0xff;
-    s.v = ((u14 != 0x0u32) as u32) as u8;
-    s.a = (u10) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u16: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u16 != 0x0u32) as u32) as u8;
+    let r13_v: u32 = (((u14 != 0x0u32) as u32) as u8) as u32;
+    let r14_a: u32 = ((u10) as u8) as u32;
+    let r15_z: u32 = (((r14_a == 0x0u32) as u32) as u8) as u32;
+    let u16: u32 = (r14_a & 0x80u32) & 0xff;
+    let r17_n: u32 = (((u16 != 0x0u32) as u32) as u8) as u32;
+    s.c = r6_c as u8;
+    s.v = r13_v as u8;
+    s.a = r14_a as u8;
+    s.z = r15_z as u8;
+    s.n = r17_n as u8;
     s.pc = pc.wrapping_add(2);
     3
 }
@@ -3702,13 +4475,16 @@ fn op_e5<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // INC zp
 #[inline(always)]
 fn op_e6<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = bus.load(b1 as u16) as u32;
     let u1: u32 = (u0 + 0x1u32) & 0xff;
     bus.store(b1 as u16, u1 as u8);
-    s.z = ((u1 == 0x0u32) as u32) as u8;
+    let r3_z: u32 = (((u1 == 0x0u32) as u32) as u8) as u32;
     let u2: u32 = (u1 & 0x80u32) & 0xff;
-    s.n = ((u2 != 0x0u32) as u32) as u8;
+    let r5_n: u32 = (((u2 != 0x0u32) as u32) as u8) as u32;
+    s.z = r3_z as u8;
+    s.n = r5_n as u8;
     s.pc = pc.wrapping_add(2);
     5
 }
@@ -3716,6 +4492,7 @@ fn op_e6<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // ISC zp
 #[inline(always)]
 fn op_e7<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u1: u32 = bus.load(b1 as u16) as u32;
     let u0: u32 = (u1 + 0x1u32) & 0xff;
@@ -3725,18 +4502,23 @@ fn op_e7<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u7: u32 = u2;
     let u3: u32 = (u5 + u7) & 0xffff;
     let u9: u32 = (s.a as u32);
-    s.c = ((u3 <= u9) as u32) as u8;
+    let r8_c: u32 = (((u3 <= u9) as u32) as u8) as u32;
     let u12: u32 = (u0 + u2) & 0xff;
     let u11: u32 = (s.a as u32).wrapping_sub(u12) & 0xff;
     let u13: u32 = ((s.a as u32) ^ u0) & 0xff;
     let u14: u32 = ((s.a as u32) ^ u11) & 0xff;
     let u16: u32 = (u13 & u14) & 0xff;
     let u15: u32 = (u16 & 0x80u32) & 0xff;
-    s.v = ((u15 != 0x0u32) as u32) as u8;
-    s.a = (u11) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u17: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u17 != 0x0u32) as u32) as u8;
+    let r15_v: u32 = (((u15 != 0x0u32) as u32) as u8) as u32;
+    let r16_a: u32 = ((u11) as u8) as u32;
+    let r17_z: u32 = (((r16_a == 0x0u32) as u32) as u8) as u32;
+    let u17: u32 = (r16_a & 0x80u32) & 0xff;
+    let r19_n: u32 = (((u17 != 0x0u32) as u32) as u8) as u32;
+    s.c = r8_c as u8;
+    s.v = r15_v as u8;
+    s.a = r16_a as u8;
+    s.z = r17_z as u8;
+    s.n = r19_n as u8;
     s.pc = pc.wrapping_add(2);
     5
 }
@@ -3744,10 +4526,14 @@ fn op_e7<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // INX impl
 #[inline(always)]
 fn op_e8<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
-    s.x = (((s.x as u32) + 0x1u32) & 0xff) as u8;
-    s.z = (((s.x as u32) == 0x0u32) as u32) as u8;
-    let u0: u32 = ((s.x as u32) & 0x80u32) & 0xff;
-    s.n = ((u0 != 0x0u32) as u32) as u8;
+    bus.sync(s);
+    let r0_x: u32 = ((((s.x as u32) + 0x1u32) & 0xff) as u8) as u32;
+    let r1_z: u32 = (((r0_x == 0x0u32) as u32) as u8) as u32;
+    let u0: u32 = (r0_x & 0x80u32) & 0xff;
+    let r3_n: u32 = (((u0 != 0x0u32) as u32) as u8) as u32;
+    s.x = r0_x as u8;
+    s.z = r1_z as u8;
+    s.n = r3_n as u8;
     s.pc = pc.wrapping_add(1);
     2
 }
@@ -3755,24 +4541,30 @@ fn op_e8<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // SBC imm
 #[inline(always)]
 fn op_e9<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = 0x1u32.wrapping_sub((s.c as u32)) & 0xff;
     let u3: u32 = b1;
     let u5: u32 = u0;
     let u1: u32 = (u3 + u5) & 0xffff;
     let u7: u32 = (s.a as u32);
-    s.c = ((u1 <= u7) as u32) as u8;
+    let r5_c: u32 = (((u1 <= u7) as u32) as u8) as u32;
     let u10: u32 = (b1 + u0) & 0xff;
     let u9: u32 = (s.a as u32).wrapping_sub(u10) & 0xff;
     let u11: u32 = ((s.a as u32) ^ b1) & 0xff;
     let u12: u32 = ((s.a as u32) ^ u9) & 0xff;
     let u14: u32 = (u11 & u12) & 0xff;
     let u13: u32 = (u14 & 0x80u32) & 0xff;
-    s.v = ((u13 != 0x0u32) as u32) as u8;
-    s.a = (u9) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u15: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u15 != 0x0u32) as u32) as u8;
+    let r12_v: u32 = (((u13 != 0x0u32) as u32) as u8) as u32;
+    let r13_a: u32 = ((u9) as u8) as u32;
+    let r14_z: u32 = (((r13_a == 0x0u32) as u32) as u8) as u32;
+    let u15: u32 = (r13_a & 0x80u32) & 0xff;
+    let r16_n: u32 = (((u15 != 0x0u32) as u32) as u8) as u32;
+    s.c = r5_c as u8;
+    s.v = r12_v as u8;
+    s.a = r13_a as u8;
+    s.z = r14_z as u8;
+    s.n = r16_n as u8;
     s.pc = pc.wrapping_add(2);
     2
 }
@@ -3780,6 +4572,7 @@ fn op_e9<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // NOP impl
 #[inline(always)]
 fn op_ea<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     s.pc = pc.wrapping_add(1);
     2
 }
@@ -3787,24 +4580,30 @@ fn op_ea<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // SBC imm
 #[inline(always)]
 fn op_eb<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = 0x1u32.wrapping_sub((s.c as u32)) & 0xff;
     let u3: u32 = b1;
     let u5: u32 = u0;
     let u1: u32 = (u3 + u5) & 0xffff;
     let u7: u32 = (s.a as u32);
-    s.c = ((u1 <= u7) as u32) as u8;
+    let r5_c: u32 = (((u1 <= u7) as u32) as u8) as u32;
     let u10: u32 = (b1 + u0) & 0xff;
     let u9: u32 = (s.a as u32).wrapping_sub(u10) & 0xff;
     let u11: u32 = ((s.a as u32) ^ b1) & 0xff;
     let u12: u32 = ((s.a as u32) ^ u9) & 0xff;
     let u14: u32 = (u11 & u12) & 0xff;
     let u13: u32 = (u14 & 0x80u32) & 0xff;
-    s.v = ((u13 != 0x0u32) as u32) as u8;
-    s.a = (u9) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u15: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u15 != 0x0u32) as u32) as u8;
+    let r12_v: u32 = (((u13 != 0x0u32) as u32) as u8) as u32;
+    let r13_a: u32 = ((u9) as u8) as u32;
+    let r14_z: u32 = (((r13_a == 0x0u32) as u32) as u8) as u32;
+    let u15: u32 = (r13_a & 0x80u32) & 0xff;
+    let r16_n: u32 = (((u15 != 0x0u32) as u32) as u8) as u32;
+    s.c = r5_c as u8;
+    s.v = r12_v as u8;
+    s.a = r13_a as u8;
+    s.z = r14_z as u8;
+    s.n = r16_n as u8;
     s.pc = pc.wrapping_add(2);
     2
 }
@@ -3812,15 +4611,19 @@ fn op_eb<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // CPX abs
 #[inline(always)]
 fn op_ec<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
     let u0: u32 = bus.load(w as u16) as u32;
-    s.c = ((u0 <= (s.x as u32)) as u32) as u8;
+    let r1_c: u32 = (((u0 <= (s.x as u32)) as u32) as u8) as u32;
     let u1: u32 = (s.x as u32).wrapping_sub(u0) & 0xff;
-    s.z = ((u1 == 0x0u32) as u32) as u8;
+    let r3_z: u32 = (((u1 == 0x0u32) as u32) as u8) as u32;
     let u2: u32 = (u1 & 0x80u32) & 0xff;
-    s.n = ((u2 != 0x0u32) as u32) as u8;
+    let r5_n: u32 = (((u2 != 0x0u32) as u32) as u8) as u32;
+    s.c = r1_c as u8;
+    s.z = r3_z as u8;
+    s.n = r5_n as u8;
     s.pc = pc.wrapping_add(3);
     4
 }
@@ -3828,6 +4631,7 @@ fn op_ec<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // SBC abs
 #[inline(always)]
 fn op_ed<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
@@ -3837,18 +4641,23 @@ fn op_ed<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u6: u32 = u1;
     let u2: u32 = (u4 + u6) & 0xffff;
     let u8: u32 = (s.a as u32);
-    s.c = ((u2 <= u8) as u32) as u8;
+    let r6_c: u32 = (((u2 <= u8) as u32) as u8) as u32;
     let u11: u32 = (u0 + u1) & 0xff;
     let u10: u32 = (s.a as u32).wrapping_sub(u11) & 0xff;
     let u12: u32 = ((s.a as u32) ^ u0) & 0xff;
     let u13: u32 = ((s.a as u32) ^ u10) & 0xff;
     let u15: u32 = (u12 & u13) & 0xff;
     let u14: u32 = (u15 & 0x80u32) & 0xff;
-    s.v = ((u14 != 0x0u32) as u32) as u8;
-    s.a = (u10) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u16: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u16 != 0x0u32) as u32) as u8;
+    let r13_v: u32 = (((u14 != 0x0u32) as u32) as u8) as u32;
+    let r14_a: u32 = ((u10) as u8) as u32;
+    let r15_z: u32 = (((r14_a == 0x0u32) as u32) as u8) as u32;
+    let u16: u32 = (r14_a & 0x80u32) & 0xff;
+    let r17_n: u32 = (((u16 != 0x0u32) as u32) as u8) as u32;
+    s.c = r6_c as u8;
+    s.v = r13_v as u8;
+    s.a = r14_a as u8;
+    s.z = r15_z as u8;
+    s.n = r17_n as u8;
     s.pc = pc.wrapping_add(3);
     4
 }
@@ -3856,15 +4665,18 @@ fn op_ed<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // INC abs
 #[inline(always)]
 fn op_ee<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
     let u0: u32 = bus.load(w as u16) as u32;
     let u1: u32 = (u0 + 0x1u32) & 0xff;
     bus.store(w as u16, u1 as u8);
-    s.z = ((u1 == 0x0u32) as u32) as u8;
+    let r3_z: u32 = (((u1 == 0x0u32) as u32) as u8) as u32;
     let u2: u32 = (u1 & 0x80u32) & 0xff;
-    s.n = ((u2 != 0x0u32) as u32) as u8;
+    let r5_n: u32 = (((u2 != 0x0u32) as u32) as u8) as u32;
+    s.z = r3_z as u8;
+    s.n = r5_n as u8;
     s.pc = pc.wrapping_add(3);
     6
 }
@@ -3872,6 +4684,7 @@ fn op_ee<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // ISC abs
 #[inline(always)]
 fn op_ef<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
@@ -3883,18 +4696,23 @@ fn op_ef<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u7: u32 = u2;
     let u3: u32 = (u5 + u7) & 0xffff;
     let u9: u32 = (s.a as u32);
-    s.c = ((u3 <= u9) as u32) as u8;
+    let r8_c: u32 = (((u3 <= u9) as u32) as u8) as u32;
     let u12: u32 = (u0 + u2) & 0xff;
     let u11: u32 = (s.a as u32).wrapping_sub(u12) & 0xff;
     let u13: u32 = ((s.a as u32) ^ u0) & 0xff;
     let u14: u32 = ((s.a as u32) ^ u11) & 0xff;
     let u16: u32 = (u13 & u14) & 0xff;
     let u15: u32 = (u16 & 0x80u32) & 0xff;
-    s.v = ((u15 != 0x0u32) as u32) as u8;
-    s.a = (u11) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u17: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u17 != 0x0u32) as u32) as u8;
+    let r15_v: u32 = (((u15 != 0x0u32) as u32) as u8) as u32;
+    let r16_a: u32 = ((u11) as u8) as u32;
+    let r17_z: u32 = (((r16_a == 0x0u32) as u32) as u8) as u32;
+    let u17: u32 = (r16_a & 0x80u32) & 0xff;
+    let r19_n: u32 = (((u17 != 0x0u32) as u32) as u8) as u32;
+    s.c = r8_c as u8;
+    s.v = r15_v as u8;
+    s.a = r16_a as u8;
+    s.z = r17_z as u8;
+    s.n = r19_n as u8;
     s.pc = pc.wrapping_add(3);
     6
 }
@@ -3902,6 +4720,7 @@ fn op_ef<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // BEQ rel
 #[inline(always)]
 fn op_f0<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     2 + s.branch(s.z == 1, pc, b1)
 }
@@ -3909,6 +4728,7 @@ fn op_f0<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // SBC indy
 #[inline(always)]
 fn op_f1<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = bus.load(b1 as u16) as u32;
     let u1: u32 = bus.load(((b1 + 1) & 0xff) as u16) as u32;
@@ -3924,18 +4744,23 @@ fn op_f1<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u20: u32 = u15;
     let u16: u32 = (u18 + u20) & 0xffff;
     let u22: u32 = (s.a as u32);
-    s.c = ((u16 <= u22) as u32) as u8;
+    let r14_c: u32 = (((u16 <= u22) as u32) as u8) as u32;
     let u25: u32 = (u14 + u15) & 0xff;
     let u24: u32 = (s.a as u32).wrapping_sub(u25) & 0xff;
     let u26: u32 = ((s.a as u32) ^ u14) & 0xff;
     let u27: u32 = ((s.a as u32) ^ u24) & 0xff;
     let u29: u32 = (u26 & u27) & 0xff;
     let u28: u32 = (u29 & 0x80u32) & 0xff;
-    s.v = ((u28 != 0x0u32) as u32) as u8;
-    s.a = (u24) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u30: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u30 != 0x0u32) as u32) as u8;
+    let r21_v: u32 = (((u28 != 0x0u32) as u32) as u8) as u32;
+    let r22_a: u32 = ((u24) as u8) as u32;
+    let r23_z: u32 = (((r22_a == 0x0u32) as u32) as u8) as u32;
+    let u30: u32 = (r22_a & 0x80u32) & 0xff;
+    let r25_n: u32 = (((u30 != 0x0u32) as u32) as u8) as u32;
+    s.c = r14_c as u8;
+    s.v = r21_v as u8;
+    s.a = r22_a as u8;
+    s.z = r23_z as u8;
+    s.n = r25_n as u8;
     s.pc = pc.wrapping_add(2);
     5 + cross(u2, s.y)
 }
@@ -3943,6 +4768,7 @@ fn op_f1<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // JAM impl
 #[inline(always)]
 fn op_f2<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     s.jam(pc);
     2
 }
@@ -3950,6 +4776,7 @@ fn op_f2<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // ISC indy
 #[inline(always)]
 fn op_f3<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u0: u32 = bus.load(b1 as u16) as u32;
     let u1: u32 = bus.load(((b1 + 1) & 0xff) as u16) as u32;
@@ -3967,18 +4794,23 @@ fn op_f3<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u21: u32 = u16;
     let u17: u32 = (u19 + u21) & 0xffff;
     let u23: u32 = (s.a as u32);
-    s.c = ((u17 <= u23) as u32) as u8;
+    let r16_c: u32 = (((u17 <= u23) as u32) as u8) as u32;
     let u26: u32 = (u14 + u16) & 0xff;
     let u25: u32 = (s.a as u32).wrapping_sub(u26) & 0xff;
     let u27: u32 = ((s.a as u32) ^ u14) & 0xff;
     let u28: u32 = ((s.a as u32) ^ u25) & 0xff;
     let u30: u32 = (u27 & u28) & 0xff;
     let u29: u32 = (u30 & 0x80u32) & 0xff;
-    s.v = ((u29 != 0x0u32) as u32) as u8;
-    s.a = (u25) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u31: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u31 != 0x0u32) as u32) as u8;
+    let r23_v: u32 = (((u29 != 0x0u32) as u32) as u8) as u32;
+    let r24_a: u32 = ((u25) as u8) as u32;
+    let r25_z: u32 = (((r24_a == 0x0u32) as u32) as u8) as u32;
+    let u31: u32 = (r24_a & 0x80u32) & 0xff;
+    let r27_n: u32 = (((u31 != 0x0u32) as u32) as u8) as u32;
+    s.c = r16_c as u8;
+    s.v = r23_v as u8;
+    s.a = r24_a as u8;
+    s.z = r25_z as u8;
+    s.n = r27_n as u8;
     s.pc = pc.wrapping_add(2);
     8
 }
@@ -3986,6 +4818,7 @@ fn op_f3<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // NOP zpx
 #[inline(always)]
 fn op_f4<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u2: u32 = (b1 + (s.x as u32)) & 0xff;
     let u0: u32 = u2;
@@ -3997,6 +4830,7 @@ fn op_f4<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // SBC zpx
 #[inline(always)]
 fn op_f5<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u2: u32 = (b1 + (s.x as u32)) & 0xff;
     let u0: u32 = u2;
@@ -4006,18 +4840,23 @@ fn op_f5<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u9: u32 = u4;
     let u5: u32 = (u7 + u9) & 0xffff;
     let u11: u32 = (s.a as u32);
-    s.c = ((u5 <= u11) as u32) as u8;
+    let r8_c: u32 = (((u5 <= u11) as u32) as u8) as u32;
     let u14: u32 = (u3 + u4) & 0xff;
     let u13: u32 = (s.a as u32).wrapping_sub(u14) & 0xff;
     let u15: u32 = ((s.a as u32) ^ u3) & 0xff;
     let u16: u32 = ((s.a as u32) ^ u13) & 0xff;
     let u18: u32 = (u15 & u16) & 0xff;
     let u17: u32 = (u18 & 0x80u32) & 0xff;
-    s.v = ((u17 != 0x0u32) as u32) as u8;
-    s.a = (u13) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u19: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u19 != 0x0u32) as u32) as u8;
+    let r15_v: u32 = (((u17 != 0x0u32) as u32) as u8) as u32;
+    let r16_a: u32 = ((u13) as u8) as u32;
+    let r17_z: u32 = (((r16_a == 0x0u32) as u32) as u8) as u32;
+    let u19: u32 = (r16_a & 0x80u32) & 0xff;
+    let r19_n: u32 = (((u19 != 0x0u32) as u32) as u8) as u32;
+    s.c = r8_c as u8;
+    s.v = r15_v as u8;
+    s.a = r16_a as u8;
+    s.z = r17_z as u8;
+    s.n = r19_n as u8;
     s.pc = pc.wrapping_add(2);
     4
 }
@@ -4025,15 +4864,18 @@ fn op_f5<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // INC zpx
 #[inline(always)]
 fn op_f6<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u2: u32 = (b1 + (s.x as u32)) & 0xff;
     let u0: u32 = u2;
     let u3: u32 = bus.load(u0 as u16) as u32;
     let u4: u32 = (u3 + 0x1u32) & 0xff;
     bus.store(u0 as u16, u4 as u8);
-    s.z = ((u4 == 0x0u32) as u32) as u8;
+    let r5_z: u32 = (((u4 == 0x0u32) as u32) as u8) as u32;
     let u5: u32 = (u4 & 0x80u32) & 0xff;
-    s.n = ((u5 != 0x0u32) as u32) as u8;
+    let r7_n: u32 = (((u5 != 0x0u32) as u32) as u8) as u32;
+    s.z = r5_z as u8;
+    s.n = r7_n as u8;
     s.pc = pc.wrapping_add(2);
     6
 }
@@ -4041,6 +4883,7 @@ fn op_f6<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // ISC zpx
 #[inline(always)]
 fn op_f7<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let u2: u32 = (b1 + (s.x as u32)) & 0xff;
     let u0: u32 = u2;
@@ -4052,18 +4895,23 @@ fn op_f7<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u10: u32 = u5;
     let u6: u32 = (u8 + u10) & 0xffff;
     let u12: u32 = (s.a as u32);
-    s.c = ((u6 <= u12) as u32) as u8;
+    let r10_c: u32 = (((u6 <= u12) as u32) as u8) as u32;
     let u15: u32 = (u3 + u5) & 0xff;
     let u14: u32 = (s.a as u32).wrapping_sub(u15) & 0xff;
     let u16: u32 = ((s.a as u32) ^ u3) & 0xff;
     let u17: u32 = ((s.a as u32) ^ u14) & 0xff;
     let u19: u32 = (u16 & u17) & 0xff;
     let u18: u32 = (u19 & 0x80u32) & 0xff;
-    s.v = ((u18 != 0x0u32) as u32) as u8;
-    s.a = (u14) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u20: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u20 != 0x0u32) as u32) as u8;
+    let r17_v: u32 = (((u18 != 0x0u32) as u32) as u8) as u32;
+    let r18_a: u32 = ((u14) as u8) as u32;
+    let r19_z: u32 = (((r18_a == 0x0u32) as u32) as u8) as u32;
+    let u20: u32 = (r18_a & 0x80u32) & 0xff;
+    let r21_n: u32 = (((u20 != 0x0u32) as u32) as u8) as u32;
+    s.c = r10_c as u8;
+    s.v = r17_v as u8;
+    s.a = r18_a as u8;
+    s.z = r19_z as u8;
+    s.n = r21_n as u8;
     s.pc = pc.wrapping_add(2);
     6
 }
@@ -4071,7 +4919,9 @@ fn op_f7<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // SED impl
 #[inline(always)]
 fn op_f8<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
-    s.d = (0x1u32) as u8;
+    bus.sync(s);
+    let r0_d: u32 = ((0x1u32) as u8) as u32;
+    s.d = r0_d as u8;
     s.pc = pc.wrapping_add(1);
     2
 }
@@ -4079,6 +4929,7 @@ fn op_f8<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // SBC absy
 #[inline(always)]
 fn op_f9<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
@@ -4090,18 +4941,23 @@ fn op_f9<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u10: u32 = u5;
     let u6: u32 = (u8 + u10) & 0xffff;
     let u12: u32 = (s.a as u32);
-    s.c = ((u6 <= u12) as u32) as u8;
+    let r8_c: u32 = (((u6 <= u12) as u32) as u8) as u32;
     let u15: u32 = (u4 + u5) & 0xff;
     let u14: u32 = (s.a as u32).wrapping_sub(u15) & 0xff;
     let u16: u32 = ((s.a as u32) ^ u4) & 0xff;
     let u17: u32 = ((s.a as u32) ^ u14) & 0xff;
     let u19: u32 = (u16 & u17) & 0xff;
     let u18: u32 = (u19 & 0x80u32) & 0xff;
-    s.v = ((u18 != 0x0u32) as u32) as u8;
-    s.a = (u14) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u20: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u20 != 0x0u32) as u32) as u8;
+    let r15_v: u32 = (((u18 != 0x0u32) as u32) as u8) as u32;
+    let r16_a: u32 = ((u14) as u8) as u32;
+    let r17_z: u32 = (((r16_a == 0x0u32) as u32) as u8) as u32;
+    let u20: u32 = (r16_a & 0x80u32) & 0xff;
+    let r19_n: u32 = (((u20 != 0x0u32) as u32) as u8) as u32;
+    s.c = r8_c as u8;
+    s.v = r15_v as u8;
+    s.a = r16_a as u8;
+    s.z = r17_z as u8;
+    s.n = r19_n as u8;
     s.pc = pc.wrapping_add(3);
     4 + cross(w, s.y)
 }
@@ -4109,6 +4965,7 @@ fn op_f9<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // NOP impl
 #[inline(always)]
 fn op_fa<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     s.pc = pc.wrapping_add(1);
     2
 }
@@ -4116,6 +4973,7 @@ fn op_fa<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // ISC absy
 #[inline(always)]
 fn op_fb<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
@@ -4129,18 +4987,23 @@ fn op_fb<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u11: u32 = u6;
     let u7: u32 = (u9 + u11) & 0xffff;
     let u13: u32 = (s.a as u32);
-    s.c = ((u7 <= u13) as u32) as u8;
+    let r10_c: u32 = (((u7 <= u13) as u32) as u8) as u32;
     let u16: u32 = (u4 + u6) & 0xff;
     let u15: u32 = (s.a as u32).wrapping_sub(u16) & 0xff;
     let u17: u32 = ((s.a as u32) ^ u4) & 0xff;
     let u18: u32 = ((s.a as u32) ^ u15) & 0xff;
     let u20: u32 = (u17 & u18) & 0xff;
     let u19: u32 = (u20 & 0x80u32) & 0xff;
-    s.v = ((u19 != 0x0u32) as u32) as u8;
-    s.a = (u15) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u21: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u21 != 0x0u32) as u32) as u8;
+    let r17_v: u32 = (((u19 != 0x0u32) as u32) as u8) as u32;
+    let r18_a: u32 = ((u15) as u8) as u32;
+    let r19_z: u32 = (((r18_a == 0x0u32) as u32) as u8) as u32;
+    let u21: u32 = (r18_a & 0x80u32) & 0xff;
+    let r21_n: u32 = (((u21 != 0x0u32) as u32) as u8) as u32;
+    s.c = r10_c as u8;
+    s.v = r17_v as u8;
+    s.a = r18_a as u8;
+    s.z = r19_z as u8;
+    s.n = r21_n as u8;
     s.pc = pc.wrapping_add(3);
     7
 }
@@ -4148,6 +5011,7 @@ fn op_fb<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // NOP absx
 #[inline(always)]
 fn op_fc<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
@@ -4161,6 +5025,7 @@ fn op_fc<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // SBC absx
 #[inline(always)]
 fn op_fd<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
@@ -4172,18 +5037,23 @@ fn op_fd<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u10: u32 = u5;
     let u6: u32 = (u8 + u10) & 0xffff;
     let u12: u32 = (s.a as u32);
-    s.c = ((u6 <= u12) as u32) as u8;
+    let r8_c: u32 = (((u6 <= u12) as u32) as u8) as u32;
     let u15: u32 = (u4 + u5) & 0xff;
     let u14: u32 = (s.a as u32).wrapping_sub(u15) & 0xff;
     let u16: u32 = ((s.a as u32) ^ u4) & 0xff;
     let u17: u32 = ((s.a as u32) ^ u14) & 0xff;
     let u19: u32 = (u16 & u17) & 0xff;
     let u18: u32 = (u19 & 0x80u32) & 0xff;
-    s.v = ((u18 != 0x0u32) as u32) as u8;
-    s.a = (u14) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u20: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u20 != 0x0u32) as u32) as u8;
+    let r15_v: u32 = (((u18 != 0x0u32) as u32) as u8) as u32;
+    let r16_a: u32 = ((u14) as u8) as u32;
+    let r17_z: u32 = (((r16_a == 0x0u32) as u32) as u8) as u32;
+    let u20: u32 = (r16_a & 0x80u32) & 0xff;
+    let r19_n: u32 = (((u20 != 0x0u32) as u32) as u8) as u32;
+    s.c = r8_c as u8;
+    s.v = r15_v as u8;
+    s.a = r16_a as u8;
+    s.z = r17_z as u8;
+    s.n = r19_n as u8;
     s.pc = pc.wrapping_add(3);
     4 + cross(w, s.x)
 }
@@ -4191,6 +5061,7 @@ fn op_fd<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // INC absx
 #[inline(always)]
 fn op_fe<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
@@ -4199,9 +5070,11 @@ fn op_fe<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u4: u32 = bus.load(u0 as u16) as u32;
     let u5: u32 = (u4 + 0x1u32) & 0xff;
     bus.store(u0 as u16, u5 as u8);
-    s.z = ((u5 == 0x0u32) as u32) as u8;
+    let r5_z: u32 = (((u5 == 0x0u32) as u32) as u8) as u32;
     let u6: u32 = (u5 & 0x80u32) & 0xff;
-    s.n = ((u6 != 0x0u32) as u32) as u8;
+    let r7_n: u32 = (((u6 != 0x0u32) as u32) as u8) as u32;
+    s.z = r5_z as u8;
+    s.n = r7_n as u8;
     s.pc = pc.wrapping_add(3);
     7
 }
@@ -4209,6 +5082,7 @@ fn op_fe<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
 // ISC absx
 #[inline(always)]
 fn op_ff<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
+    bus.sync(s);
     let b1 = bus.fetch(pc.wrapping_add(1)) as u32;
     let b2 = bus.fetch(pc.wrapping_add(2)) as u32;
     let w = b1 | (b2 << 8);
@@ -4222,18 +5096,23 @@ fn op_ff<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {
     let u11: u32 = u6;
     let u7: u32 = (u9 + u11) & 0xffff;
     let u13: u32 = (s.a as u32);
-    s.c = ((u7 <= u13) as u32) as u8;
+    let r10_c: u32 = (((u7 <= u13) as u32) as u8) as u32;
     let u16: u32 = (u4 + u6) & 0xff;
     let u15: u32 = (s.a as u32).wrapping_sub(u16) & 0xff;
     let u17: u32 = ((s.a as u32) ^ u4) & 0xff;
     let u18: u32 = ((s.a as u32) ^ u15) & 0xff;
     let u20: u32 = (u17 & u18) & 0xff;
     let u19: u32 = (u20 & 0x80u32) & 0xff;
-    s.v = ((u19 != 0x0u32) as u32) as u8;
-    s.a = (u15) as u8;
-    s.z = (((s.a as u32) == 0x0u32) as u32) as u8;
-    let u21: u32 = ((s.a as u32) & 0x80u32) & 0xff;
-    s.n = ((u21 != 0x0u32) as u32) as u8;
+    let r17_v: u32 = (((u19 != 0x0u32) as u32) as u8) as u32;
+    let r18_a: u32 = ((u15) as u8) as u32;
+    let r19_z: u32 = (((r18_a == 0x0u32) as u32) as u8) as u32;
+    let u21: u32 = (r18_a & 0x80u32) & 0xff;
+    let r21_n: u32 = (((u21 != 0x0u32) as u32) as u8) as u32;
+    s.c = r10_c as u8;
+    s.v = r17_v as u8;
+    s.a = r18_a as u8;
+    s.z = r19_z as u8;
+    s.n = r21_n as u8;
     s.pc = pc.wrapping_add(3);
     7
 }

@@ -102,7 +102,6 @@ impl Cpu {
     /// Execute one instruction; cycles taken, page-cross and branch extras included.
     #[inline]
     pub fn step<B: Bus>(&mut self, bus: &mut B) -> u32 {
-        bus.sync(self);
         let n = cpu_gen::execute(self, bus);
         self.cycles += n as u64;
         self.steps += 1;
@@ -124,11 +123,13 @@ impl Cpu {
 
     fn interrupt<B: Bus>(&mut self, bus: &mut B, vec: u16) -> u32 {
         bus.sync(self);
-        self.push(bus, (self.pc >> 8) as u8);
-        self.push(bus, self.pc as u8);
-        self.push(bus, self.status(0));
+        let sp = Self::push(bus, self.sp, (self.pc >> 8) as u8);
+        let sp = Self::push(bus, sp, self.pc as u8);
+        let sp = Self::push(bus, sp, self.status(0));
+        let pc = Self::vector(bus, vec);
+        self.sp = sp;
         self.i = 1;
-        self.pc = Self::vector(bus, vec);
+        self.pc = pc;
         self.cycles += 7;
         7
     }
@@ -139,16 +140,18 @@ impl Cpu {
         lo | ((bus.read(addr.wrapping_add(1)) as u16) << 8)
     }
 
+    /// Push `v` with SP at `sp`; the new SP.
     #[inline(always)]
-    fn push<B: Bus>(&mut self, bus: &mut B, v: u8) {
-        bus.write(0x100 | self.sp as u16, v);
-        self.sp = self.sp.wrapping_sub(1);
+    fn push<B: Bus>(bus: &mut B, sp: u8, v: u8) -> u8 {
+        bus.write(0x100 | sp as u16, v);
+        sp.wrapping_sub(1)
     }
 
+    /// Pull with SP at `sp`; the new SP and the byte.
     #[inline(always)]
-    fn pull<B: Bus>(&mut self, bus: &mut B) -> u8 {
-        self.sp = self.sp.wrapping_add(1);
-        bus.read(0x100 | self.sp as u16)
+    fn pull<B: Bus>(bus: &mut B, sp: u8) -> (u8, u8) {
+        let sp = sp.wrapping_add(1);
+        (sp, bus.read(0x100 | sp as u16))
     }
 
     /// Resolve a relative branch at `pc`; extra cycles (taken +1, page cross +1).
@@ -164,44 +167,45 @@ impl Cpu {
         1 + ((ft ^ tgt) & 0xFF00 != 0) as u32
     }
 
+    // The control resolvers read `self` and return the new SP and PC (plus P for
+    // `rti`) for the caller to commit after their bus accesses (see `Bus::sync`).
+
     #[inline(always)]
-    pub(crate) fn jsr<B: Bus>(&mut self, bus: &mut B, ret: u16, tgt: u16) {
-        self.push(bus, (ret >> 8) as u8);
-        self.push(bus, ret as u8);
-        self.pc = tgt;
+    pub(crate) fn jsr<B: Bus>(&self, bus: &mut B, ret: u16, tgt: u16) -> (u8, u16) {
+        let sp = Self::push(bus, self.sp, (ret >> 8) as u8);
+        (Self::push(bus, sp, ret as u8), tgt)
     }
 
     #[inline(always)]
-    pub(crate) fn rts<B: Bus>(&mut self, bus: &mut B) {
-        let lo = self.pull(bus) as u16;
-        let hi = self.pull(bus) as u16;
-        self.pc = ((hi << 8) | lo).wrapping_add(1);
+    pub(crate) fn rts<B: Bus>(&self, bus: &mut B) -> (u8, u16) {
+        let (sp, lo) = Self::pull(bus, self.sp);
+        let (sp, hi) = Self::pull(bus, sp);
+        (sp, ((hi as u16) << 8 | lo as u16).wrapping_add(1))
     }
 
     #[inline(always)]
-    pub(crate) fn rti<B: Bus>(&mut self, bus: &mut B) {
-        let p = self.pull(bus);
-        self.set_p(p);
-        let lo = self.pull(bus) as u16;
-        let hi = self.pull(bus) as u16;
-        self.pc = (hi << 8) | lo;
+    pub(crate) fn rti<B: Bus>(&self, bus: &mut B) -> (u8, u16, u8) {
+        let (sp, p) = Self::pull(bus, self.sp);
+        let (sp, lo) = Self::pull(bus, sp);
+        let (sp, hi) = Self::pull(bus, sp);
+        (sp, (hi as u16) << 8 | lo as u16, p)
     }
 
+    /// `BRK`: push `ret` and P (B set); the new SP and the IRQ vector. The caller sets I.
     #[inline(always)]
-    pub(crate) fn brk<B: Bus>(&mut self, bus: &mut B, ret: u16) {
-        self.push(bus, (ret >> 8) as u8);
-        self.push(bus, ret as u8);
-        self.push(bus, self.status(1));
-        self.i = 1;
-        self.pc = Self::vector(bus, IRQ);
+    pub(crate) fn brk<B: Bus>(&self, bus: &mut B, ret: u16) -> (u8, u16) {
+        let sp = Self::push(bus, self.sp, (ret >> 8) as u8);
+        let sp = Self::push(bus, sp, ret as u8);
+        let sp = Self::push(bus, sp, self.status(1));
+        (sp, Self::vector(bus, IRQ))
     }
 
     /// `JMP (ptr)` with the NMOS page-wrap of the pointer's high byte.
     #[inline(always)]
-    pub(crate) fn jmp_ind<B: Bus>(&mut self, bus: &mut B, ptr: u16) {
+    pub(crate) fn jmp_ind<B: Bus>(bus: &mut B, ptr: u16) -> u16 {
         let lo = bus.read(ptr) as u16;
         let hi = bus.read((ptr & 0xFF00) | (ptr.wrapping_add(1) & 0xFF)) as u16;
-        self.pc = (hi << 8) | lo;
+        (hi << 8) | lo
     }
 
     /// JAM/KIL: flag the lock-up and skip a byte so drivers do not hang.

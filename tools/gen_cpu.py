@@ -28,11 +28,11 @@ BINDINGS = {
 }
 CTRL = {
     "jmp": "s.pc = w as u16;",
-    "jsr": "s.jsr(bus, pc.wrapping_add(2), w as u16);",
-    "jmpind": "s.jmp_ind(bus, w as u16);",
-    "rts": "s.rts(bus);",
-    "rti": "s.rti(bus);",
-    "brk": "s.brk(bus, pc.wrapping_add(2));",
+    "jsr": "(s.sp, s.pc) = s.jsr(bus, pc.wrapping_add(2), w as u16);",
+    "jmpind": "s.pc = Cpu::jmp_ind(bus, w as u16);",
+    "rts": "(s.sp, s.pc) = s.rts(bus);",
+    "rti": "let p: u8;\n(s.sp, s.pc, p) = s.rti(bus);\ns.set_p(p);",
+    "brk": "(s.sp, s.pc) = s.brk(bus, pc.wrapping_add(2));\ns.i = 1;",
 }
 
 
@@ -64,6 +64,7 @@ class _Op:
         }
         self.consts = self._bind_consts()
         self.stack = self._stack_temps()
+        self.live = {}
 
     def _bind_consts(self):
         """``{(op index, arg index): rust expr}`` for every operand-dependent constant."""
@@ -102,11 +103,14 @@ class _Op:
         if sp == "c":
             return self.consts.get((i, j), "0x%xu32" % off)
         if sp == "r":
-            return "(s.%s as u32)" % REG[off]
+            return self.live.get(REG[off], "(s.%s as u32)" % REG[off])
         return "u%d" % off
 
     def body(self):
+        """Straight-line P-Code; register results stay in locals (``self.live``) until the
+        commit, so ``*s`` is the instruction-start state across every bus access."""
         lines = []
+        self.live = {}
         for i, (mn, out, ins) in enumerate(self.rec["ops"]):
             a = [self.rd(i, j, v) for j, v in enumerate(ins)]
             stack = ins[0][0] == "u" and ins[0][1] in self.stack
@@ -133,7 +137,9 @@ class _Op:
             else:
                 raise NotImplementedError(mn)
             if out[0] == "r":
-                lines.append("s.%s = (%s) as u8;" % (REG[out[1]], expr))
+                name = "r%d_%s" % (i, REG[out[1]])
+                lines.append("let %s: u32 = ((%s) as u8) as u32;" % (name, expr))
+                self.live[REG[out[1]]] = name
             else:
                 lines.append("let u%d: u32 = %s;" % (out[1], expr))
         return lines
@@ -158,6 +164,11 @@ class _Op:
             body.append("let b2 = bus.fetch(pc.wrapping_add(2)) as u32;")
             body.append("let w = b1 | (b2 << 8);")
         body += self.body()
+        assert not (self.live and ctrl[0] in CTRL), "%02X writes registers before %s" % (
+            self.op,
+            ctrl[0],
+        )
+        body += ["s.%s = %s as u8;" % (r, n) for r, n in self.live.items()]
         cyc = str(CYCLETIME[self.op])
         pen = rec["pen"]
         if pen is not None and pen[0] != "branch":
@@ -181,12 +192,13 @@ class _Op:
             body.append("s.jam(pc);")
             cyc = "2"
         else:
-            body.append(CTRL[ctrl[0]])
+            body += CTRL[ctrl[0]].split("\n")
         return (
             [
                 "// %s %s" % (self.mn, self.mode),
                 "#[inline(always)]",
                 "fn op_%02x<B: Bus>(s: &mut Cpu, bus: &mut B, pc: u16) -> u32 {" % self.op,
+                "    bus.sync(s);",
             ]
             + ["    " + ln for ln in body + [cyc]]
             + ["}", ""]
