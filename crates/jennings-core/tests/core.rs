@@ -257,3 +257,48 @@ fn idle_and_irq_stops() {
     assert_eq!(run_until(&mut c, &mut *m, &mut u, || false), Stop::Irq);
     assert_eq!(c.pc, 0x2001);
 }
+
+fn observed_by_bus(m: &FlatMemory) -> (Vec<u16>, Vec<u16>) {
+    let log = Log::default();
+    let mut h = &log;
+    let mut bus = m.bus(&mut h);
+    for a in 0..=0xFFFFu16 {
+        bus.load(a);
+        bus.store(a, 0);
+    }
+    let (mut l, mut s) = (Vec::new(), Vec::new());
+    for &(k, a, _, _) in log.0.borrow().iter() {
+        match k {
+            'l' => l.push(a),
+            's' => s.push(a),
+            _ => {}
+        }
+    }
+    (l, s)
+}
+
+#[test]
+fn observe_ranges_replace_and_match_per_address() {
+    let cases: &[&[(u32, u32)]] = &[
+        &[(0xE000, 0x10000)],
+        &[(0x0000, 0x10000)],
+        &[(0x003F, 0x0041), (0x0100, 0x0101), (0xD400, 0xD419)],
+        &[(0x0005, 0x0005), (0x0080, 0x0040), (0xFFFF, 0x20000)],
+        &[(0x0010, 0x0050), (0x0030, 0x0070)],
+        &[],
+    ];
+    let m = FlatMemory::default();
+    for (i, ranges) in cases.iter().enumerate() {
+        let stores = cases[(i + 1) % cases.len()];
+        m.observe_loads(ranges.iter().copied());
+        m.observe_stores(stores.iter().copied());
+        let want = |rs: &[(u32, u32)]| -> Vec<u16> {
+            let reference = FlatMemory::default();
+            for &(lo, hi) in rs {
+                (lo..hi.min(0x10000)).for_each(|a| reference.observe_load(a as u16, true));
+            }
+            observed_by_bus(&reference).0
+        };
+        assert_eq!(observed_by_bus(&m), (want(ranges), want(stores)), "{i}");
+    }
+}

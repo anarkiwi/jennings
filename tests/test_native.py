@@ -3,6 +3,7 @@
 import random
 import sys
 import threading
+import timeit
 from pathlib import Path
 
 import numpy as np
@@ -493,3 +494,129 @@ def test_shared_memory_aliases_buffer():
     with pytest.raises(ValueError):
         NativeMemory(share=True)
     assert bytes(NativeMemory(ram)) == bytes(ram) and NativeMemory(ram) is not mem
+
+
+_PROBE_ORG = 0x0800
+_PROBES = sorted(
+    {0x0000, 0x0001, 0x003F, 0x0040, 0x00FF, 0x0100, 0x01FF, 0xD3FF, 0xD400, 0xD418, 0xD419}
+    | {0xDFFF, 0xE000, 0xE03F, 0xE040, 0xFFEF, 0xFFF0, 0xFFFF}
+    | set(random.Random(7).sample(range(0x2000, 0xD000), 64))
+)
+
+
+def _probe_mpu():
+    """An MPU that loads then stores each probe address once, in order."""
+    mem = NativeMemory()
+    prog = [b for a in _PROBES for b in (0xAD, a & 0xFF, a >> 8, 0x8D, a & 0xFF, a >> 8)]
+    mem[_PROBE_ORG : _PROBE_ORG + len(prog)] = prog
+    return MPU(memory=mem, pc=_PROBE_ORG), len(_PROBES)
+
+
+def _probe(mpu, steps):
+    got = []
+    mpu.memory.observe_data_access(
+        lambda a: got.append(("r", a)), lambda a, v: got.append(("w", a)), **mpu.filters
+    )
+    mpu.pc = _PROBE_ORG
+    for _ in range(2 * steps):
+        mpu.step()
+    return got
+
+
+def _flat(spec):
+    if isinstance(spec, range):
+        return {a & 0xFFFF for a in spec}
+    return {a & 0xFFFF for item in spec for a in (item if isinstance(item, range) else (item,))}
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        range(0xE000, 0x10000),
+        range(0, 0x10000),
+        range(0xD400, 0xD419),
+        range(0xFFF0, 0x10010),
+        range(-0x10, 0x10),
+        range(0x10, 0x10),
+        range(0x40, 0x0),
+        range(0, 0x30000),
+        range(0x0, 0x10000, 0x40),
+        range(0xE040, 0xE000, -1),
+        [0xD418, 0x10001, -1],
+        [range(0xD400, 0xD419), 0x0040, range(0x0, 0x100, 0xFF)],
+        (),
+    ],
+    ids=repr,
+)
+def test_observe_data_access_ranges_match_address_lists(spec):
+    mpu, steps = _probe_mpu()
+    want = _flat(spec)
+    for filters in ({"reads": spec, "writes": spec}, {"reads": list(want), "writes": want}):
+        mpu.filters = filters
+        got = _probe(mpu, steps)
+        assert got == [(k, a) for a in _PROBES if a in want for k in "rw"]
+
+
+def test_observe_data_access_rearm_and_clear_cycles():
+    mpu, steps = _probe_mpu()
+    cycles = [
+        {"reads": range(0xD400, 0xD419), "writes": [0xE000]},
+        {"reads": [0x0040], "writes": range(0xFFF0, 0x10000)},
+        {},
+        {"reads": range(0xE000, 0xE001)},
+    ]
+    for _ in range(3):
+        for filters in cycles:
+            mpu.filters = filters
+            reads, writes = (_flat(filters.get(k, range(0x10000))) for k in ("reads", "writes"))
+            got = _probe(mpu, steps)
+            assert got == [
+                (k, a) for a in _PROBES for k, s in (("r", reads), ("w", writes)) if a in s
+            ]
+            mpu.memory.observe_data_access()
+            mpu.pc = _PROBE_ORG
+            before = list(got)
+            for _ in range(2 * steps):
+                mpu.step()
+            assert got == before
+
+
+def test_observe_data_access_one_sided_and_stack_cleared():
+    mem = NativeMemory()
+    mem[0x1000:0x1006] = [0x48, 0x68, 0x8D, 0x00, 0xD4, 0x60]  # PHA; PLA; STA $D400
+    got = []
+
+    def run(**kw):
+        mem.observe_data_access(**kw)
+        mpu = MPU(memory=mem, pc=0x1000)
+        for _ in range(3):
+            mpu.step()
+
+    def on_write(a, _v):
+        got.append(("w", a))
+
+    run(on_write=on_write, reads=[0x01FF, 0xD400], writes=[0x01FF, 0xD400], stack=True)
+    assert got == [("w", 0x01FF), ("w", 0xD400)]
+    got.clear()
+    run(on_write=on_write, reads=[0x01FF, 0xD400], writes=[0x01FF, 0xD400])
+    assert got == [("w", 0xD400)]
+    got.clear()
+    run(on_read=lambda a: got.append(("r", a)), writes=[0xD400], stack=True)
+    assert got == [("r", 0x01FF)]
+
+
+def test_observe_data_access_cost_is_independent_of_the_address_space():
+    """Arming and clearing cost about as much as a one-address subscription, not a 64K sweep."""
+    mem, cb = NativeMemory(), lambda *a: None
+
+    def best(fn):
+        return min(timeit.repeat(fn, number=50, repeat=7))
+
+    unit = best(lambda: mem.subscribe_to_read((0xD012,), cb))
+    for fn in (
+        lambda: mem.observe_data_access(None, None),
+        lambda: mem.observe_data_access(on_write=cb),
+        lambda: mem.observe_data_access(on_write=cb, writes=range(0xE000, 0x10000)),
+        lambda: mem.observe_data_access(cb, cb, reads=range(0x10000), writes=[0xD418]),
+    ):
+        assert best(fn) < 50 * unit
