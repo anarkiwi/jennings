@@ -143,6 +143,32 @@ def test_stop_from_callback_and_exceptions():
         _ = mem[0xC000]
 
 
+def test_callbacks_see_instruction_start_registers_through_stack_and_rmw():
+    mem = NativeMemory()
+    mem[0x1000:0x1005] = [0x38, 0x20, 0x00, 0x11, 0x00]  # SEC ; JSR $1100 ; BRK
+    mem[0x1100:0x1107] = [0x48, 0x68, 0x07, 0x50, 0x08, 0x28, 0x60]
+    # PHA ; PLA ; SLO $50 ; PHP ; PLP ; RTS
+    mem[0x1200] = 0x40  # RTI
+    mem[0xFFFE:0x10000] = [0x00, 0x12]
+    mem[0x50] = 0x80
+    mpu = MPU(memory=mem, pc=0x1000)
+    mpu.a = 0x81
+    seen = []
+
+    def regs(*_):
+        seen.append((mpu.pc, mpu.sp, mpu.a, mpu.p))
+
+    mem.subscribe_to_read(range(0x100, 0x200), regs)
+    mem.subscribe_to_write(list(range(0x100, 0x200)) + [0x50], regs)
+    mpu.step()  # SEC
+    for take in [mpu.step] * 7 + [mpu.irq, mpu.step, mpu.step]:
+        before = (mpu.pc, mpu.sp, mpu.a, mpu.p)
+        seen.clear()
+        take()
+        assert seen and set(seen) == {before}, (hex(before[0]), seen)
+    assert mpu.pc == 0x1200 and mem[0x50] == 0
+
+
 def test_callbacks_see_instruction_start_and_cannot_write_registers():
     mem = NativeMemory()
     mem[0x1000:0x1003] = [0xAD, 0x00, 0xC0]  # LDA $C000

@@ -176,7 +176,16 @@ def main(argv=None) -> int:
     ap.add_argument("--threads", type=int, default=8)
     ap.add_argument("--thread-cycles", type=int, default=500_000_000)
     ap.add_argument("--only", nargs="*", default=None, help="backend name prefixes, e.g. (c) (d)")
+    ap.add_argument(
+        "--dump",
+        metavar="IMAGE",
+        help="write the 64 KiB image (start $%04X) for the Rust bench example and exit" % ORG,
+    )
     args = ap.parse_args(argv)
+    if args.dump:
+        with open(args.dump, "wb") as f:
+            f.write(image())
+        return 0
     names = [n for n in BACKENDS if not args.only or any(n.startswith(p) for p in args.only)]
     rows, states = [], {}
     for name in tqdm(names, unit="backend"):

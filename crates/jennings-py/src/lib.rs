@@ -8,7 +8,7 @@
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::ffi::{c_int, c_void};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering};
 
 use jennings_core::{
     run_to_rts, run_until, Access, AddrSet, Bus, Cpu, FlatBus, FlatMemory, Hooks, Periodic, Stop,
@@ -530,10 +530,10 @@ impl Hooks for PyHooks<'_> {
     }
 }
 
-/// The memory bus plus a per-instruction register snapshot for callbacks.
+/// The memory bus plus where callbacks find the instruction-start registers.
 struct PyBus<'a, 'h> {
     inner: FlatBus<'h, PyHooks<'a>>,
-    snap: *mut Cpu,
+    live: &'h AtomicPtr<Cpu>,
 }
 
 impl Bus for PyBus<'_, '_> {
@@ -568,8 +568,8 @@ impl Bus for PyBus<'_, '_> {
     #[inline(always)]
     fn sync(&mut self, cpu: &Cpu) {
         self.inner.sync(cpu);
-        // SAFETY: `snap` is only read by this thread's callbacks, never borrowed across this.
-        unsafe { self.snap.write(cpu.clone()) }
+        self.live
+            .store(cpu as *const Cpu as *mut Cpu, Ordering::Relaxed);
     }
 }
 
@@ -580,12 +580,23 @@ struct CorePtr(*const Core);
 unsafe impl Send for CorePtr {}
 
 /// Native 6510 core over a :class:`NativeMemory` (wrapped by ``jennings.devices.mpu6502.MPU``).
+/// A core's per-instruction state, on cache lines of its own so cores in parallel
+/// threads never share one.
+#[repr(align(128))]
+struct Hot {
+    cpu: UnsafeCell<Cpu>,
+    /// The registers at the driver's start, read by callbacks before its first instruction.
+    snap: UnsafeCell<Cpu>,
+    /// While a driver runs: the instruction-start registers (`snap`, then `cpu`).
+    live: AtomicPtr<Cpu>,
+    stop: AtomicBool,
+}
+
+/// Native 6510 core over a :class:`NativeMemory` (wrapped by ``jennings.devices.mpu6502.MPU``).
 #[pyclass(module = "jennings._core", name = "Core", frozen)]
 pub struct Core {
-    cpu: UnsafeCell<Cpu>,
-    snap: UnsafeCell<Cpu>,
+    hot: Box<Hot>,
     mem: Py<Memory>,
-    stop: AtomicBool,
     irq_due: AtomicU64,
     owner: Owner,
 }
@@ -597,12 +608,13 @@ impl Core {
     /// Registers as Python may see them: the instruction-start snapshot while running.
     fn regs(&self) -> PyResult<&Cpu> {
         self.owner.check()?;
-        // SAFETY: while this thread runs a driver only `snap` is read here; else `cpu` is idle.
+        // SAFETY: while this thread runs a driver `live` is valid and unwritten (`Bus::sync`)
+        // whenever Python runs; else `cpu` is idle.
         Ok(unsafe {
             &*if self.owner.here() {
-                self.snap.get()
+                self.hot.live.load(Ordering::Relaxed)
             } else {
-                self.cpu.get()
+                self.hot.cpu.get()
             }
         })
     }
@@ -616,7 +628,7 @@ impl Core {
             ));
         }
         // SAFETY: idle core, GIL held.
-        Ok(unsafe { &mut *self.cpu.get() })
+        Ok(unsafe { &mut *self.hot.cpu.get() })
     }
 
     /// Run `f` on the claimed core and bus, detached from the interpreter if `detach`.
@@ -629,21 +641,26 @@ impl Core {
         let mem = self.mem.get();
         let _c = self.owner.claim()?;
         let _m = mem.owner.claim()?;
-        self.stop.store(false, Ordering::Relaxed);
+        self.hot.stop.store(false, Ordering::Relaxed);
         let me = CorePtr(self);
         let run = move || {
             let me = me;
             // SAFETY: claimed above; the claim guards are dropped only after this returns.
             let core = unsafe { &*me.0 };
-            let cpu = unsafe { &mut *core.cpu.get() };
+            let cpu = unsafe { &mut *core.hot.cpu.get() };
+            // SAFETY: claimed; `snap` is read only through `live` by this thread's callbacks.
+            unsafe {
+                *core.hot.snap.get() = cpu.clone();
+                core.hot.live.store(core.hot.snap.get(), Ordering::Relaxed);
+            }
             let mem = core.mem.get();
-            let mut hooks = PyHooks::new(mem, Some(&core.stop));
+            let mut hooks = PyHooks::new(mem, Some(&core.hot.stop));
             let r = {
                 let mut bus = PyBus {
                     inner: mem.flat.bus(&mut hooks),
-                    snap: core.snap.get(),
+                    live: &core.hot.live,
                 };
-                f(cpu, &mut bus, &core.stop)
+                f(cpu, &mut bus, &core.hot.stop)
             };
             mem.flat.set_now(cpu.cycles);
             (r, hooks.err)
@@ -705,10 +722,13 @@ impl Core {
     #[new]
     fn new(mem: Py<Memory>) -> Self {
         Core {
-            cpu: UnsafeCell::new(Cpu::new()),
-            snap: UnsafeCell::new(Cpu::new()),
+            hot: Box::new(Hot {
+                cpu: UnsafeCell::new(Cpu::new()),
+                snap: UnsafeCell::new(Cpu::new()),
+                live: AtomicPtr::new(std::ptr::null_mut()),
+                stop: AtomicBool::new(false),
+            }),
             mem,
-            stop: AtomicBool::new(false),
             irq_due: AtomicU64::new(NO_IRQ),
             owner: Owner::default(),
         }
@@ -836,12 +856,12 @@ impl Core {
     /// Set by a watch callback to end the current run at the next instruction boundary.
     #[getter]
     fn get_stop(&self) -> bool {
-        self.stop.load(Ordering::Relaxed)
+        self.hot.stop.load(Ordering::Relaxed)
     }
 
     #[setter]
     fn set_stop(&self, v: bool) {
-        self.stop.store(v, Ordering::Relaxed)
+        self.hot.stop.store(v, Ordering::Relaxed)
     }
 
     /// Execute one instruction; cycles taken.

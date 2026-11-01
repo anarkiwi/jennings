@@ -136,28 +136,79 @@ fn cells(n: usize) -> Box<[Cell<u8>]> {
     (0..n).map(|_| Cell::new(0)).collect()
 }
 
-/// The 64 KiB RAM: owned, or borrowed from an external writable buffer.
-enum Ram {
-    Owned(Box<[Cell<u8>]>),
-    /// SAFETY contract of [`FlatMemory::with_shared_ram`]: valid for 64 KiB while `self` lives.
-    Shared(*const Cell<u8>),
+/// A pointer to a live 64 KiB `Cell<u8>` array (RAM or the overlay shadow).
+#[derive(Clone, Copy)]
+struct Base(*const Cell<u8>);
+
+// SAFETY: it points into memory owned by (or guaranteed to) the `FlatMemory` holding it,
+// which the embedder already serialises.
+unsafe impl Send for Base {}
+
+/// The 64 KiB RAM: owned, or borrowed from an external writable buffer, read through one pointer.
+struct Ram {
+    ptr: *const Cell<u8>,
+    _owned: Option<Box<[Cell<u8>]>>,
 }
 
-// SAFETY: `Shared` is a plain pointer to memory the embedder guarantees; `Cell` access is
-// already the embedder's to serialise, as for the owned box.
+// SAFETY: `ptr` points into `_owned` or at memory the embedder guarantees
+// ([`FlatMemory::with_shared_ram`]); `Cell` access is already the embedder's to serialise.
 unsafe impl Send for Ram {}
+
+impl Ram {
+    fn owned() -> Self {
+        let b = cells(0x10000);
+        Ram {
+            ptr: b.as_ptr(),
+            _owned: Some(b),
+        }
+    }
+}
 
 impl std::ops::Deref for Ram {
     type Target = [Cell<u8>];
 
     #[inline(always)]
     fn deref(&self) -> &[Cell<u8>] {
-        match self {
-            Ram::Owned(b) => b,
-            // SAFETY: see `Ram::Shared`.
-            Ram::Shared(p) => unsafe { std::slice::from_raw_parts(*p, 0x10000) },
+        // SAFETY: `ptr` is valid for 64 KiB while `self` lives.
+        unsafe { std::slice::from_raw_parts(self.ptr, 0x10000) }
+    }
+}
+
+/// Exact division by a fixed `d > 0` through a precomputed reciprocal: the quotient
+/// estimate `n * floor((2^64 - 1) / d) >> 64` is `n / d` or one less.
+#[derive(Clone, Copy, Debug)]
+struct Recip {
+    d: u64,
+    m: u64,
+}
+
+impl Recip {
+    fn new(d: u64) -> Self {
+        assert!(d > 0, "divisor must be positive");
+        Recip { d, m: u64::MAX / d }
+    }
+
+    #[inline(always)]
+    fn divrem(self, n: u64) -> (u64, u64) {
+        let q = ((n as u128 * self.m as u128) >> 64) as u64;
+        let r = n - q * self.d;
+        if r >= self.d {
+            (q + 1, r - self.d)
+        } else {
+            (q, r)
         }
     }
+}
+
+/// The cells written on every instruction or load, padded inline (no indirection)
+/// so memories driven from parallel threads never share their cache lines.
+#[derive(Default)]
+#[repr(C)]
+struct Hot {
+    _before: [u64; 16],
+    now: Cell<u64>,
+    last_load: Cell<Option<u16>>,
+    _after: [u64; 16],
 }
 
 /// 64 KiB RAM plus a page table of sixteen 4 KiB pages.
@@ -168,6 +219,8 @@ impl std::ops::Deref for Ram {
 pub struct FlatMemory {
     ram: Ram,
     shadow: Box<[Cell<u8>]>,
+    /// Per 4 KiB block, the 64 KiB array fetches read: RAM, or `shadow` when overlaid.
+    fetch_base: [Cell<Base>; 16],
     rpage: [Cell<u8>; 256],
     wpage: [Cell<u8>; 256],
     rsub: Bits,
@@ -177,8 +230,9 @@ pub struct FlatMemory {
     overlay: Cell<u16>,
     io: Cell<bool>,
     raster: Cell<Option<(u32, u32)>>,
-    now: Cell<u64>,
-    last_load: Cell<Option<u16>>,
+    /// For `raster = (cpl, lines)`: dividers by `cpl * lines` (a frame) and `cpl`.
+    beam_div: Cell<(Recip, Recip)>,
+    hot: Hot,
     stack_obs: Cell<bool>,
 }
 
@@ -190,9 +244,15 @@ impl Default for FlatMemory {
 
 impl FlatMemory {
     pub fn new() -> Self {
+        Self::with_ram(Ram::owned())
+    }
+
+    fn with_ram(ram: Ram) -> Self {
+        let base = ram.ptr;
         FlatMemory {
-            ram: Ram::Owned(cells(0x10000)),
+            ram,
             shadow: cells(0x10000),
+            fetch_base: std::array::from_fn(|_| Cell::new(Base(base))),
             rpage: std::array::from_fn(|_| Cell::new(0)),
             wpage: std::array::from_fn(|_| Cell::new(0)),
             rsub: Bits::new(),
@@ -202,8 +262,8 @@ impl FlatMemory {
             overlay: Cell::new(0),
             io: Cell::new(false),
             raster: Cell::new(None),
-            now: Cell::new(0),
-            last_load: Cell::new(None),
+            beam_div: Cell::new((Recip::new(1), Recip::new(1))),
+            hot: Hot::default(),
             stack_obs: Cell::new(false),
         }
     }
@@ -214,10 +274,10 @@ impl FlatMemory {
     /// `ram` must be valid for reads and writes of 0x10000 bytes for the life of the
     /// returned value, and written by nothing else while a [`Cpu`] runs on it.
     pub unsafe fn with_shared_ram(ram: *mut u8) -> Self {
-        FlatMemory {
-            ram: Ram::Shared(ram as *const Cell<u8>),
-            ..Self::new()
-        }
+        Self::with_ram(Ram {
+            ptr: ram as *const Cell<u8>,
+            _owned: None,
+        })
     }
 
     /// The RAM as cells (`Cell<u8>` is `u8`-layout: `as_ptr` is a byte buffer).
@@ -249,6 +309,11 @@ impl FlatMemory {
             }
             None => self.overlay.set(self.overlay.get() & !bit),
         }
+        self.fetch_base[page as usize & 15].set(Base(if image.is_some() {
+            self.shadow.as_ptr()
+        } else {
+            self.ram.ptr
+        }));
         self.refresh_block(page & 15);
     }
 
@@ -269,6 +334,10 @@ impl FlatMemory {
 
     /// `$D011`/`$D012` follow the beam at the cycle count as `(cycles_per_line, lines)`.
     pub fn set_raster(&self, model: Option<(u32, u32)>) {
+        if let Some((cpl, lines)) = model {
+            let frame = Recip::new(cpl as u64 * lines as u64);
+            self.beam_div.set((frame, Recip::new(cpl as u64)));
+        }
         self.raster.set(model);
         self.refresh((VIC_RASTER >> 8) as usize);
     }
@@ -279,16 +348,16 @@ impl FlatMemory {
 
     /// The cycle count raster reads use (the CPU's, at the access's instruction start).
     pub fn now(&self) -> u64 {
-        self.now.get()
+        self.hot.now.get()
     }
 
     pub fn set_now(&self, cycles: u64) {
-        self.now.set(cycles)
+        self.hot.now.set(cycles)
     }
 
     /// The address of the most recent data LOAD, None before the first.
     pub fn last_load(&self) -> Option<u16> {
-        self.last_load.get()
+        self.hot.last_load.get()
     }
 
     pub fn watch_read(&self, addr: u16, on: bool) {
@@ -371,12 +440,14 @@ impl FlatMemory {
 
     #[inline(always)]
     fn fetch(&self, addr: u16) -> u8 {
-        let src = if self.overlay.get() >> (addr >> 12) & 1 != 0 {
-            &*self.shadow
-        } else {
-            &*self.ram
-        };
-        src[addr as usize].get()
+        // SAFETY: every `fetch_base` entry is a live 64 KiB array and `addr` < 0x10000.
+        unsafe {
+            (*self.fetch_base[addr as usize >> 12]
+                .get()
+                .0
+                .add(addr as usize))
+            .get()
+        }
     }
 
     fn mapped<H: Hooks>(&self, h: &mut H, addr: u16) -> u8 {
@@ -390,8 +461,9 @@ impl FlatMemory {
     }
 
     fn beam(&self, addr: u16) -> Option<u8> {
-        let (cpl, lines) = self.raster.get()?;
-        let line = (self.now.get() / cpl as u64 % lines as u64) as u32;
+        self.raster.get()?;
+        let (frame, cpl) = self.beam_div.get();
+        let line = cpl.divrem(frame.divrem(self.hot.now.get()).1).0 as u32;
         match addr {
             VIC_RASTER => Some(line as u8),
             VIC_CONTROL_1 => Some(self.ram(VIC_CONTROL_1) & 0x7F | ((line >> 8) as u8 & 1) << 7),
@@ -403,7 +475,7 @@ impl FlatMemory {
     fn read_as<H: Hooks>(&self, h: &mut H, addr: u16, access: Access) -> u8 {
         let f = self.rpage[addr as usize >> 8].get();
         if access == Access::Data {
-            self.last_load.set(Some(addr));
+            self.hot.last_load.set(Some(addr));
         }
         if f == 0 {
             return self.ram(addr);
@@ -516,6 +588,40 @@ impl<H: Hooks> Bus for FlatBus<'_, H> {
 
     #[inline(always)]
     fn sync(&mut self, cpu: &Cpu) {
-        self.mem.now.set(cpu.cycles)
+        self.mem.hot.now.set(cpu.cycles)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Recip;
+
+    #[test]
+    fn recip_matches_division() {
+        let mut x = 0x9E37_79B9_7F4A_7C15u64;
+        for d in [
+            1u64,
+            2,
+            3,
+            63,
+            65,
+            63 * 312,
+            65 * 263,
+            u32::MAX as u64,
+            u64::MAX,
+        ] {
+            let r = Recip::new(d);
+            for n in [0, 1, d - 1, d, d.wrapping_add(1), u64::MAX - 1, u64::MAX] {
+                assert_eq!(r.divrem(n), (n / d, n % d), "{n} / {d}");
+            }
+            for _ in 0..10_000 {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                for n in [x, x >> 20, x >> 40] {
+                    assert_eq!(r.divrem(n), (n / d, n % d), "{n} / {d}");
+                }
+            }
+        }
     }
 }
