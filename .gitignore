@@ -223,4 +223,5 @@ __marimo__/
 .claude/
 
 # Process core dumps
+core
 core.[0-9]*
