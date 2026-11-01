@@ -18,7 +18,7 @@ use pyo3::buffer::PyBuffer;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::ffi;
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PySlice};
+use pyo3::types::{PyBytes, PyRange, PyRangeMethods, PySlice};
 
 const PAL: (u32, u32) = (63, 312);
 const NO_IRQ: u64 = u64::MAX;
@@ -129,6 +129,46 @@ fn addrs(it: &Bound<'_, PyAny>) -> PyResult<Vec<u16>> {
     it.try_iter()?
         .map(|a| a.and_then(|a| a.extract::<i64>()).map(Memory::index))
         .collect()
+}
+
+/// Half-open spans of a contiguous `range` (wrapped mod 64 KiB like [`Memory::index`]),
+/// or None for a stepped one.
+fn range_spans(r: &Bound<'_, PyRange>) -> PyResult<Option<Vec<(u32, u32)>>> {
+    let (lo, hi) = (r.start()?, r.stop()?);
+    if r.step()? != 1 {
+        return Ok(None);
+    }
+    let n = hi.saturating_sub(lo).clamp(0, 0x10000) as u32;
+    let lo = Memory::index(lo as i64) as u32;
+    Ok(Some(if lo + n <= 0x10000 {
+        vec![(lo, lo + n)]
+    } else {
+        vec![(lo, 0x10000), (0, lo + n - 0x10000)]
+    }))
+}
+
+/// An address filter as half-open spans: addresses, unit-step `range`s, or an iterable of both.
+fn spans(obj: &Bound<'_, PyAny>) -> PyResult<Vec<(u32, u32)>> {
+    if let Ok(r) = obj.cast::<PyRange>() {
+        if let Some(v) = range_spans(r)? {
+            return Ok(v);
+        }
+    }
+    let mut out = Vec::new();
+    for item in obj.try_iter()? {
+        let item = item?;
+        match item.cast::<PyRange>() {
+            Ok(r) => match range_spans(r)? {
+                Some(v) => out.extend(v),
+                None => out.extend(addrs(r)?.into_iter().map(|a| (a as u32, a as u32 + 1))),
+            },
+            Err(_) => {
+                let a = Memory::index(item.extract::<i64>()?) as u32;
+                out.push((a, a + 1));
+            }
+        }
+    }
+    Ok(out)
 }
 
 #[pymethods]
@@ -311,8 +351,9 @@ impl Memory {
     ///
     /// ``on_read(addr)`` after a load, ``on_write(addr, value)`` with the instruction's
     /// value after a store. ``reads``/``writes`` limit them to those addresses
-    /// (default: all). ``stack=True`` also reports the page-1
-    /// accesses of PHA/PHP/PLA/PLP. Replaces any previous observers; both None clears them.
+    /// (default: all): an iterable of addresses and/or ``range`` objects, or a
+    /// ``range``; a unit-step ``range`` costs the same at any length. ``stack=True``
+    /// also reports the page-1 accesses of PHA/PHP/PLA/PLP. Replaces any previous observers; both None clears them.
     #[pyo3(signature = (on_read=None, on_write=None, reads=None, writes=None, stack=false))]
     fn observe_data_access(
         &self,
@@ -324,22 +365,18 @@ impl Memory {
         stack: bool,
     ) -> PyResult<()> {
         self.owner.check()?;
-        self.flat.observe_stack(stack);
-        let pick = |on: bool, set: Option<&Bound<'_, PyAny>>| -> PyResult<Vec<bool>> {
-            let mut bits = vec![on && set.is_none(); 0x10000];
-            if let (true, Some(s)) = (on, set) {
-                addrs(s)?.into_iter().for_each(|a| bits[a as usize] = true);
-            }
-            Ok(bits)
+        let pick = |on: bool, set: Option<&Bound<'_, PyAny>>| match (on, set) {
+            (false, _) => Ok(Vec::new()),
+            (true, None) => Ok(vec![(0, 0x10000)]),
+            (true, Some(s)) => spans(s),
         };
-        let (rb, wb) = (
+        let (rs, ws) = (
             pick(on_read.is_some(), reads)?,
             pick(on_write.is_some(), writes)?,
         );
-        for a in 0..=0xFFFFu16 {
-            self.flat.observe_load(a, rb[a as usize]);
-            self.flat.observe_store(a, wb[a as usize]);
-        }
+        self.flat.observe_stack(stack);
+        self.flat.observe_loads(rs);
+        self.flat.observe_stores(ws);
         let s = self.subs(py);
         s.on_load = on_read;
         s.on_store = on_write;

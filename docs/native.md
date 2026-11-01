@@ -47,7 +47,10 @@ one wins; memory is not read if any substitutes), a write callback's non-None re
 passed on and stored. `observe_data_access(on_read, on_write, reads=None, writes=None)`
 calls `on_read(addr)` after each data load and `on_write(addr, value)` after each data
 store (the instruction's value, before write callbacks rewrite it), optionally limited
-to address sets; `mem.last_load` is the address of the most recent data load.
+to address sets: iterables of addresses and/or `range`s, or a `range`. A unit-step `range`
+is passed natively as a span, so arming costs the pages previously observed plus the words
+the filter covers, never a 64K sweep; `observe_data_access()` clears in the same bound.
+`mem.last_load` is the address of the most recent data load.
 
 ## NativeMemory
 

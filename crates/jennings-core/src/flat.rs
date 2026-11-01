@@ -84,8 +84,51 @@ impl Bits {
         w.set(if on { w.get() | m } else { w.get() & !m });
     }
 
+    /// Set every address in `lo..hi` (`lo < hi <= 0x10000`), a word at a time.
+    fn set_range(&self, lo: u32, hi: u32) {
+        let (first, last) = (lo as usize >> 6, (hi - 1) as usize >> 6);
+        for (i, w) in self.0[first..=last].iter().enumerate() {
+            let from = if i == 0 { lo & 63 } else { 0 };
+            let to = if first + i == last {
+                (hi - 1) % 64 + 1
+            } else {
+                64
+            };
+            w.set(w.get() | (!0u64 >> (64 - (to - from))) << from);
+        }
+    }
+
+    fn clear_page(&self, page: usize) {
+        self.0[page * 4..page * 4 + 4].iter().for_each(|w| w.set(0));
+    }
+
     fn page_any(&self, page: usize) -> bool {
         self.0[page * 4..page * 4 + 4].iter().any(|w| w.get() != 0)
+    }
+
+    /// Replace the set with the union of half-open `ranges`, keeping `flag` in `pages`
+    /// equal to [`Bits::page_any`]: only flagged pages are cleared.
+    fn replace(
+        &self,
+        pages: &[Cell<u8>; 256],
+        flag: u8,
+        ranges: impl IntoIterator<Item = (u32, u32)>,
+    ) {
+        for (p, c) in pages.iter().enumerate() {
+            if c.get() & flag != 0 {
+                self.clear_page(p);
+                c.set(c.get() & !flag);
+            }
+        }
+        for (lo, hi) in ranges {
+            let hi = hi.min(0x10000);
+            if lo < hi {
+                self.set_range(lo, hi);
+                pages[lo as usize >> 8..=(hi - 1) as usize >> 8]
+                    .iter()
+                    .for_each(|c| c.set(c.get() | flag));
+            }
+        }
     }
 }
 
@@ -276,6 +319,18 @@ impl FlatMemory {
     pub fn observe_store(&self, addr: u16, on: bool) {
         self.wobs.set(addr, on);
         self.refresh(addr as usize >> 8);
+    }
+
+    /// Observe data loads of exactly the union of half-open `ranges` (clamped to 64 KiB).
+    ///
+    /// Costs the pages previously observed plus the words the ranges cover.
+    pub fn observe_loads(&self, ranges: impl IntoIterator<Item = (u32, u32)>) {
+        self.robs.replace(&self.rpage, R_OBS, ranges);
+    }
+
+    /// Observe data stores of exactly the union of half-open `ranges` (clamped to 64 KiB).
+    pub fn observe_stores(&self, ranges: impl IntoIterator<Item = (u32, u32)>) {
+        self.wobs.replace(&self.wpage, W_OBS, ranges);
     }
 
     fn refresh_block(&self, block: u8) {
