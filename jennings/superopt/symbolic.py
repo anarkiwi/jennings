@@ -410,7 +410,7 @@ def execute(memory, start: int, end: int, spec: Spec, immediates=None) -> Semant
     for name, reg in REGISTERS.items():
         regs[reg] = z3.BitVecVal(spec.entry[name], 8) if name in spec.entry else inputs[name]
     for name, reg in FLAGS.items():
-        value = spec.entry.get(name)
+        value = spec.entry.get(name, 0 if name == "D" else None)
         regs[reg] = z3.BitVecVal(value, 8) if value is not None else z3.ZeroExt(7, inputs[name])
     executor = _Executor(program)
     outputs = executor.run(_State(regs, {}, {}, start))

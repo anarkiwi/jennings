@@ -29,7 +29,7 @@ found.instructions, found.size, found.cycles, found.code, found.rate
 | `outputs` | live-out locations: variable names, `A` `X` `Y`, `C` `Z` `N` `V` |
 
 Everything not live-out is dead at exit. Reads outside `vars`, `tables` and the stack are
-refused. Decimal mode is not modelled (as in deity-informant).
+refused. Decimal mode is not modelled: sequences are equivalent with the decimal flag clear.
 
 ## Semantics
 

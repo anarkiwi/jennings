@@ -9,7 +9,7 @@ pub const IRQ: u16 = 0xFFFE;
 
 /// Register file as `PcodeVM.reg`: A/X/Y/SP and one byte (0/1) per flag.
 ///
-/// `d` is stored but ADC/SBC are binary, as in deity-informant. `cycles` is
+/// `d` selects the NMOS decimal results of ADC, SBC and ARR. `cycles` is
 /// the running count (`processorCycles`); `jams` counts executed JAMs.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Cpu {

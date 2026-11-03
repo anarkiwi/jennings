@@ -80,5 +80,6 @@ against sidplayfp. See [docs/design.md](docs/design.md),
 
 ## Limitations
 
-No BCD (decimal-mode ADC/SBC), matching the deity-informant engine and the C64
-target domain (playroutines run `CLD`). `py65.monitor` is not reimplemented.
+Decimal mode follows the NMOS 6502 (ADC, SBC, ARR, and RRA/ISC through them; no cycle
+penalty), including the flags and invalid BCD digits (Bruce Clark, "Decimal Mode").
+`py65.monitor` is not reimplemented.

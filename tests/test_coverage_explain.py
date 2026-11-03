@@ -137,7 +137,7 @@ def test_slice_memory_inputs_and_writers():
     )
     mpu = _trace(mem, lb["end"])
     inputs, consts, _, writers = slice_of(mpu.trace, _last(mpu, lb["br"]))
-    assert inputs == {0x10: 3, 0x11: 4} and consts == {Constant(ORG, "C")}
+    assert inputs == {0x10: 3, 0x11: 4, "D": None} and consts == {Constant(ORG, "C")}
     assert writers == {0x20: {lb["st"]}}
 
 
