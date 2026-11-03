@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from jennings.devices.mpu6502 import MPU
+from jennings.memory import NATIVE, NativeMemory, ObservableMemory
 from jennings.opcodes import OPCODES, MODE_LEN
 
 py65 = pytest.importorskip("py65.devices.mpu6502")
@@ -164,3 +165,40 @@ def test_irq_and_nmi(new_mem):
 
 def test_repr(new_mem):
     assert "6510" in repr(MPU(memory=new_mem()))
+
+
+@pytest.mark.parametrize("dummies", [True, False])
+def test_bus_dummies_are_the_python_engines_to_clear(dummies):
+    """The Python engine also reads the unfixed address of a page-crossing indexed read and
+    writes a read-modify-write's operand twice, unless ``bus_dummies`` is cleared."""
+    seen = []
+    mem = ObservableMemory(subject=bytearray(0x10000))
+    mem.subscribe_to_read(range(0x3000, 0x3101), lambda a: seen.append(("r", a)))
+    mem.subscribe_to_write(range(0x3000, 0x3101), lambda a, v: seen.append(("w", a)))
+    mem[0x1000:0x1006] = [0xBD, 0xFF, 0x30, 0xFE, 0xFF, 0x30]
+    mpu = MPU(memory=mem, pc=0x1000)
+    mpu.x = 1
+    mpu.bus_dummies = dummies
+    seen.clear()
+    mpu.step()
+    mpu.step()
+    data = [("r", 0x3100), ("r", 0x3100), ("w", 0x3100)]
+    both = [
+        ("r", 0x3000),
+        ("r", 0x3100),
+        ("r", 0x3000),
+        ("r", 0x3100),
+        ("w", 0x3100),
+        ("w", 0x3100),
+    ]
+    assert mpu.bus_dummies is dummies
+    assert seen == (both if dummies else data)
+
+
+@pytest.mark.skipif(not NATIVE, reason="native core not built")
+def test_the_native_core_makes_no_dummy_accesses():
+    mpu = MPU(memory=NativeMemory())
+    assert mpu.bus_dummies is False
+    mpu.bus_dummies = False
+    with pytest.raises(ValueError):
+        mpu.bus_dummies = True

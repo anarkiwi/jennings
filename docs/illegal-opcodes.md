@@ -19,6 +19,5 @@ lives in deity-informant's
 [docs/illegal-opcodes.md](https://github.com/anarkiwi/deity-informant/blob/main/docs/illegal-opcodes.md).
 
 `mpu.disassemble[op]` carries the `(mnemonic, mode)` for every opcode, so the
-assembler and disassembler handle illegals with no special cases. The only
-documented behavioural gap versus real hardware is decimal mode (see
-[design.md](design.md)).
+assembler and disassembler handle illegals with no special cases. Decimal-mode
+ADC, SBC, ARR, RRA and ISC follow the NMOS 6502 (Bruce Clark, "Decimal Mode").

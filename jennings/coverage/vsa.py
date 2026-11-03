@@ -9,7 +9,7 @@ from functools import lru_cache
 
 import numpy as np
 from deity_informant import lift
-from deity_informant.lifter import STATUS_BITS
+from deity_informant.lifter import STATUS_BITS, bus_only
 
 from jennings.coverage._core import EXEC, FALLTHRU, TAKEN
 
@@ -257,13 +257,14 @@ def _flag_masks(op, f, scalars):
 
 
 class _Template:
-    __slots__ = ("ops", "prov", "ctrl", "length", "writes", "cones")
+    __slots__ = ("ops", "prov", "ctrl", "length", "writes", "cones", "bus")
 
     def __init__(self, op):
         mem = bytearray(5)
         mem[:2] = op, 3
         rec = lift(mem, 0)
         self.ops, self.ctrl, self.length = rec["ops"], rec["ctrl"], rec["len"]
+        self.bus = bus_only(self.ops)
         self.prov = dict(rec["prov"]["ops"])
         mem[4] = 0x5A
         for i, (a, b) in enumerate(zip(self.ops, lift(mem, 0)["ops"])):
@@ -280,7 +281,8 @@ class _Template:
 @lru_cache(maxsize=None)
 def template(op):
     """Lifted pcode of ``op`` with every operand-derived constant tagged in ``prov``
-    (``ptrhi1``: the zero-page pointer high byte plus one that SHA (zp),Y folds in)."""
+    (``ptrhi1``: the zero-page pointer high byte plus one that SHA (zp),Y folds in); ``bus``
+    the indices of its dummy bus accesses, which have no data use and are not executed."""
     return _Template(op)
 
 
@@ -359,6 +361,8 @@ def step(op, pc, regs, mem, origins=None):
     consts = {k: _const(fn, srcs, pc, mem) for k, (srcs, fn) in t.prov.items()}
     uniq = {}
     for i, (mn, out, ins) in enumerate(t.ops):
+        if i in t.bus:
+            continue
         vals = [
             (
                 consts[(i, j)]

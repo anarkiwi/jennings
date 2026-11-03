@@ -36,5 +36,4 @@ care about the lock-up can inspect `mpu.jammed`.
 
 ## Non-goals
 
-No BCD (decimal-mode ADC/SBC) — the engine and the C64 target domain assume
-`CLD`. The interactive `py65.monitor` is not reimplemented (no observed use).
+The interactive `py65.monitor` is not reimplemented (no observed use).

@@ -11,7 +11,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from deity_informant.lifter import CYCLETIME, OPS, lift
+from deity_informant.lifter import CYCLETIME, OPS, bus_only, lift
 
 OUT = Path(__file__).resolve().parent.parent / "crates/jennings-core/src/cpu_gen.rs"
 PC = 0x1234
@@ -64,6 +64,7 @@ class _Op:
         }
         self.consts = self._bind_consts()
         self.stack = self._stack_temps()
+        self.dummy = bus_only(self.rec["ops"])
         self.live = {}
 
     def _bind_consts(self):
@@ -90,13 +91,17 @@ class _Op:
         return out
 
     def _stack_temps(self):
-        """Unique offsets whose value derives from SP (stack-page addresses)."""
-        sp = set()
-        for _mn, out, ins in self.rec["ops"]:
-            if out is not None and out[0] == "u":
-                if any(v[:2] == ["r", 3] or (v[0] == "u" and v[1] in sp) for v in ins):
-                    sp.add(out[1])
-        return sp
+        """Unique offsets of stack-page addresses: ``SP | 0x100`` or a value derived from it."""
+        sp, page1 = set(), set()
+        for mn, out, ins in self.rec["ops"]:
+            if out is None or out[0] != "u":
+                continue
+            derived = any(v[:2] == ["r", 3] or (v[0] == "u" and v[1] in sp) for v in ins)
+            if derived:
+                sp.add(out[1])
+                if mn == "INT_OR" and any(v[0] == "c" and v[1] == 0x100 for v in ins):
+                    page1.add(out[1])
+        return page1
 
     def rd(self, i, j, vn):
         sp, off, _sz = vn
@@ -114,6 +119,8 @@ class _Op:
         for i, (mn, out, ins) in enumerate(self.rec["ops"]):
             a = [self.rd(i, j, v) for j, v in enumerate(ins)]
             stack = ins[0][0] == "u" and ins[0][1] in self.stack
+            if i in self.dummy:
+                continue
             if mn == "STORE":
                 assert ins[1][2] == 1
                 fn = "stack_write" if stack else "store"

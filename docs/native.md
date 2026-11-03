@@ -121,5 +121,10 @@ raster subscription with `mem.raster_model(ntsc)`. `run_to_rts` becomes
 observe only the SID writes and read `mem.last_load` instead of observing every load.
 Its VM hook also reports `PHA`/`PLA`/`PHP`/`PLP` page-1 accesses (they are P-Code
 `LOAD`/`STORE`); the native observer, per the hook's documented contract, does not.
+The native core's bus sees data accesses only. The Python engine also makes the NMOS dummy
+accesses (the throw-away reads of indexed accesses, a read-modify-write's dummy write, the byte
+after a one-byte opcode) unless `mpu.bus_dummies = False`; set it when the memory is a machine
+that places them on its own cycles (vagrant-moses does) or to observe data accesses as the
+native observer does.
 `wire_mpu`'s SID subscriptions carry over unchanged. `run_to_rts_until` becomes
 `mpu.run_to_rts_until(...)`.

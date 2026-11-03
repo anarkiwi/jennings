@@ -114,6 +114,17 @@ class MPU:
         self._vm.mem = mem
 
     @property
+    def bus_dummies(self):
+        """Whether the engine makes an instruction's dummy bus accesses (the throw-away reads and
+        a read-modify-write's dummy write) besides its data accesses. Clear it when the memory is
+        a machine that places them on its own cycles."""
+        return self._vm.dummies
+
+    @bus_dummies.setter
+    def bus_dummies(self, v):
+        self._vm.dummies = bool(v)
+
+    @property
     def a(self):
         return self._vm.reg[_A]
 
@@ -312,6 +323,16 @@ class NativeMPU(MPU):
     def memory(self, mem):
         if mem is not self._memory:
             raise TypeError("the native core's memory is fixed at construction")
+
+    @property
+    def bus_dummies(self):
+        """Always clear: the core's bus sees data accesses only."""
+        return False
+
+    @bus_dummies.setter
+    def bus_dummies(self, v):
+        if v:
+            raise ValueError("the native core makes no dummy bus accesses")
 
     a = _core_reg("a", 0xFF)
     x = _core_reg("x", 0xFF)

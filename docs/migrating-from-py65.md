@@ -23,7 +23,6 @@ engine) transitively.
   `mpu.instruct` / `mpu.cycletime` to add illegals (e.g. a `patch_illegals()`
   helper) should be deleted — jennings has them built in, and mutating those
   tables has no effect on execution.
-- **No decimal mode.** ADC/SBC ignore the D flag (the C64 domain runs `CLD`).
 - **`py65.monitor` is not provided.**
 
 ## anarkiwi repositories to migrate

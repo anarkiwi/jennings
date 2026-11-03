@@ -245,6 +245,7 @@ def _observed_python(data, steps):
     """pysidtracker.emu.observe_data_access's VM hook, minus stack ops (its documented contract)."""
     events = []
     mpu = MPU(memory=bytearray(data))
+    mpu.bus_dummies = False
 
     class Observed(PcodeVM):
         def _rd(self, addr, sz):
@@ -257,7 +258,7 @@ def _observed_python(data, steps):
             events.extend(("w", (addr + k) & 0xFFFF, (val >> 8 * k) & 0xFF) for k in range(sz))
 
     vm = Observed(b"")
-    vm.mem, vm.volatile = mpu._vm.mem, False
+    vm.mem, vm.volatile, vm.dummies = mpu._vm.mem, False, False
     mpu._vm = vm
     mpu.pc = 0x0800
     out = []
@@ -386,8 +387,17 @@ def test_differential_harness_detects_a_divergence(monkeypatch):
         finally:
             self.mpu.processorCycles += difftest.PAL_CPL
 
+    poll = bytes(
+        [0xAD, 0x12, 0xD0, 0x8D, 0x00, 0x03, 0x4C, 0x00, 0x08]
+    )  # LDA $D012; STA $0300; JMP
+    ram = bytearray(0x10000)
+    ram[0x0800 : 0x0800 + len(poll)] = poll
+    monkeypatch.setattr(
+        difftest.Program, "make", classmethod(lambda cls, seed, log: cls(seed, bytes(ram), {}, log))
+    )
+    assert difftest.run_program(0, 1_000, False) is None
     monkeypatch.setattr(difftest._Side, "_raster", late)
-    assert any(difftest.run_program(seed, 100_000, False) for seed in range(8))
+    assert difftest.run_program(0, 1_000, False) is not None
 
 
 def test_difftest_cli(capsys):

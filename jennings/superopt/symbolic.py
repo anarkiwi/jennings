@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 
 import z3
 from deity_informant import lift
+from deity_informant.lifter import bus_only
 
 from jennings.opcodes import OPCODES
 
@@ -205,7 +206,10 @@ class _Program:
                 return z3.BitVecVal(off, 8 * size)
             return (state.regs if space == "r" else uniq)[off]
 
+        dummy = bus_only(rec["ops"])
         for i, (name, dst, ins) in enumerate(rec["ops"]):
+            if i in dummy:
+                continue
             args = [get((i, j), vn) for j, vn in enumerate(ins)]
             if name == "STORE":
                 self.store(state, *args)
@@ -410,7 +414,7 @@ def execute(memory, start: int, end: int, spec: Spec, immediates=None) -> Semant
     for name, reg in REGISTERS.items():
         regs[reg] = z3.BitVecVal(spec.entry[name], 8) if name in spec.entry else inputs[name]
     for name, reg in FLAGS.items():
-        value = spec.entry.get(name)
+        value = spec.entry.get(name, 0 if name == "D" else None)
         regs[reg] = z3.BitVecVal(value, 8) if value is not None else z3.ZeroExt(7, inputs[name])
     executor = _Executor(program)
     outputs = executor.run(_State(regs, {}, {}, start))
