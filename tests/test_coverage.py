@@ -278,3 +278,15 @@ def test_coverage_plugin_import_is_light():
     assert package.CoverageMap is CoverageMap
     with pytest.raises(AttributeError):
         package.missing  # pylint: disable=pointless-statement
+
+
+def test_dummy_bus_accesses_are_not_data_reads_or_writes():
+    """A page-crossing indexed read, and a read-modify-write's unfixed and dummy accesses, touch
+    the bus but use no data: only the operand's address is read and written."""
+    mpu, _ = _mpu(["LDA $30FF,X", "INC $30FF,X"])
+    mpu.x = 1
+    mpu.step()
+    assert mpu.cov.flags[0x3100] == READ and not mpu.cov.flags[0x3000] & READ
+    mpu.step()
+    assert mpu.cov.flags[0x3100] == READ | WRITE
+    assert not mpu.cov.flags[0x3000] & (READ | WRITE)

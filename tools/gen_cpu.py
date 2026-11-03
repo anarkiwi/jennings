@@ -11,7 +11,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from deity_informant.lifter import CYCLETIME, OPS, lift
+from deity_informant.lifter import CYCLETIME, OPS, bus_only, lift
 
 OUT = Path(__file__).resolve().parent.parent / "crates/jennings-core/src/cpu_gen.rs"
 PC = 0x1234
@@ -64,7 +64,7 @@ class _Op:
         }
         self.consts = self._bind_consts()
         self.stack = self._stack_temps()
-        self.dummy_stores = self._dummy_stores()
+        self.dummy = bus_only(self.rec["ops"])
         self.live = {}
 
     def _bind_consts(self):
@@ -89,20 +89,6 @@ class _Op:
                 assert got == vals, (hex(self.op), i, j, got, vals)
                 out[(i, j)] = expr
         return out
-
-    def _dummy_stores(self):
-        """Indices of the read-modify-write dummy writes: a store of a loaded value back to its
-        address before the store of the result. The bus sees an instruction's data accesses
-        only; the machine places the throw-away reads and this write on its own cycles."""
-        ops = self.rec["ops"]
-        loaded = {tuple(out): ins[0] for mn, out, ins in ops if mn == "LOAD" and out}
-        return {
-            i
-            for i, (mn, _out, ins) in enumerate(ops)
-            if mn == "STORE"
-            and loaded.get(tuple(ins[1])) == ins[0]
-            and any(m == "STORE" and x[0] == ins[0] for m, _o, x in ops[i + 1 :])
-        }
 
     def _stack_temps(self):
         """Unique offsets of stack-page addresses: ``SP | 0x100`` or a value derived from it."""
@@ -133,7 +119,7 @@ class _Op:
         for i, (mn, out, ins) in enumerate(self.rec["ops"]):
             a = [self.rd(i, j, v) for j, v in enumerate(ins)]
             stack = ins[0][0] == "u" and ins[0][1] in self.stack
-            if (mn == "LOAD" and out is None) or i in self.dummy_stores:
+            if i in self.dummy:
                 continue
             if mn == "STORE":
                 assert ins[1][2] == 1

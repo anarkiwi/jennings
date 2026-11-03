@@ -33,7 +33,7 @@ def _run(mem, state):
     vm = _Observed(b"")
     for attr in ("mem", "reg", "uniq", "cycles", "volatile", "vicirq", "ciaicr", "wlog"):
         setattr(vm, attr, getattr(mpu._vm, attr))
-    vm.volatile, vm.log = False, ([], [])
+    vm.volatile, vm.dummies, vm.log = False, False, ([], [])
     mpu._vm = vm
     mpu.a, mpu.x, mpu.y, mpu.p, mpu.sp = state
     mpu.step()
@@ -85,7 +85,9 @@ def test_flow_is_exact_on_a_few_instructions():
     mem = bytearray(0x10000)
     mem[PC : PC + 3] = bytes([0x7D, 0x34, 0x12])  # ADC $1234,X
     flow = dataflow.flow(mem, PC, [0x1236])
-    assert flow["A"] == flow["C"] == {"A", "C", "X", 0x1236}
+    binary = {"A", "C", "X", 0x1236}
+    assert flow["Z"] == binary
+    assert flow["A"] == flow["C"] == flow["V"] == flow["N"] == binary | {"D"}
     mem[PC : PC + 2] = bytes([0xC9, 0x02])  # CMP #$02
     assert dataflow.flow(mem, PC) == {r: {"A"} for r in ("C", "Z", "N")}
     mem[PC : PC + 2] = bytes([0xB1, 0x34])  # LDA ($34),Y

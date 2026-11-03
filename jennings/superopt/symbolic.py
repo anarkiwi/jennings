@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 
 import z3
 from deity_informant import lift
+from deity_informant.lifter import bus_only
 
 from jennings.opcodes import OPCODES
 
@@ -205,7 +206,10 @@ class _Program:
                 return z3.BitVecVal(off, 8 * size)
             return (state.regs if space == "r" else uniq)[off]
 
+        dummy = bus_only(rec["ops"])
         for i, (name, dst, ins) in enumerate(rec["ops"]):
+            if i in dummy:
+                continue
             args = [get((i, j), vn) for j, vn in enumerate(ins)]
             if name == "STORE":
                 self.store(state, *args)

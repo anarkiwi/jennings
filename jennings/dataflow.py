@@ -5,6 +5,7 @@ registers, flags and bytes its value came from; a branch maps ``"PC"`` to its co
 """
 
 from deity_informant import lift, lifter
+from deity_informant.lifter import bus_only
 
 __all__ = ["REGISTERS", "flow"]
 
@@ -20,8 +21,8 @@ def flow(mem, pc, loads=(), stores=(), operands=None):
     """``{output: frozenset(inputs)}`` of the instruction at ``pc`` in ``mem``.
 
     Locations are :data:`REGISTERS` names and memory addresses. ``loads``/``stores`` are
-    the byte addresses it read and wrote, in access order (as an observed run reports
-    them); a load depends on its address, a store's byte only on the value stored.
+    the byte addresses its data accesses read and wrote, in access order (as an observed run
+    reports them; the dummy bus accesses have no data use and are not among them); a load depends on its address, a store's byte only on the value stored.
     ``operands`` ``{offset: location}`` makes constants built from those operand bytes
     depend on the given locations (e.g. self-modified operands).
     """
@@ -42,7 +43,10 @@ def flow(mem, pc, loads=(), stores=(), operands=None):
             return uniq.get(off, frozenset())
         return regs.get(off, frozenset((REGISTERS.get(off, "r%d" % off),)))
 
+    dummy = bus_only(rec["ops"])
     for i, (mn, dst, ins) in enumerate(rec["ops"]):
+        if i in dummy:
+            continue
         if mn == "STORE":
             for _ in range(ins[1][2]):
                 addr = next(stores, None)

@@ -78,6 +78,7 @@ class _Side:
             mem.subscribe_to_read((0xD011, 0xD012), self._raster)
         self.mem = mem
         self.mpu = MPU(memory=mem)
+        self.mpu.bus_dummies = False
         for base in READ_PAGES:
             mem.subscribe_to_read(range(base << 8, (base + 1) << 8), self._read_a)
         mem.subscribe_to_read(range(0xD400, 0xD420), self._read_b)
