@@ -105,13 +105,17 @@ class _Op:
         }
 
     def _stack_temps(self):
-        """Unique offsets whose value derives from SP (stack-page addresses)."""
-        sp = set()
-        for _mn, out, ins in self.rec["ops"]:
-            if out is not None and out[0] == "u":
-                if any(v[:2] == ["r", 3] or (v[0] == "u" and v[1] in sp) for v in ins):
-                    sp.add(out[1])
-        return sp
+        """Unique offsets of stack-page addresses: ``SP | 0x100`` or a value derived from it."""
+        sp, page1 = set(), set()
+        for mn, out, ins in self.rec["ops"]:
+            if out is None or out[0] != "u":
+                continue
+            derived = any(v[:2] == ["r", 3] or (v[0] == "u" and v[1] in sp) for v in ins)
+            if derived:
+                sp.add(out[1])
+                if mn == "INT_OR" and any(v[0] == "c" and v[1] == 0x100 for v in ins):
+                    page1.add(out[1])
+        return page1
 
     def rd(self, i, j, vn):
         sp, off, _sz = vn
