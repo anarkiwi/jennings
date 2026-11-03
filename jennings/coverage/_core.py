@@ -127,8 +127,8 @@ class CoverageMap:
 
 class CoverageVM(PcodeVM):
     """``PcodeVM`` recording its data accesses (not the dummy bus accesses) into ``cov``;
-    ``cur_pc`` is the executing instruction and ``last_writer`` (int32 per address, -1 for the image) the last instruction to store there
-    (the JSR or BRK for its stack pushes, the vector for an interrupt frame);
+    ``cur_pc`` is the executing instruction and ``last_writer`` (int32 per address, -1 for the
+    image) the last instruction to store there (the JSR or BRK for its stack pushes, the vector for an interrupt frame);
     ``vector_target`` ``{pointer: target}`` the last target consumed through each pointer."""
 
     __slots__ = ("cov", "cur_pc", "last_writer", "vector_target", "_lw")

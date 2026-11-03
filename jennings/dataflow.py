@@ -22,7 +22,8 @@ def flow(mem, pc, loads=(), stores=(), operands=None):
 
     Locations are :data:`REGISTERS` names and memory addresses. ``loads``/``stores`` are
     the byte addresses its data accesses read and wrote, in access order (as an observed run
-    reports them; the dummy bus accesses have no data use and are not among them); a load depends on its address, a store's byte only on the value stored.
+    reports them; the dummy bus accesses have no data use and are not among them); a load depends on its address, a store's byte only on the value
+    stored.
     ``operands`` ``{offset: location}`` makes constants built from those operand bytes
     depend on the given locations (e.g. self-modified operands).
     """
