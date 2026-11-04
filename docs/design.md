@@ -18,6 +18,15 @@ jennings is a py65-compatible façade over the deity-informant execution engine.
   that consume the MPU `disassemble` table. Because that table is populated from
   deity-informant's `OPS` (all 256 opcodes), illegal mnemonics decode and
   assemble with no special-casing.
+  `Assembler.assemble_program(text, origin)` takes `;`/newline separated statements
+  with labels (`name:` alone or before a statement) and returns
+  `(bytes, {label: address})`. Labels work wherever an operand takes a number
+  (`name`, `name+1`, `#<name`, `#>name`, branches, indexed, indirect). Passes repeat
+  until addresses agree, starting with every label at `origin`: an operand is zero page
+  only while its label stays on page zero and addresses only move up, giving the
+  smallest consistent layout. An undefined label raises `KeyError`, a duplicate
+  `ValueError`, a branch beyond -128..127 `OverflowError`. `assemble(statement, pc)`
+  is unchanged and still wraps out-of-range branches like py65.
 
 ## Why a façade
 

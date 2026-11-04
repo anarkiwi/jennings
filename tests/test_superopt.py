@@ -229,3 +229,16 @@ def test_cli(capsys):
         == 0
     )
     assert "no shorter sequence" in capsys.readouterr().out
+
+
+def test_cli_branching_idiom(capsys):
+    from jennings.superopt.__main__ import main, assemble  # pylint: disable=import-outside-toplevel
+
+    text = "LDA $10; BPL p; EOR #$FF; CLC; ADC #$01; p: STA $11"
+    assert assemble(text) == bytes(
+        [0xA5, 0x10, 0x10, 0x05, 0x49, 0xFF, 0x18, 0x69, 0x01, 0x85, 0x11]
+    )
+    assert assemble("LDA $10\nBPL p\np: STA $11") == bytes([0xA5, 0x10, 0x10, 0x00, 0x85, 0x11])
+    args = [text, "--var", "a=0x10", "--var", "r=0x11", "--out", "r", "--backend", "numpy"]
+    assert main(args + ["--max-length", "2"]) == 0
+    assert "reference: 11 bytes" in capsys.readouterr().out

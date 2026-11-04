@@ -9,6 +9,14 @@ pip install jennings[cuda]       # + CuPy, for an NVIDIA GPU
 python -m jennings.superopt 'LDA $10; CLC; ADC #$01; STA $10' --var v=0x10 --out v
 ```
 
+Code may branch: `name:` labels (alone or before a statement, `;` or newline separated)
+are resolved by `Assembler.assemble_program`.
+
+```bash
+python -m jennings.superopt 'LDA $10; BPL p; EOR #$FF; CLC; ADC #$01; p: STA $11' \
+    --var a=0x10 --var r=0x11 --out r
+```
+
 ```python
 from jennings.superopt import Problem, Spec, Table, Var, execute, search
 
