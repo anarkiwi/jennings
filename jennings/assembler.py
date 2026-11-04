@@ -13,6 +13,8 @@ from jennings.utils.addressing import AddressParser
 class Assembler:
     Statement = re.compile(r"^([A-z]{3}[0-7]?\s+\(?\s*)([^,\s\)]+)(\s*[,xXyY\s]*\)?[,xXyY\s]*)$")
 
+    Label = re.compile(r"^\s*([A-Za-z_.][\w.]*)\s*:(.*)$")
+
     Addressing = (
         ("zpi", "($00FF)"),
         ("zpx", "$00FF,X"),
@@ -49,8 +51,11 @@ class Assembler:
             if cur is None or (cur in ILLEGAL_OPCODES and op not in ILLEGAL_OPCODES):
                 self._encode[entry] = op
 
-    def assemble(self, statement, pc=0x0000):
-        """Assemble ``statement`` to a list of bytes; raise on failure."""
+    def assemble(self, statement, pc=0x0000, check_range=False):
+        """Assemble ``statement`` to a list of bytes; raise on failure.
+
+        ``check_range`` makes a branch beyond -128..127 raise ``OverflowError``
+        (py65 wraps it silently)."""
         opcode, operand = self.normalize_and_split(statement)
         for mode, pattern in self._addressing:
             match = pattern.match(operand)
@@ -63,7 +68,11 @@ class Assembler:
             operands = match.groups()
             if mode == "rel":
                 absolute = int("".join(operands), 16)
-                relative = ((absolute - pc) - 2) & self._mpu.byteMask
+                offset = (absolute - pc) - 2
+                half = (self._mpu.byteMask + 1) // 2
+                if check_range and not -half <= offset < half:
+                    raise OverflowError("branch out of range: %s" % statement)
+                relative = offset & self._mpu.byteMask
                 operands = [self._mpu.BYTE_FORMAT % relative]
             elif len(operands) == 2:
                 operands = (operands[1], operands[0])
@@ -73,6 +82,43 @@ class Assembler:
             return result
         raise SyntaxError(statement)
 
+    def assemble_program(self, text, origin=0x0000):
+        """Assemble ``;`` or newline separated statements to ``(bytes, {label: address})``.
+
+        A label is ``name:`` alone or before a statement. Operands take labels wherever
+        they take numbers (``name``, ``name+1``, ``#<name``, ``#>name``). Passes repeat
+        with the previous pass's addresses until they agree; the first assumes every
+        label is at ``origin``, so an operand is zero page only while its label stays on
+        page zero, and addresses only move up: the smallest consistent layout. Raises
+        ``ValueError`` for a duplicate label, ``KeyError`` for an undefined one,
+        ``OverflowError`` for a branch out of range."""
+        statements = []
+        for line in re.split(r"[;\n]", text):
+            while match := self.Label.match(line):
+                statements.append((match.group(1), None))
+                line = match.group(2)
+            if line.strip():
+                statements.append((None, line.strip()))
+        names = [name for name, _ in statements if name]
+        for name in set(names):
+            if names.count(name) > 1:
+                raise ValueError("duplicate label: %s" % name)
+        parser, saved = self._address_parser, self._address_parser.labels
+        try:
+            parser.labels, strict = dict.fromkeys(names, origin), False
+            while True:
+                code, found = bytearray(), {}
+                for name, statement in statements:
+                    if name:
+                        found[name] = origin + len(code)
+                    else:
+                        code += bytes(self.assemble(statement, origin + len(code), strict))
+                if strict:
+                    return bytes(code), found
+                strict, parser.labels = found == parser.labels, found
+        finally:
+            parser.labels = saved
+
     def normalize_and_split(self, statement):
         """Normalise ``statement`` and split into ``(opcode, operand)`` strings."""
         statement = " ".join(statement.split())
@@ -81,7 +127,10 @@ class Assembler:
             before, target, after = match.groups()
             if target.startswith("#"):
                 try:
-                    if target[1] in ("'", '"'):
+                    if target[1] in "<>":
+                        number = self._address_parser.number(target[2:])
+                        number = number & self._mpu.byteMask if target[1] == "<" else number >> 8
+                    elif target[1] in ("'", '"'):
                         number = ord(target[2])
                     else:
                         number = self._address_parser.number(target[1:])

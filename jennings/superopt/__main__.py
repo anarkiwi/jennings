@@ -21,11 +21,8 @@ def _located(text: str, kind, default: int):
 
 
 def assemble(text: str, origin: int = ORIGIN) -> bytes:
-    """The bytes of ``;``-separated statements."""
-    assembler, out = Assembler(MPU()), bytearray()
-    for statement in filter(None, (s.strip() for s in text.split(";"))):
-        out += bytes(assembler.assemble(statement, origin + len(out)))
-    return bytes(out)
+    """The bytes of ``;`` or newline separated statements, labels allowed."""
+    return Assembler(MPU()).assemble_program(text, origin)[0]
 
 
 def listing(code: bytes, origin: int = ORIGIN) -> list:
@@ -43,7 +40,7 @@ def listing(code: bytes, origin: int = ORIGIN) -> list:
 def main(argv=None) -> int:
     """Searches for the minimal equivalent of the code given."""
     parser = argparse.ArgumentParser(prog="python -m jennings.superopt", description=__doc__)
-    parser.add_argument("code", help="';'-separated statements")
+    parser.add_argument("code", help="';'-separated statements, `name:` labels allowed")
     parser.add_argument("--var", action="append", default=[], help="name=address[:size]")
     parser.add_argument("--table", action="append", default=[], help="name=address[:length]")
     parser.add_argument("--out", action="append", default=[], help="a live-out location")

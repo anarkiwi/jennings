@@ -29,6 +29,7 @@ mpu.memory[0:2] = [0xAF, 0x10]           # LAX $10 — an illegal py65 cannot ru
 mpu.step()                               # a, x <- mem[$10]; cycle-exact
 
 Assembler(MPU()).assemble("SLO $20")     # [0x07, 0x20]
+Assembler(MPU()).assemble_program("loop: DEX; BNE loop", 0x1000)  # (b"\xca\xd0\xfd", {"loop": 0x1000})
 Disassembler(MPU()).instruction_at(pc)   # (len, "SLO $20")
 
 from jennings import dataflow
