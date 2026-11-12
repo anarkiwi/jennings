@@ -30,6 +30,7 @@ mpu.step()                               # a, x <- mem[$10]; cycle-exact
 
 Assembler(MPU()).assemble("SLO $20")     # [0x07, 0x20]
 Assembler(MPU()).assemble_program("loop: DEX; BNE loop", 0x1000)  # (b"\xca\xd0\xfd", {"loop": 0x1000})
+Assembler(MPU()).assemble_program("JMP (v); v: .word v", 0x1000)  # (b"\x6c\x03\x10\x03\x10", {"v": 0x1003})
 Disassembler(MPU()).instruction_at(pc)   # (len, "SLO $20")
 
 from jennings import dataflow

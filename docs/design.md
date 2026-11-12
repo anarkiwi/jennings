@@ -21,7 +21,9 @@ jennings is a py65-compatible façade over the deity-informant execution engine.
   `Assembler.assemble_program(text, origin)` takes `;`/newline separated statements
   with labels (`name:` alone or before a statement) and returns
   `(bytes, {label: address})`. Labels work wherever an operand takes a number
-  (`name`, `name+1`, `#<name`, `#>name`, branches, indexed, indirect). Passes repeat
+  (`name`, `name+1`, `#<name`, `#>name`, branches, indexed, indirect). `.byte` and
+  `.word` store comma separated values (numbers, labels, `<name`/`>name`) little endian;
+  bare numbers are hex, as in operands (`+10` decimal, `%11` binary). Passes repeat
   until addresses agree, starting with every label at `origin`: an operand is zero page
   only while its label stays on page zero and addresses only move up, giving the
   smallest consistent layout. An undefined label raises `KeyError`, a duplicate
