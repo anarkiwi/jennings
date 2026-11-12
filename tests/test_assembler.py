@@ -144,3 +144,32 @@ def test_program_errors():
 
 def test_single_statement_branch_still_wraps():
     assert Assembler(MPU()).assemble("BNE $2000", 0x1000) == [0xD0, 0xFE & (0x2000 - 0x1000 - 2)]
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        (".byte 1, $FF, +10, %11", [0x01, 0xFF, 0x0A, 0x03]),
+        (".BYTE 10", [0x10]),
+        (".word $1234, 7", [0x34, 0x12, 0x07, 0x00]),
+        ("v: .word v; .byte <v, >v", [0x00, 0x10, 0x00, 0x10]),
+        ("JMP (v); v: .word t; t: .byte <t-1", [0x6C, 0x03, 0x10, 0x05, 0x10, 0x04]),
+        ("LDA #<t; t: .byte 0", [0xA9, 0x02, 0x00]),
+    ],
+)
+def test_program_data_directives(text, expected):
+    assert list(_program(text)[0]) == expected
+
+
+def test_program_data_labels_and_layout():
+    code, labels = _program("LDA t,X; RTS; t: .byte 0, 5, 6; cell: .byte 0")
+    assert code == bytes([0xBD, 0x04, 0x10, 0x60, 0x00, 0x05, 0x06, 0x00])
+    assert labels == {"t": 0x1004, "cell": 0x1007}
+
+
+def test_data_directive_single_statement_and_errors():
+    assert Assembler(MPU()).assemble(".word $ABCD") == [0xCD, 0xAB]
+    with pytest.raises(OverflowError):
+        _program(".byte $100")
+    with pytest.raises(KeyError, match="nowhere"):
+        _program(".word nowhere")

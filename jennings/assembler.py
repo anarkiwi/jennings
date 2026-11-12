@@ -15,6 +15,8 @@ class Assembler:
 
     Label = re.compile(r"^\s*([A-Za-z_.][\w.]*)\s*:(.*)$")
 
+    Data = {".BYTE": 1, ".WORD": 2}
+
     Addressing = (
         ("zpi", "($00FF)"),
         ("zpx", "$00FF,X"),
@@ -55,7 +57,18 @@ class Assembler:
         """Assemble ``statement`` to a list of bytes; raise on failure.
 
         ``check_range`` makes a branch beyond -128..127 raise ``OverflowError``
-        (py65 wraps it silently)."""
+        (py65 wraps it silently). ``.byte``/``.word`` take comma separated values
+        (numbers, labels, ``<``/``>`` low/high bytes) and store them little endian."""
+        directive, _, values = statement.strip().partition(" ")
+        width = self.Data.get(directive.upper())
+        if width:
+            result = []
+            for value in values.split(","):
+                number = self.value(value.strip())
+                if number >> (width * self._mpu.BYTE_WIDTH):
+                    raise OverflowError(statement)
+                result.extend(number.to_bytes(width, "little"))
+            return result
         opcode, operand = self.normalize_and_split(statement)
         for mode, pattern in self._addressing:
             match = pattern.match(operand)
@@ -119,6 +132,15 @@ class Assembler:
         finally:
             parser.labels = saved
 
+    def value(self, token):
+        """The number, label or ``<``/``>`` low/high byte of one ``token``."""
+        if token[:1] in ("<", ">"):
+            number = self._address_parser.number(token[1:])
+            return (
+                number & self._mpu.byteMask if token[0] == "<" else number >> self._mpu.BYTE_WIDTH
+            )
+        return self._address_parser.number(token)
+
     def normalize_and_split(self, statement):
         """Normalise ``statement`` and split into ``(opcode, operand)`` strings."""
         statement = " ".join(statement.split())
@@ -127,13 +149,10 @@ class Assembler:
             before, target, after = match.groups()
             if target.startswith("#"):
                 try:
-                    if target[1] in "<>":
-                        number = self._address_parser.number(target[2:])
-                        number = number & self._mpu.byteMask if target[1] == "<" else number >> 8
-                    elif target[1] in ("'", '"'):
+                    if target[1] in ("'", '"'):
                         number = ord(target[2])
                     else:
-                        number = self._address_parser.number(target[1:])
+                        number = self.value(target[1:])
                 except IndexError:
                     raise SyntaxError(statement)
                 if number < 0 or number > self._mpu.byteMask:
