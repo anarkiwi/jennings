@@ -50,9 +50,9 @@ jennings[cuda]`), and a z3 proof of the result. See [docs/superopt.md](docs/supe
 MPU executes, given the addresses an observed run accessed.
 
 `jennings.coverage` records 6502 code coverage (executed bytes, branch directions, data
-accesses, dynamic edges), reports it through coverage.py, derives self-modifying-code and
-interrupt-vector obligations, explains one-way branches, and records per-test coverage
-from pytest. See [docs/coverage.md](docs/coverage.md).
+accesses, dynamic edges), reports it through coverage.py on listings that can follow computed
+jumps through constant tables, derives self-modifying-code and interrupt-vector obligations,
+explains one-way branches, and records per-test coverage from pytest. See [docs/coverage.md](docs/coverage.md).
 
 ## Native core
 

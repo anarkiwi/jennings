@@ -170,6 +170,35 @@ target, `JSR` to the next instruction with the callee as a new entry; `RTS`, `RT
 they overlap; statically found starts that overlap listed bytes are dropped. Bytes inside
 `ranges` that no instruction covers become non-executable `.byte` rows.
 
+### Computed transfers
+
+`Listing.disassemble(..., resolve=True)` also decodes code reached only through table entries
+a run never took (`jennings.coverage.resolve`). It is opt-in because even when a run executed
+every table target, an unbounded index can find a valid-looking target in data the run never
+touched.
+
+```python
+listing = Listing.disassemble(mem, entries, cov, ranges=[(0x1000, 0x1FFF)], resolve=True)
+listing.resolved                  # [[transfer, target]], statically resolved edges
+```
+
+| step | rule |
+|---|---|
+| transfers | `JMP (ind)`, `RTS`, `RTI`, and `JMP`/`JSR`/branches with an operand byte that `cov` saw written or a decoded unexecuted store may write (`abs,X`/`abs,Y` stores: base..base+255) |
+| paths | every backward path of at most 16 instructions over the static predecessors, stopping at entries, callees, dynamic-edge targets and `JSR` returns; RTS/RTI paths must push |
+| constants | image bytes inside `ranges` (all memory without `ranges`) not written, outside the stack page |
+| forward run | `vsa.step` from unknown A/X/Y/flags with a fixed SP; stores go to a path overlay, loads read the overlay, else constants, else any value; a branch narrows its flag-origin register to the path's direction (`CMP #n`/`BCS`, `BEQ`, ...) |
+| splits | an indexed load whose value reaches the transfer (backward slice over registers and the addresses each step accessed; the index registers of such loads are followed separately, so a load that only computes an index stays a set) splits the state per index value unless its least byte is written data, so a target's low and high bytes come from one entry |
+| table extent | splits in index order: leading splits reading code or non-constant bytes are skipped; the first other one starts the table (none if it reads another load's base or first byte), the next one not overlapping it sets the stride (2 for an interleaved word table); the table ends at the first split on the stride reading code, a non-constant byte, a byte the table took, or another load's base or first byte (a split table's low column ends at its high column) |
+| targets | each split ending in a single target; it is decoded only if its whole descent stays inside the image with documented opcodes other than `BRK`, overlaps no listed instruction at another alignment, and covers no table byte, data-only `READ` byte, written opcode byte or referenced object start |
+
+Resolution repeats on the transfers of newly decoded code. A target that is not otherwise
+listed gets a label and the trailing comment `; resolved from $XXXX` naming its transfers;
+lines it reaches carry no mark, and all resolved edges, including those to listed code, are
+in `resolved`. Bounds come only from the path (masks, shifts, compares, the image values of
+constant bytes it reads); an index read from a variable is unbounded, so a dispatch indexed
+by a command byte lists every entry up to the table's end.
+
 The sidecar is JSON and independent of how the source was produced:
 
 | key | rows | meaning |
