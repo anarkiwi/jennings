@@ -78,4 +78,4 @@ python tools/acme_oracle.py SOURCE... [--fuzz 1000 --seed 0] [--keep DIR]
 `--fuzz` adds random programs (labels, anonymous labels, expressions, every 6510
 addressing mode, data, a macro, `!pseudopc`). `tests/test_acme_oracle.py` runs the same
 comparison on the test sources and fuzz seeds when `acme` is installed; the CI `acme`
-job installs it.
+job installs Debian's `0.97~svn20211115` build, since later snapshots behave differently.
