@@ -42,6 +42,9 @@ dataflow.flow(mem, pc, loads=[0x1236])   # ADC $1234,X: {"A": {"A", "C", "X", 0x
 p-code, an enumerative search on test vectors (numpy, or CUDA with `pip install
 jennings[cuda]`), and a z3 proof of the result. See [docs/superopt.md](docs/superopt.md).
 
+`jennings.acme` assembles ACME 0.97 sources (the 6502/6510 subset) byte-identically to
+`acme`, with its `-o`/`-l`/`!to` command line as `jennings-acme`. See [docs/acme.md](docs/acme.md).
+
 `jennings.dataflow.flow` reads each instruction's output-to-input dependencies
 (registers, flags, memory bytes, a branch's condition) off the same lifted pcode the
 MPU executes, given the addresses an observed run accessed.
