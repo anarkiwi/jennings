@@ -10,6 +10,17 @@ from jennings.opcodes import ILLEGAL_OPCODES
 from jennings.utils.addressing import AddressParser
 
 
+def encoding(table):
+    """``{(mnemonic, mode): opcode}`` over an opcode-indexed ``table`` of ``(mnemonic, mode)``,
+    preferring the legal opcode and then the lowest (NOP -> 0xEA, not 0x1A)."""
+    encode = {}
+    for op, entry in enumerate(table):
+        cur = encode.get(entry)
+        if cur is None or (cur in ILLEGAL_OPCODES and op not in ILLEGAL_OPCODES):
+            encode[entry] = op
+    return encode
+
+
 class Assembler:
     Statement = re.compile(r"^([A-z]{3}[0-7]?\s+\(?\s*)([^,\s\)]+)(\s*[,xXyY\s]*\)?[,xXyY\s]*)$")
 
@@ -46,12 +57,7 @@ class Assembler:
             pat = pat.replace("00", "0{%d}" % numchars)
             pat = pat.replace("FF", "([0-9A-F]{%d})" % numchars)
             self._addressing.append([mode, re.compile(pat)])
-        # (mnemonic, mode) -> opcode, preferring the legal opcode (NOP -> 0xEA, not 0x1A).
-        self._encode = {}
-        for op, entry in enumerate(mpu.disassemble):
-            cur = self._encode.get(entry)
-            if cur is None or (cur in ILLEGAL_OPCODES and op not in ILLEGAL_OPCODES):
-                self._encode[entry] = op
+        self._encode = encoding(mpu.disassemble)
 
     def assemble(self, statement, pc=0x0000, check_range=False):
         """Assemble ``statement`` to a list of bytes; raise on failure.
