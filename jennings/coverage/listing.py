@@ -48,10 +48,11 @@ def _resolve(m, succ, owned, image, cov, heads, jumps, callees):
     """Decode the statically resolved targets of computed transfers into ``succ``/``owned``
     until no new transfer appears: ``(edges {(transfer, target)}, new roots)``. A target is
     taken only if its whole descent decodes documented opcodes other than BRK inside the
-    image, without misaligned overlap, table bytes, data-only reads or written opcodes."""
+    image, without misaligned overlap, table bytes, read-only data or written opcodes."""
     flags = np.zeros(0x10000, np.uint8) if cov is None else cov.flags
     code = (flags & (EXEC | OPERAND)) != 0
-    data, var = ((flags & READ) != 0) & ~code, ((flags & WRITE) != 0) & ~code
+    var = ((flags & WRITE) != 0) & ~code
+    data = ((flags & READ) != 0) & ~code & ~var
     edges, new, done, firsts = set(), set(), set(), set()
     while True:
         tables = Tables(m, succ, owned, image, cov, heads | callees, firsts)

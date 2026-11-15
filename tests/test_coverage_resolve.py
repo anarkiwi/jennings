@@ -239,3 +239,20 @@ def test_view_load_unions_overlay_and_constants():
     view = _View(const, m, {0x12: 1 << 7})
     assert bits(view.load(from_values([0x10, 0x11, 0x12], 2))).tolist() == [5, 6, 7]
     assert view.load(from_values([0x10, 0x13], 2)) == TOP8
+
+
+@pytest.mark.parametrize(
+    "touch, taken", [("LDA #5; STA h0+1; LDA h0+1", True), ("LDA h0+1", False)]
+)
+def test_run_read_bytes_reject_targets_unless_also_written(touch, taken):
+    text = (
+        f"{touch}; LDA $10; AND #1; TAX; LDA lo,X; STA $20; LDA hi,X; STA $21; JMP ($20);"
+        "h0: LDA #$00; RTS; h1: INY; RTS; lo: .byte <h0, <h1; hi: .byte >h0, >h1"
+    )
+    mem, labels, span = _prog(text)
+    mpu = CoverageMPU(memory=mem.tolist(), pc=ORG)
+    mpu.memory[0x10] = 1
+    while mpu.pc != labels["h1"] + 1:
+        mpu.step()
+    lst = Listing.disassemble(mem, [ORG], mpu.cov, ranges=[span], resolve=True)
+    assert (lst.line(labels["h0"]) is not None) == taken
