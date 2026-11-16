@@ -19,6 +19,7 @@ use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::ffi;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyRange, PyRangeMethods, PySlice};
+use pyo3::{PyTraverseError, PyVisit};
 
 const PAL: (u32, u32) = (63, 312);
 const NO_IRQ: u64 = u64::MAX;
@@ -95,8 +96,16 @@ unsafe impl Sync for Memory {}
 impl Memory {
     #[allow(clippy::mut_from_ref)]
     fn subs(&self, _py: Python<'_>) -> &mut Subs {
-        // SAFETY: GIL held (token `_py`); callers never hold two borrows at once.
+        // SAFETY: GIL held (token `_py`); no borrow is held across a call into Python.
         unsafe { &mut *self.subs.get() }
+    }
+
+    fn callbacks(&self, py: Python<'_>, addr: u16, read: bool) -> Vec<Py<PyAny>> {
+        let s = self.subs(py);
+        let map = if read { &s.read } else { &s.write };
+        map.get(&addr)
+            .map(|v| v.iter().map(|c| c.clone_ref(py)).collect())
+            .unwrap_or_default()
     }
 
     fn host<R>(&self, f: impl FnOnce(&mut PyHooks) -> R) -> PyResult<R> {
@@ -212,6 +221,22 @@ impl Memory {
 
     fn __len__(&self) -> usize {
         0x10000
+    }
+
+    fn __traverse__(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
+        // SAFETY: the collector runs attached, and no borrow of `subs` spans a call into Python.
+        let s = unsafe { &*self.subs.get() };
+        for cb in s.read.values().chain(s.write.values()).flatten() {
+            visit.call(cb)?;
+        }
+        visit.call(&s.on_load)?;
+        visit.call(&s.on_store)
+    }
+
+    /// Drops every callback; armed addresses stay watched but read and write memory unchanged.
+    fn __clear__(&self) {
+        // SAFETY: as for `__traverse__`; the callbacks are dropped after the borrow ends.
+        let _old = std::mem::take(unsafe { &mut *self.subs.get() });
     }
 
     fn __getitem__(&self, py: Python<'_>, key: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
@@ -378,8 +403,10 @@ impl Memory {
         self.flat.observe_loads(rs);
         self.flat.observe_stores(ws);
         let s = self.subs(py);
-        s.on_load = on_read;
-        s.on_store = on_write;
+        let _old = (
+            std::mem::replace(&mut s.on_load, on_read),
+            std::mem::replace(&mut s.on_store, on_write),
+        );
         Ok(())
     }
 }
@@ -400,21 +427,19 @@ impl Memory {
     ) -> PyResult<()> {
         self.owner.check()?;
         for a in addrs {
-            let list = {
-                let s = self.subs(py);
-                if read { &mut s.read } else { &mut s.write }
-                    .entry(a)
-                    .or_default()
-            };
             let mut seen = false;
-            for c in list.iter() {
+            for c in self.callbacks(py, a, read) {
                 if cb.eq(c.bind(py))? {
                     seen = true;
                     break;
                 }
             }
             if !seen {
-                list.push(cb.clone().unbind());
+                let s = self.subs(py);
+                if read { &mut s.read } else { &mut s.write }
+                    .entry(a)
+                    .or_default()
+                    .push(cb.clone().unbind());
             }
             if read {
                 self.flat.watch_read(a, true);
@@ -445,14 +470,6 @@ impl<'a> PyHooks<'a> {
         }
     }
 
-    fn callbacks(&self, py: Python<'_>, addr: u16, read: bool) -> Vec<Py<PyAny>> {
-        let s = self.m.subs(py);
-        let map = if read { &s.read } else { &s.write };
-        map.get(&addr)
-            .map(|v| v.iter().map(|c| c.clone_ref(py)).collect())
-            .unwrap_or_default()
-    }
-
     fn result(&mut self, py: Python<'_>, r: PyResult<Py<PyAny>>) -> Option<u8> {
         match r.and_then(|r| r.extract::<Option<i64>>(py)) {
             Ok(v) => v.map(|v| v as u8),
@@ -471,7 +488,7 @@ impl Hooks for PyHooks<'_> {
         }
         Python::attach(|py| {
             let mut out = None;
-            for cb in self.callbacks(py, addr, true) {
+            for cb in self.m.callbacks(py, addr, true) {
                 let r = cb.call1(py, (addr,));
                 if let Some(v) = self.result(py, r) {
                     out = Some(v);
@@ -490,7 +507,7 @@ impl Hooks for PyHooks<'_> {
         }
         Python::attach(|py| {
             let mut v = v;
-            for cb in self.callbacks(py, addr, false) {
+            for cb in self.m.callbacks(py, addr, false) {
                 let r = cb.call1(py, (addr, v));
                 if let Some(x) = self.result(py, r) {
                     v = x;
@@ -745,6 +762,10 @@ impl Core {
         self.owner.check()?;
         self.irq_due.store(v.unwrap_or(NO_IRQ), Ordering::Relaxed);
         Ok(())
+    }
+
+    fn __traverse__(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
+        visit.call(&self.mem)
     }
 
     #[getter]
