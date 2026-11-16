@@ -56,6 +56,8 @@ to address sets: iterables of addresses and/or `range`s, or a `range`. A unit-st
 is passed natively as a span, so arming costs the pages previously observed plus the words
 the filter covers, never a 64K sweep; `observe_data_access()` clears in the same bound.
 `mem.last_load` is the address of the most recent data load.
+Both native types take part in cyclic garbage collection: a memory reports its callbacks
+and a core its memory, so an owner subscribing its own bound methods is freed with them.
 
 ## NativeMemory
 
