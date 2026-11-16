@@ -5,7 +5,6 @@ import weakref
 
 import pytest
 
-from jennings._core import Core  # pylint: disable=import-error,no-name-in-module
 from jennings.devices.mpu6502 import NativeMPU
 from jennings.memory import NATIVE, NativeMemory
 
@@ -62,10 +61,11 @@ def test_traverse_reports_callbacks_and_memory():
     refs = gc.get_referents(bus.mem)
     assert refs.count(bus.read) == 1
     assert refs.count(bus.write) == 1
-    assert bus.mem in gc.get_referents(bus.mpu._core)  # pylint: disable=protected-access
+    core = bus.mpu._core  # pylint: disable=protected-access
+    assert bus.mem in gc.get_referents(core)
     bus.mem.observe_data_access(bus.read)
     assert gc.get_referents(bus.mem).count(bus.read) == 2
-    assert gc.is_tracked(bus.mem) and gc.is_tracked(Core(bus.mem))
+    assert gc.is_tracked(bus.mem) and gc.is_tracked(core)
 
 
 @pytest.mark.parametrize("how", ["subscribe", "observe"])
