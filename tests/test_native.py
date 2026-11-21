@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 
 from deity_informant import PcodeVM
-from jennings.devices.mpu6502 import MPU, NativeMPU
+from jennings.devices.mpu6502 import MPU, NativeMPU, Remap
 from jennings.memory import NATIVE, NativeMemory
 
 pytestmark = pytest.mark.skipif(not NATIVE, reason="native core not built")
@@ -656,3 +656,55 @@ def test_observe_data_access_cost_is_independent_of_the_address_space():
         lambda: mem.observe_data_access(cb, cb, reads=range(0x10000), writes=[0xD418]),
     ):
         assert best(fn) < 50 * unit
+
+
+def _access_program():
+    """LDA $2005,X ; STA $2105,X ; LDA ($10),Y ; RTS with the pointer at $2300."""
+    mem = NativeMemory()
+    mem[0x1000:0x1009] = [0xBD, 0x05, 0x20, 0x9D, 0x05, 0x21, 0xB1, 0x10, 0x60]
+    mem[0x10:0x12] = [0x00, 0x23]
+    mem[0x2005], mem[0x2003], mem[0x2300] = 9, 4, 6
+    return MPU(memory=mem)
+
+
+def test_run_to_rts_accesses_logs_every_data_access():
+    mpu = _access_program()
+    seen = []
+    mpu.memory.observe_data_access(on_read=seen.append)
+    trace, log = mpu.run_to_rts_accesses(0x1000, 0, 1000)
+    assert list(trace.pc) == [0x1000, 0x1003, 0x1006, 0x1008]
+    assert [(k >> 17, k >> 16 & 1, k & 0xFFFF) for k in log] == [
+        (0x1000, 0, 0x2005),
+        (0x1003, 1, 0x2105),
+        (0x1006, 0, 0x10),
+        (0x1006, 0, 0x11),
+        (0x1006, 0, 0x2300),
+    ]
+    assert seen == [0x2005, 0x10, 0x11, 0x2300] and mpu.memory[0x2105] == 9
+
+
+def test_remap_redirects_its_instructions():
+    mpu = _access_program()
+    tables = {pc: np.full(0x10000, -1, np.int32) for pc in (0x1000, 0x1003, 0x1006)}
+    tables[0x1000][0x2005] = 0x2003
+    tables[0x1003][0x2105] = -2
+    tables[0x1006][[0x10, 0x11, 0x2300]] = -2
+    remap = Remap(tables, [0xB1])
+    _, log = mpu.run_to_rts_accesses(0x1000, 0, 1000, remap)
+    assert len(log) == 5 and mpu.memory[0x2105] == 0 and mpu.a == 0
+    mpu.memory[0x2300] = 0
+    mpu.run_to_rts_accesses(0x1000, 0, 1000, Remap({0x1000: tables[0x1000]}))
+    assert mpu.memory[0x2105] == 4
+    with pytest.raises(ValueError):
+        Remap({0x1000: np.full(5, -1, np.int32)})
+    with pytest.raises(ValueError):
+        Remap({0x1000: np.full(0x10000, -3, np.int32)})
+
+
+def test_digest_of_spans():
+    mem = NativeMemory()
+    whole, parts = mem.digest(), mem.digest([range(0, 0x100), range(0x200, 0x10000)])
+    assert len(whole) == 16 and whole != parts
+    mem[0x150] = 1
+    assert mem.digest([range(0, 0x100), range(0x200, 0x10000)]) == parts
+    assert mem.digest() != whole and mem.digest(range(0x150, 0x151)) != mem.digest([0x151])

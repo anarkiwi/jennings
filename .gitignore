@@ -225,3 +225,6 @@ __marimo__/
 # Process core dumps
 core
 core.[0-9]*
+
+# Local build and tool output
+/out/

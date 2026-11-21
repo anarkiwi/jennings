@@ -3,6 +3,7 @@
 //! [`Cpu::step`] runs one instruction on any [`Bus`]; [`FlatMemory`] is a banked
 //! 64 KiB bus with watch sets; [`run`] holds the run-until drivers.
 
+pub mod access;
 pub mod bus;
 pub mod cpu;
 #[rustfmt::skip]
@@ -11,6 +12,7 @@ mod cpu_gen;
 pub mod flat;
 pub mod run;
 
+pub use access::{access_key, Accesses, Remap, AS_IS, ZERO};
 pub use bus::Bus;
 pub use cpu::Cpu;
 pub use flat::{Access, FlatBus, FlatMemory, Hooks, NoHooks};

@@ -528,6 +528,47 @@ impl FlatMemory {
         }
     }
 
+    /// A 128-bit digest of the RAM bytes in the half-open `spans` (clamped to 64 KiB), in order:
+    /// equal for equal bytes, and for different bytes equal only by collision.
+    pub fn digest(&self, spans: impl IntoIterator<Item = (u32, u32)>) -> u128 {
+        const K: [u64; 4] = [
+            0xA076_1D64_78BD_642F,
+            0xE703_7ED1_A0B4_28DB,
+            0x8EBC_6AF0_9C88_C6E3,
+            0x5899_65CC_7537_4CC3,
+        ];
+        #[inline(always)]
+        fn mum(a: u64, b: u64) -> u64 {
+            let r = a as u128 * b as u128;
+            r as u64 ^ (r >> 64) as u64
+        }
+        // SAFETY: `Cell<u8>` has `u8`'s layout and nothing writes RAM during this borrow.
+        let ram = unsafe { std::slice::from_raw_parts(self.ram.ptr as *const u8, 0x10000) };
+        let (mut h0, mut h1, mut n) = (K[0], K[1], 0u64);
+        let mut mix = |a: u64, b: u64| {
+            h0 = mum(a ^ K[2] ^ h0, b ^ K[3]);
+            h1 = mum(a ^ K[1] ^ h1, b.rotate_left(29) ^ K[0]);
+        };
+        for (lo, hi) in spans {
+            let (lo, hi) = (lo.min(0x10000) as usize, hi.min(0x10000) as usize);
+            if lo >= hi {
+                continue;
+            }
+            mix(lo as u64, hi as u64);
+            n += (hi - lo) as u64;
+            let (chunks, rest) = ram[lo..hi].as_chunks::<16>();
+            let word = |c: &[u8; 16], k: usize| u64::from_le_bytes(c[k..k + 8].try_into().unwrap());
+            for c in chunks {
+                mix(word(c, 0), word(c, 8));
+            }
+            let mut tail = [0u8; 16];
+            tail[..rest.len()].copy_from_slice(rest);
+            mix(word(&tail, 0), word(&tail, 8) ^ rest.len() as u64);
+        }
+        mix(n, n.rotate_left(32));
+        (mum(h0, K[1]) as u128) << 64 | mum(h1, K[2]) as u128
+    }
+
     /// A host read: page-mapped, raster and read watches apply; observers do not.
     pub fn peek<H: Hooks>(&self, h: &mut H, addr: u16) -> u8 {
         self.read_as(h, addr, Access::Host)

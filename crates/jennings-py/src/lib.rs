@@ -11,8 +11,8 @@ use std::ffi::{c_int, c_void};
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering};
 
 use jennings_core::{
-    run_to_rts, run_until, Access, AddrSet, Bus, Cpu, FlatBus, FlatMemory, Hooks, Periodic, Stop,
-    Trace, Until,
+    run_to_rts, run_until, Access, Accesses, AddrSet, Bus, Cpu, FlatBus, FlatMemory, Hooks,
+    Periodic, Remap, Stop, Trace, Until,
 };
 use pyo3::buffer::PyBuffer;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -408,6 +408,19 @@ impl Memory {
             std::mem::replace(&mut s.on_store, on_write),
         );
         Ok(())
+    }
+
+    /// A 16-byte digest of the RAM at ``spans`` (default all): addresses and/or ``range``
+    /// objects, or a ``range``, taken in order; equal RAM there gives an equal digest.
+    #[pyo3(signature = (spans_=None))]
+    fn digest<'py>(
+        &self,
+        py: Python<'py>,
+        spans_: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        self.owner.check()?;
+        let sp = spans_.map_or(Ok(vec![(0, 0x10000)]), spans)?;
+        Ok(PyBytes::new(py, &self.flat.digest(sp).to_le_bytes()))
     }
 }
 
@@ -994,6 +1007,43 @@ impl Core {
         Ok(columns(py, tr))
     }
 
+    /// As `run_to_rts_traced`, also returning every data access as a little-endian uint64
+    /// `pc << 17 | write << 16 | addr` (`pc` the instruction's start), `remap`'s
+    /// instructions' accesses redirected.
+    #[pyo3(signature = (pc, acc, max_cycles, remap=None))]
+    fn run_to_rts_accesses<'py>(
+        &self,
+        py: Python<'py>,
+        pc: u16,
+        acc: i64,
+        max_cycles: u64,
+        remap: Option<&Bound<'py, PyRemap>>,
+    ) -> PyResult<(
+        Bound<'py, PyBytes>,
+        Bound<'py, PyBytes>,
+        Bound<'py, PyBytes>,
+    )> {
+        let mut tr = Trace::new(false);
+        let rm = remap.map(|r| &r.get().0);
+        let log = self.drive(py, true, |cpu, bus, stop| {
+            let mut acc_bus = Accesses::new(bus, rm);
+            run_to_rts(
+                cpu,
+                &mut acc_bus,
+                pc,
+                acc as u8,
+                None,
+                max_cycles,
+                Some(&mut tr),
+                || stop.load(Ordering::Relaxed) && stop.swap(false, Ordering::Relaxed),
+            );
+            acc_bus.log
+        })?;
+        let (pcs, cycles, _) = columns(py, tr);
+        let bytes: Vec<u8> = log.iter().flat_map(|v| v.to_le_bytes()).collect();
+        Ok((pcs, cycles, PyBytes::new(py, &bytes)))
+    }
+
     /// `pysidtracker.emu.run_to_rts_until`: as `run_to_rts`, True on entering `pcs`.
     fn run_to_rts_until(
         &self,
@@ -1020,9 +1070,44 @@ impl Core {
     }
 }
 
+/// Per-instruction address redirection for `run_to_rts_accesses` (`jennings_core::Remap`).
+///
+/// ``Remap({pc: table}, pointer_opcodes=())``: each ``table`` holds one int32 per address,
+/// -1 accessed as it is, -2 reads 0, else the address the read takes its byte from; a
+/// redirected write stores nothing. The page-zero pointer bytes of an instruction whose
+/// opcode is in ``pointer_opcodes`` are accessed as they are.
+#[pyclass(module = "jennings._core", name = "Remap", frozen)]
+pub struct PyRemap(Remap);
+
+#[pymethods]
+impl PyRemap {
+    #[new]
+    #[pyo3(signature = (tables, pointer_opcodes=None))]
+    fn new(
+        py: Python<'_>,
+        tables: HashMap<u16, Bound<'_, PyAny>>,
+        pointer_opcodes: Option<Vec<u8>>,
+    ) -> PyResult<Self> {
+        let mut r = Remap::default();
+        for (pc, t) in tables {
+            let v = PyBuffer::<i32>::get(&t)?.to_vec(py)?;
+            if v.len() != 0x10000 {
+                return Err(PyValueError::new_err("a table has 65536 int32 entries"));
+            }
+            if v.iter().any(|&e| !(-2..0x10000).contains(&e)) {
+                return Err(PyValueError::new_err("entries are -2, -1 or an address"));
+            }
+            r.insert(pc, &v);
+        }
+        r.set_pointer_opcodes(pointer_opcodes.unwrap_or_default());
+        Ok(PyRemap(r))
+    }
+}
+
 #[pymodule]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Memory>()?;
     m.add_class::<Core>()?;
+    m.add_class::<PyRemap>()?;
     Ok(())
 }
