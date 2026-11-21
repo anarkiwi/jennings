@@ -12,11 +12,12 @@ from jennings.memory import NATIVE, NativeMemory
 from jennings.opcodes import OPCODES, ILLEGAL_OPCODES, MODE_TOKEN
 
 if NATIVE:
-    from jennings._core import Core  # pylint: disable=import-error,no-name-in-module
+    # pylint: disable-next=import-error,no-name-in-module
+    from jennings._core import Core, Remap
 else:  # pragma: no cover - sdist install without the native core
-    Core = None
+    Core = Remap = None
 
-__all__ = ["MPU", "NativeMPU", "ILLEGAL_OPCODES"]
+__all__ = ["MPU", "NativeMPU", "Remap", "ILLEGAL_OPCODES"]
 
 # PcodeVM.reg indices: 0-3 A/X/Y/SP; flags C/Z/I/D/B/V/N at 8-14.
 _A, _X, _Y, _SP = 0, 1, 2, 3
@@ -441,6 +442,16 @@ class NativeMPU(MPU):
         """:meth:`run_to_rts`, returning a :class:`Trace` of every executed instruction."""
         pcs, cycles, cols = self._core.run_to_rts_traced(pc, acc, max_cycles, regs)
         return Trace(pcs, cycles, cols)
+
+    def run_to_rts_accesses(self, pc, acc, max_cycles, remap=None):
+        """:meth:`run_to_rts_traced`, also returning its data accesses in order.
+
+        Returns ``(Trace, accesses)``: ``accesses`` a read-only uint64 :class:`memoryview`,
+        one ``pc << 17 | write << 16 | addr`` per data load or store (``pc`` the
+        instruction's start). A :class:`Remap` redirects its instructions' accesses.
+        """
+        pcs, cycles, log = self._core.run_to_rts_accesses(pc, acc, max_cycles, remap)
+        return Trace(pcs, cycles, None), memoryview(log).cast("Q")
 
     def run_to_rts_until(self, pc, acc, pcs, max_cycles):
         """``pysidtracker.emu.run_to_rts_until`` on the native core."""

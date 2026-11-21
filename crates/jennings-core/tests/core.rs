@@ -1,8 +1,8 @@
 use std::cell::RefCell;
 
 use jennings_core::{
-    run_to_rts, run_until, Access, AddrSet, Bus, Cpu, FlatMemory, Hooks, NoHooks, Periodic, Stop,
-    Until,
+    access_key, run_to_rts, run_until, Access, Accesses, AddrSet, Bus, Cpu, FlatMemory, Hooks,
+    NoHooks, Periodic, Remap, Stop, Until, AS_IS, ZERO,
 };
 
 fn ram(prog: &[(u16, &[u8])]) -> Box<[u8; 0x10000]> {
@@ -301,4 +301,122 @@ fn observe_ranges_replace_and_match_per_address() {
         };
         assert_eq!(observed_by_bus(&m), (want(ranges), want(stores)), "{i}");
     }
+}
+
+#[test]
+fn accesses_log_data_and_redirect_sites() {
+    // $1000 LDA $2005,X ; $1003 STA $2105,X ; $1006 LDA ($10),Y ; $1008 INC $2205 ; $100B PHA ; $100C PLA ; $100D RTS
+    let mut m = ram(&[(
+        0x1000,
+        &[
+            0xBD, 0x05, 0x20, 0x9D, 0x05, 0x21, 0xB1, 0x10, 0xEE, 0x05, 0x22, 0x48, 0x68, 0x60,
+        ],
+    )]);
+    m[0x10..0x12].copy_from_slice(&[0x00, 0x23]);
+    m[0x2005] = 9;
+    m[0x2003] = 4;
+    m[0x2205] = 7;
+    m[0x2300] = 6;
+    let table = |f: &dyn Fn(usize) -> i32| (0..0x10000).map(f).collect::<Vec<i32>>();
+    let mut r = Remap::default();
+    r.insert(
+        0x1000,
+        &table(&|a| if a == 0x2005 { 0x2003 } else { AS_IS }),
+    );
+    r.insert(0x1003, &table(&|a| if a == 0x2105 { ZERO } else { AS_IS }));
+    r.insert(
+        0x1006,
+        &table(&|a| {
+            if a < 0x100 || a == 0x2300 {
+                ZERO
+            } else {
+                AS_IS
+            }
+        }),
+    );
+    r.insert(
+        0x1008,
+        &table(&|a| if a == 0x2205 { 0x2003 } else { AS_IS }),
+    );
+    r.insert(
+        0x100B,
+        &table(&|a| {
+            if (0x100..0x200).contains(&a) {
+                ZERO
+            } else {
+                AS_IS
+            }
+        }),
+    );
+    r.set_pointer_opcodes([0xB1]);
+    let mut c = Cpu::new();
+    let mut bus = Accesses::new(&mut *m, Some(&r));
+    run_to_rts(&mut c, &mut bus, 0x1000, 0, None, 1000, None, || false);
+    let log = bus.log;
+    assert_eq!(
+        log,
+        [
+            access_key(0x1000, false, 0x2005),
+            access_key(0x1003, true, 0x2105),
+            access_key(0x1006, false, 0x10),
+            access_key(0x1006, false, 0x11),
+            access_key(0x1006, false, 0x2300),
+            access_key(0x1008, false, 0x2205),
+            access_key(0x1008, true, 0x2205),
+        ]
+    );
+    // The load read $2003, the store, the INC and PHA's push wrote nothing; PLA pulled 0.
+    assert_eq!((m[0x2105], m[0x2205], m[0x1FD], c.a), (0, 7, 0, 0));
+    let mut c = Cpu::new();
+    let mut bus = Accesses::new(&mut *m, None);
+    run_to_rts(&mut c, &mut bus, 0x1000, 0, None, 1000, None, || false);
+    assert_eq!(bus.log, log);
+    assert_eq!((m[0x2105], m[0x2205], m[0x1FD], c.a), (9, 8, 6, 6));
+}
+
+#[test]
+fn remap_replaces_a_table() {
+    let mut m = ram(&[(0x1000, &[0xAD, 0x05, 0x20, 0x60])]);
+    m[0x2005] = 1;
+    m[0x2006] = 2;
+    let mut r = Remap::default();
+    let to = |s: i32| {
+        let mut t = vec![AS_IS; 0x10000];
+        t[0x2005] = s;
+        t
+    };
+    r.insert(0x1000, &to(ZERO));
+    r.insert(0x1000, &to(0x2006));
+    let mut c = Cpu::new();
+    run_to_rts(
+        &mut c,
+        &mut Accesses::new(&mut *m, Some(&r)),
+        0x1000,
+        0,
+        None,
+        100,
+        None,
+        || false,
+    );
+    assert_eq!(c.a, 2);
+}
+
+#[test]
+fn digest_covers_the_spans_only() {
+    let m = FlatMemory::new();
+    let all = [(0u32, 0x10000u32)];
+    let parts = [(0u32, 0x100u32), (0x200, 0x10000)];
+    let (d0, p0) = (m.digest(all), m.digest(parts));
+    m.set_ram(0x150, 1);
+    assert_eq!(m.digest(parts), p0);
+    assert_ne!(m.digest(all), d0);
+    m.set_ram(0x150, 0);
+    assert_eq!(m.digest(all), d0);
+    for a in [0u16, 0x7, 0x1FF0, 0xFFFF] {
+        m.set_ram(a, 0x80);
+        assert_ne!(m.digest(all), d0, "{a:#x}");
+        m.set_ram(a, 0);
+    }
+    assert_ne!(m.digest([(0, 0x8000), (0x8000, 0x10000)]), d0);
+    assert_eq!(m.digest([(0x20000, 0x30000), (5, 5)]), m.digest([]));
 }
