@@ -1,8 +1,9 @@
 """Autonomous components of a repeatedly called, input-free routine, their cycles, and the calls
 that cover everything it can do.
 
-:func:`learn` taints a call's state with the state before it natively, :func:`cycles` measures
-each closure's first repeat on a native :func:`trajectory`, :func:`cover_calls` combines them.
+:func:`census` runs the calls once, sorting them into classes by what a learner sees of each;
+:func:`learn` taints each class's first call with the state before it natively, :func:`cycles`
+measures each closure's first repeat on a :func:`trajectory`, :func:`cover_calls` combines them.
 :func:`explicit` gives the data-only flows, value apart from address, constants by where read.
 """
 
@@ -15,7 +16,7 @@ from tqdm import tqdm
 
 from jennings.coverage.cfg import control_dependence
 from jennings.dataflow import REGISTERS
-from jennings.devices.mpu6502 import CONST, REG, Learner, NativeMPU
+from jennings.devices.mpu6502 import CONST, REG, Census, Learner, NativeMPU, periods_of
 from jennings.memory import NativeMemory
 
 __all__ = [
@@ -33,6 +34,7 @@ __all__ = [
     "location",
     "machine",
     "control",
+    "census",
     "learn",
     "explicit",
     "closures",
@@ -208,17 +210,46 @@ def _pairs(edges):
     return list(zip((e >> 16).tolist(), (e & 0xFFFF).tolist()))
 
 
+def census(state, pc, calls, cells=(), *, acc=0, max_cycles=MAX_CYCLES, remap=None):
+    """A :class:`~jennings.devices.mpu6502.Census` of ``calls`` calls of ``pc`` with ``A = acc``
+    from ``state`` (see :func:`machine`), ``remap`` applied, ``cells`` recorded at each entry."""
+    cen = Census(list(cells))
+    m = machine(state)
+    _drive(lambda n: m.census(cen, pc, acc, max_cycles, n, remap), calls, "census")
+    return cen
+
+
+def _rows(cen, cells):
+    """The census' rows of its ``cells`` as uint8 ``[calls, len(cells)]``, by column."""
+    return np.frombuffer(cen.columns(), np.uint8).reshape(len(cells), cen.calls).T
+
+
+def _prefix(cen, calls):
+    """``(control, written, seen)`` of the first ``calls`` calls of census ``cen``: as
+    :func:`control` gives them, and how many edges, exits and written addresses they saw."""
+    got = cen.firsts()
+
+    def first(name, dtype):
+        items, at = got[name]
+        n = int(np.searchsorted(np.frombuffer(at, np.uint32), calls))
+        return np.sort(np.frombuffer(items, dtype)[:n])
+
+    edges, exits, written = (
+        first("edges", np.uint64),
+        first("exits", np.uint16),
+        first("written", np.uint16),
+    )
+    cd = control_dependence(_pairs(edges.tobytes()) + [(x, -1) for x in exits.tolist()])
+    seen = (len(edges), len(exits), len(written))
+    return {p: sorted(b) for p, b in cd.items()}, written.tolist(), seen
+
+
 def control(state, pc, calls, *, acc=0, max_cycles=MAX_CYCLES, remap=None):
     """``(control, written)`` of ``calls`` calls of ``pc`` from ``state``: ``{pc: branches}`` it
     is directly control dependent on (:func:`~jennings.coverage.cfg.control_dependence`, each
     call's last instruction leading to the exit), and the memory the calls write."""
-    learner = Learner({}, [])
-    m = machine(state)
-    _drive(lambda n: m.learn(learner, pc, acc, max_cycles, n, remap), calls, "edges")
-    got = learner.learned()
-    exits = np.frombuffer(got["exits"], np.uint16).tolist()
-    cd = control_dependence(_pairs(got["edges"]) + [(x, -1) for x in exits])
-    return {p: sorted(b) for p, b in cd.items()}, np.frombuffer(got["written"], np.uint16).tolist()
+    cen = census(state, pc, calls, acc=acc, max_cycles=max_cycles, remap=remap)
+    return _prefix(cen, calls)[:2]
 
 
 def _by_loc(raw):
@@ -230,34 +261,58 @@ def _by_loc(raw):
     return out
 
 
-def _learned(state, pc, calls, cd, written, explicit_, acc, max_cycles, remap):
-    """The native ``Learner`` result of ``calls`` calls and its ``(deps, sites)``: ``{loc: set}``
-    self included, ``{(pc, kind): set}``."""
-    learner = Learner(cd, written, explicit_)
-    m = machine(state)
-    desc = "explicit" if explicit_ else "learn"
-    _drive(lambda n: m.learn(learner, pc, acc, max_cycles, n, remap), calls, desc)
-    got = learner.learned()
-    deps = _by_loc(got["deps"])
+@dataclass
+class _Run:
+    """A :class:`Learner` over the first ``calls`` calls of a census, with the ``seen`` of
+    :func:`_prefix` it was made with and the machine it runs on."""
+
+    learner: Learner
+    machine: NativeMPU
+    seen: tuple
+    calls: int = 0
+
+
+# pylint: disable-next=too-many-arguments,too-many-positional-arguments
+def _learn_on(state, pc, cen, calls, explicit_, kw, run=None):
+    """``run`` (a :class:`_Run`) taken on to ``calls`` calls of census ``cen`` of ``pc`` from
+    ``state``, or a new one where ``run`` is None or those calls see more than its calls did.
+
+    Learning is a function of each call's class (its instructions, opcodes and the locations
+    of its accesses, in order), of the control dependences and of the memory the calls write,
+    so only each class's first call is tainted; the next calls extend a learner whose calls
+    saw every edge, exit and written address they do, as relearning them all would."""
+    cd, written, seen = _prefix(cen, calls)
+    if run is None or run.seen != seen:
+        run = _Run(Learner(cd, written, explicit_), machine(state), seen)
+    acc, max_cycles, remap = kw["acc"], kw["max_cycles"], kw["remap"]
+    learner, m = run.learner, run.machine
+    _drive(
+        lambda n: m.learn(learner, pc, acc, max_cycles, n, remap, census=cen),
+        calls - run.calls,
+        "explicit" if explicit_ else "learn",
+    )
+    run.calls = calls
+    return run
+
+
+def _sites(got):
+    """``{(pc, kind): frozenset}`` of a ``Learner`` result's sites."""
     s = np.frombuffer(got["sites"], np.uint64)
     sites = {}
     for key, loc in zip((s >> _BITS).tolist(), (s & ((1 << _BITS) - 1)).tolist()):
         sites.setdefault((key >> 2, _KINDS[key & 3]), set()).add(loc)
-    return got, deps, {k: frozenset(v) for k, v in sites.items()}
+    return {k: frozenset(v) for k, v in sites.items()}
 
 
-def learn(state, pc, calls, *, acc=0, max_cycles=MAX_CYCLES, remap=None, exclude=(STACK, IO)):
-    """:class:`Components` of ``calls`` calls of ``pc`` with ``A = acc`` from ``state`` (see
-    :func:`machine`), ``remap`` (a :class:`~jennings.devices.mpu6502.Remap`) applied; addresses
-    in ``exclude`` are never persistent."""
-    cd, written = control(state, pc, calls, acc=acc, max_cycles=max_cycles, remap=remap)
-    got, deps, sites = _learned(state, pc, calls, cd, written, False, acc, max_cycles, remap)
+def _components(got, calls, exclude):
+    """:class:`Components` of a ``Learner`` result over ``calls`` calls, ``exclude`` never
+    persistent."""
     persistent = tuple(
         loc
         for loc in np.frombuffer(got["persistent"], np.uint32).tolist()
         if not _excluded(loc, exclude)
     )
-    deps = {k: v - {k} for k, v in deps.items() if v - {k}}
+    deps = {k: v - {k} for k, v in _by_loc(got["deps"]).items() if v - {k}}
     cls, g = closures(deps, persistent)
     comps = Components(
         persistent=persistent,
@@ -266,11 +321,21 @@ def learn(state, pc, calls, *, acc=0, max_cycles=MAX_CYCLES, remap=None, exclude
         feed=frozenset(),
         feeding=(),
         edges=frozenset(_pairs(got["edges"])),
-        sites=sites,
+        sites=_sites(got),
         calls=calls,
     )
     tainted = _tainted(comps)
     return replace(comps, feed=_with_ancestors(g, tainted), feeding=_feeding(cls, tainted))
+
+
+def learn(state, pc, calls, *, acc=0, max_cycles=MAX_CYCLES, remap=None, exclude=(STACK, IO)):
+    """:class:`Components` of ``calls`` calls of ``pc`` with ``A = acc`` from ``state`` (see
+    :func:`machine`), ``remap`` (a :class:`~jennings.devices.mpu6502.Remap`) applied; addresses
+    in ``exclude`` are never persistent."""
+    kw = {"acc": acc, "max_cycles": max_cycles, "remap": remap}
+    cen = census(state, pc, calls, **kw)
+    run = _learn_on(state, pc, cen, calls, False, kw)
+    return _components(run.learner.learned(), calls, exclude)
 
 
 def explicit(state, pc, calls, *, acc=0, max_cycles=MAX_CYCLES, remap=None):
@@ -278,15 +343,19 @@ def explicit(state, pc, calls, *, acc=0, max_cycles=MAX_CYCLES, remap=None):
 
     Each load's value is apart from its address; a data load of a location no call writes at
     ``pc`` is the constant :data:`CONST` + ``pc``. Control enters only ``gated``."""
-    cd, written = control(state, pc, calls, acc=acc, max_cycles=max_cycles, remap=remap)
-    got, deps, sites = _learned(state, pc, calls, cd, written, True, acc, max_cycles, remap)
+    kw = {"acc": acc, "max_cycles": max_cycles, "remap": remap}
+    cen = census(state, pc, calls, **kw)
+    got = _learn_on(state, pc, cen, calls, True, kw).learner.learned()
     per = {k: {loc: frozenset(v) for loc, v in _by_loc(got[k]).items()} for k in _PER}
-    return Flows(deps={k: frozenset(v) for k, v in deps.items()}, sites=sites, calls=calls, **per)
+    deps = {k: frozenset(v) for k, v in _by_loc(got["deps"]).items()}
+    return Flows(deps=deps, sites=_sites(got), calls=calls, **per)
 
 
 def trajectory(state, pc, cells, calls, *, acc=0, max_cycles=MAX_CYCLES, remap=None):
     """uint8 ``[calls + 1, len(cells)]``: the values of the locations ``cells`` at the entry of
     each of ``calls + 1`` calls of ``pc`` from ``state`` (see :func:`learn`)."""
+    if not cells:
+        return np.zeros((calls + 1, 0), np.uint8)
     m = machine(state)
     rows = []
 
@@ -299,46 +368,26 @@ def trajectory(state, pc, cells, calls, *, acc=0, max_cycles=MAX_CYCLES, remap=N
     return np.concatenate(rows)
 
 
-def _first(sub):
-    """Per row of ``sub``, the index of the first row equal to it."""
-    v = sub.view(np.dtype((np.void, sub.shape[1]))).ravel()
-    _, first, inv = np.unique(v, return_index=True, return_inverse=True)
-    return first[inv.ravel()]
-
-
-def _first_repeat(sub, start=4096):
-    """``(preperiod, period)`` of the first row of ``sub`` equal to an earlier one, or None;
-    searched on prefixes growing fourfold, so it costs the repeat's position, not ``sub``'s."""
-    n = start
-    while True:
-        m = min(n, len(sub))
-        f = _first(sub[:m])
-        t = np.flatnonzero(f < np.arange(m))
-        if t.size:
-            return int(f[t[0]]), int(t[0] - f[t[0]])
-        if m == len(sub):
-            return None
-        n *= 4
-
-
-def _measure(rows, comps):
+def _measure(rows, comps, known=None):
     """:class:`Cycles` of ``comps`` on ``rows``: a projection repeating first at
-    ``(mu, lam)`` is autonomous on ``rows`` iff it has period ``lam`` from ``mu`` on."""
+    ``(mu, lam)`` is autonomous on ``rows`` iff it has period ``lam`` from ``mu`` on. ``known``
+    holds the native :func:`~jennings.devices.mpu6502.periods_of` of column sets measured."""
+    known = {} if known is None else known
+    if not (rows.flags.c_contiguous or rows.flags.f_contiguous):
+        rows = np.ascontiguousarray(rows)
     col = {c: i for i, c in enumerate(comps.persistent)}
+    sets = [*enumerate(comps.closures), ("feed", comps.feed)]
+    sets = [(key, tuple(sorted(col[c] for c in cells))) for key, cells in sets]
+    new = sorted({cols for _, cols in sets if cols and cols not in known})
+    known.update(zip(new, periods_of(rows, [list(c) for c in new]) if new else ()))
     out, conflicts = {}, {}
-    for key, cells in [*enumerate(comps.closures), ("feed", comps.feed)]:
-        cols = sorted(col[c] for c in cells)
+    for key, cols in sets:
         if not cols:
             out[key] = (0, 1)
             continue
-        sub = np.ascontiguousarray(rows[:, cols])
-        out[key] = cyc = _first_repeat(sub)
-        if cyc is None:
-            continue
-        mu, lam = cyc
-        bad = np.flatnonzero((sub[mu + lam :] != sub[mu : len(sub) - lam]).any(axis=1))
-        if bad.size:
-            t1 = mu + int(bad[0]) - 1
+        out[key], t1 = known[cols]
+        if t1 is not None:
+            lam = out[key][1]
             diff = set(np.flatnonzero(rows[t1] != rows[t1 + lam]).tolist()) - set(cols)
             conflicts[key] = (t1, t1 + lam, frozenset(comps.persistent[i] for i in diff))
     feed = out.pop("feed")
@@ -352,7 +401,7 @@ def cycles(state, pc, comps, limit, *, acc=0, max_cycles=MAX_CYCLES, remap=None,
         rows = trajectory(
             state, pc, comps.persistent, limit, acc=acc, max_cycles=max_cycles, remap=remap
         )
-    return _measure(rows, comps)
+    return _measure(np.asarray(rows, np.uint8), comps)
 
 
 def widen(comps, cyc):
@@ -372,8 +421,9 @@ def widen(comps, cyc):
 
 def _autonomous(rows, comps):
     """``(cycles, comps)``: ``comps`` widened until no closure conflicts on ``rows``."""
+    known = {}
     while True:
-        cyc = _measure(rows, comps)
+        cyc = _measure(rows, comps, known)
         if not cyc.conflicts:
             return cyc, comps
         wider = widen(comps, cyc)
@@ -387,17 +437,20 @@ def cover_calls(
 ):
     """``(calls, comps)``: the calls from ``state`` after which every data access and control
     edge has been seen (the feed set's preperiod plus period; None if it does not repeat within
-    ``limit``), ``comps`` relearned over at least ``calls`` calls and widened until autonomous."""
+    ``limit``), ``comps`` relearned over at least ``calls`` calls and widened until autonomous.
+
+    One :func:`census` of the ``limit + 1`` calls gives the trajectory and every relearning:
+    each a learner over its calls' classes, taken on from the last where no new edge, exit or
+    written address comes between."""
     kw = {"acc": acc, "max_cycles": max_cycles, "remap": remap}
-    rows = None
+    cen = census(state, pc, limit + 1, comps.persistent, **kw)
+    rows, cells, run = _rows(cen, comps.persistent), comps.persistent, None
     while True:
-        if rows is None or rows.shape[1] != len(comps.persistent):
-            rows = trajectory(state, pc, comps.persistent, limit, **kw)
+        if cells != comps.persistent:
+            rows, cells = trajectory(state, pc, comps.persistent, limit, **kw), comps.persistent
         cyc, comps = _autonomous(rows, comps)
         calls = None if cyc.feed is None else cyc.feed[0] + cyc.feed[1]
         if calls is None or calls <= comps.calls:
             return calls, comps
-        wider = learn(state, pc, calls, exclude=exclude, **kw)
-        if wider.persistent != comps.persistent:
-            rows = None
-        comps = wider
+        run = _learn_on(state, pc, cen, calls, False, kw, run)
+        comps = _components(run.learner.learned(), calls, exclude)

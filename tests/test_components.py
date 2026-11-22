@@ -12,7 +12,7 @@ from jennings.acme import assemble
 from jennings.coverage import components as C
 from jennings.coverage.cfg import LEN
 from jennings.dataflow import REGISTERS, flow
-from jennings.devices.mpu6502 import REG, Learner, Remap
+from jennings.devices.mpu6502 import REG, Learner, Remap, periods_of
 from jennings.isa import addresses
 from jennings.memory import NATIVE
 
@@ -341,6 +341,139 @@ def test_cover_calls_relearns_over_the_calls_it_vouches_for():
     assert seen(ram, calls) == seen(ram, 8 * calls)
 
 
+COMBO = """
+    inc c
+    inc y
+    lda #0
+    bit c
+    bpl +
+    lda y
++   bit c
+    bvc +
+    sta z
++   rts
+c !byte 0
+y !byte 7
+z !byte 0
+"""
+
+
+def test_a_new_path_through_seen_edges_is_learned_after_the_window():
+    ram, s = image(COMBO)
+    assert seen(ram, 150) == seen(ram, 1000), "every edge and access by call 150"
+    early, late = C.learn(ram, PLAY, 150), C.learn(ram, PLAY, 300)
+    assert s["y"] not in early.deps[s["z"]]
+    assert s["y"] in late.deps[s["z"]], "z = y first when bits 7 and 6 of c are both set"
+    cen = C.census(ram, PLAY, 300)
+    assert C.census(ram, PLAY, 150).classes < cen.classes
+    kw = {"acc": 0, "max_cycles": C.MAX_CYCLES, "remap": None}
+    run = C._learn_on(ram, PLAY, cen, 150, False, kw)
+    assert C._learn_on(ram, PLAY, cen, 300, False, kw, run) is run, "nothing new to control"
+    assert C._components(run.learner.learned(), 300, (C.STACK, C.IO)) == late
+    calls, comps = C.cover_calls(ram, PLAY, early, 2000)
+    assert calls == 256 and comps.deps == late.deps
+
+
+SONG = """
+    ldx i
+    lda tab,x
+    sta $d400
+    inx
+    cpx #8
+    bne +
+    ldx #0
++   stx i
+    rts
+i   !byte 0
+tab !byte 1, 2, 3, 4, 5, 6, 7, 8
+"""
+
+
+def test_reads_of_memory_no_call_writes_are_learned_alike():
+    ram, s = image(SONG)
+    cd, written = C.control(ram, PLAY, 16)
+    cen = C.census(ram, PLAY, 16)
+    once, full = Learner(cd, written), Learner(cd, written)
+    C.machine(ram).learn(once, PLAY, 0, C.MAX_CYCLES, 16, census=cen)
+    C.machine(ram).learn(full, PLAY, 0, C.MAX_CYCLES, 16)
+    assert cen.classes == 8, "one per table byte read"
+    assert once.classes == 2, "the table is constant: the wrap and the rest"
+    assert once.learned() == full.learned()
+    partial = Learner(cd, [*written, s["tab"] + 2])
+    C.machine(ram).learn(partial, PLAY, 0, C.MAX_CYCLES, 16, census=C.census(ram, PLAY, 16))
+    assert partial.classes == 3, "a byte taken as state is read apart"
+
+
+REPLAY = """
+    lda u
+    sta u
+    lda v
+    sta v
+    ldx c
+    lda u,x
+    beq +
+    lda #5
+    sta w
++   lda c
+    eor #1
+    sta c
+    rts
+c !byte 0
+u !byte 0
+v !byte 1
+w !byte 0
+"""
+
+
+def test_an_implicit_flow_learned_after_a_class_reaches_its_repeats():
+    ram, s = image(REPLAY)
+    cd, written = C.control(ram, PLAY, 4)
+    cen = C.census(ram, PLAY, 4)
+    assert cen.classes == 2, "c even skips the store to w, c odd makes it"
+    learner = Learner(cd, written)
+    assert C.machine(ram).learn(learner, PLAY, 0, C.MAX_CYCLES, 4, census=cen) == "sp"
+    deps = C._by_loc(learner.learned()["deps"])
+    want = reference(ram, 4, cd, set(written))[1]
+    assert deps == want and {s["u"], s["v"]} <= deps[s["w"]]
+    learner = Learner(cd, written)
+    with pytest.raises(ValueError, match="fewer calls"):
+        C.machine(ram).learn(learner, PLAY, 0, C.MAX_CYCLES, 5, census=cen)
+
+
+def test_a_census_continues_and_a_learner_is_redone_where_control_grows():
+    ram, s = image(LATE)
+    cen = C.census(ram, PLAY, 300, [s["m"], s["k"]])
+    rows = C._rows(cen, [s["m"], s["k"]])
+    assert rows.tolist() == C.trajectory(ram, PLAY, [s["m"], s["k"]], 299).tolist()
+    edges, calls = cen.firsts()["edges"]
+    assert np.frombuffer(calls, np.uint32).max() == 201, "k first wraps in call 201"
+    assert len(np.frombuffer(edges, np.uint64)) == len(C.learn(ram, PLAY, 300).edges)
+    kw = {"acc": 0, "max_cycles": C.MAX_CYCLES, "remap": None}
+    run = C._learn_on(ram, PLAY, cen, 150, False, kw)
+    assert C._learn_on(ram, PLAY, cen, 160, False, kw, run) is run
+    again = C._learn_on(ram, PLAY, cen, 300, False, kw, run)
+    assert (
+        again is not run
+        and again.learner.learned() == C._learn_on(ram, PLAY, cen, 300, False, kw).learner.learned()
+    )
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+@pytest.mark.parametrize("src", ["COUNTERS", "SWEEP", "GATE", "LATE", "COMBO", "REPLAY", "CARRY"])
+def test_learning_each_class_once_is_learning_every_call(src, explicit):
+    ram, _ = image(globals()[src])
+    calls = 400
+    cd, written = C.control(ram, PLAY, calls)
+    full, once = Learner(cd, written, explicit), Learner(cd, written, explicit)
+    assert C.machine(ram).learn(full, PLAY, 0, C.MAX_CYCLES, calls) == "sp"
+    cen = C.census(ram, PLAY, calls)
+    assert cen.calls == calls and (cen.classes < calls) == (src != "SWEEP"), "a sweep never repeats"
+    m = C.machine(ram)
+    for n in (1, 150, calls - 151):
+        assert m.learn(once, PLAY, 0, C.MAX_CYCLES, n, census=cen) == "sp"
+    assert once.calls == calls and once.learned() == full.learned()
+
+
 def test_remap_redirects_what_a_call_reads_and_suppresses_its_writes():
     ram, s = image("""
 ld  lda $0400
@@ -359,6 +492,10 @@ st  inc $0402
     assert comps.deps[0x0401] == frozenset({0x0403})
     rows = C.trajectory(ram, PLAY, [0x0401, 0x0402, 0x0403], 3, remap=remap)
     assert rows.tolist() == [[0, 0, 0], [0, 0, 1], [1, 0, 2], [2, 0, 3]]
+    cen = C.census(ram, PLAY, 4, [0x0401, 0x0402, 0x0403], remap=remap)
+    assert C._rows(cen, [0, 0, 0]).tolist() == rows.tolist()
+    written = np.frombuffer(cen.firsts()["written"][0], np.uint16).tolist()
+    assert 0x0402 not in written and cen.classes == 1
 
 
 def test_a_call_that_never_returns_or_bad_state_raises():
@@ -803,13 +940,28 @@ def test_native_taint_matches_the_flow_reference(seed, explicit):
     assert dict(got_sites) == want[3]
     assert [C._by_loc(got[k]) for k in C._PER] == list(want[4:])
     assert explicit or not any(want[4:])
+    once = Learner(cd, sorted(written), explicit)
+    cen = C.census(ram, PLAY, calls)
+    assert C.machine(ram).learn(once, PLAY, 0, C.MAX_CYCLES, calls, census=cen) == "sp"
+    assert once.learned() == got
 
 
-def test_first_repeats_are_found_on_growing_prefixes():
+def test_a_projection_s_first_repeat_and_the_break_of_its_period():
     rng = np.random.default_rng(1)
     for mu, lam, n in ((0, 1, 10), (3, 7, 50), (5000, 30000, 80000), (2, 9000, 9001)):
         states = rng.permutation(1 << 20)[: mu + lam].astype(np.uint32)
         seq = np.concatenate([states[:mu], np.resize(states[mu:], n - mu)])
-        sub = np.ascontiguousarray(seq.view(np.uint8).reshape(-1, 4))
+        rows = np.ascontiguousarray(seq.view(np.uint8).reshape(-1, 4))
         want = None if n < mu + lam + 1 else (mu, lam)
-        assert C._first_repeat(sub, start=16) == want
+        assert periods_of(rows, [[0, 1, 2, 3]]) == [(want, None)]
+    rows = np.zeros((12, 3), np.uint8)
+    rows[:, 0] = np.arange(12) % 3
+    rows[:, 1] = [9, 1, 2, 9, 1, 2, 9, 1, 5, 9, 1, 2]
+    rows[:, 2] = np.arange(12)
+    got = periods_of(rows, [[0, 1], [0], [2], [1, 0]])
+    assert got[0] == ((0, 3), 4), "rows 4, 7 agree; 5, 8 do not"
+    assert got[1:] == [((0, 3), None), (None, None), got[0]]
+    with pytest.raises(ValueError):
+        periods_of(rows, [[3]])
+    with pytest.raises(ValueError):
+        periods_of(rows[:, ::2], [[0]])

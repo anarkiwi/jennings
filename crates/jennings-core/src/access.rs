@@ -201,6 +201,16 @@ impl<'a, B: Bus> Accesses<'a, B> {
 
 impl<B: Bus> Bus for Accesses<'_, B> {
     #[inline(always)]
+    fn target(&self, addr: u16) -> Option<i32> {
+        Accesses::target(self, addr)
+    }
+
+    #[inline(always)]
+    fn peek(&mut self, addr: u16) -> u8 {
+        self.inner.peek(addr)
+    }
+
+    #[inline(always)]
     fn read(&mut self, addr: u16) -> u8 {
         self.redirected_read(addr)
             .unwrap_or_else(|| self.inner.read(addr))

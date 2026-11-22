@@ -52,6 +52,12 @@ impl Keys {
 
     #[inline(always)]
     pub(crate) fn insert(&mut self, key: u64) {
+        self.insert_new(key);
+    }
+
+    /// Insert `key`; whether it was not in the set.
+    #[inline(always)]
+    pub(crate) fn insert_new(&mut self, key: u64) -> bool {
         let hi = (key >> 16) as usize;
         let s = match self.slot[hi] {
             0 => {
@@ -62,7 +68,10 @@ impl Keys {
             i => i as usize - 1,
         };
         let lo = key as usize & 0xFFFF;
-        self.pages[s].1[lo >> 6] |= 1 << (lo & 63);
+        let (w, bit) = (&mut self.pages[s].1[lo >> 6], 1u64 << (lo & 63));
+        let new = *w & bit == 0;
+        *w |= bit;
+        new
     }
 
     pub(crate) fn sorted(mut self) -> Vec<u64> {

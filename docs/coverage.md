@@ -502,11 +502,13 @@ Each function runs from a flat copy of the state (`machine`: RAM, plus the regis
 MPU), calling `pc` as `run_to_rts` does (`acc`, `max_cycles`, `remap` as there); a call
 that does not return raises.
 
-**learn** first runs the calls natively for their edges, the instructions that ended them and
-the memory they write (`control`), takes `cfg.control_dependence` of the edges with each call's
-last instruction leading to the exit, then runs the calls again on a `Learner`, which taints
-every location (64 KiB of memory and the registers, `REG + index`) with the entry locations its
-value came from:
+**census** runs the calls once natively and sorts them into classes by what a `Learner` sees
+of each (see [Learning once per class](#learning-once-per-class)), recording the edges, the
+instructions that ended a call and the memory written, each with the call it was first seen
+in, and optionally `cells` at each call's entry. **learn** takes `cfg.control_dependence` of
+the edges over its calls with each call's last instruction leading to the exit (`control`),
+then has a `Learner` taint each class's first call, which taints every location (64 KiB of
+memory and the registers, `REG + index`) with the entry locations its value came from:
 
 - data, per instruction, from `tools/gen_flow.py`'s table: `dataflow.flow` read once per
   opcode on symbolic registers, operand bytes and accesses, so it follows the same lifted
@@ -583,13 +585,64 @@ the closures) and checks autonomy: equal projections must have equal successors.
 `(t1, t2, cells)` means a dependence learning did not see; `widen` adds the cells that told
 the two entries apart, with their ancestors.
 
+**cycles** runs natively on the columns of the rows (`periods_of`): per column set, a 64-bit
+hash per row finds the first repeat (rows equal on the set, checked byte by byte, so a hash
+collision is never a repeat), then each column is compared with itself `period` rows on, a
+block at a time. Column sets measured once are not measured again while widening.
+
 **cover_calls** widens until there is no conflict and returns the feed set's preperiod plus
 period: the state the addresses and control of a call are a function of has then taken every
 value it ever takes, so every reachable access and edge has been seen. The taints vouch only
 for the paths learning saw, so while that bound exceeds the calls learned from, it learns
-again over the bound and repeats. None means the feed set does not repeat within `limit`. A feed set's period can exceed the calls after which coverage
+again over the bound and repeats. One census of the `limit + 1` calls gives the trajectory
+and every relearning; a relearning takes the last learner on where the calls between saw no
+new edge, exit or written address (so its control dependence and written memory are those of
+the longer run), and starts a learner afresh where they did. None means the feed set does not repeat within `limit`. A feed set's period can exceed the calls after which coverage
 stops growing when a branch condition reads a long-period component whose both outcomes come
 early (a sweep reversing at its bounds): the bound is the one the components prove.
+
+### Learning once per class
+
+A call's class is its sequence of events as the learner's bus sees them: each instruction's PC
+and opcode, each followed by its accesses in order, each with its kind (load, store, stack
+pull or push, other read or write) and the location it reaches after `remap` (an address, a
+`ZERO` read or a suppressed write). Two calls of one class are learned alike:
+
+- everything a `Learner` computes for an instruction is a function of its opcode (the flow
+  table), the locations its accesses reach, the taints those locations hold, the control
+  dependence of its PC and the memory any call writes. A location's taint at a call's entry is
+  its own (or nothing, for memory no call writes), and within the call it is set only by the
+  call's own instructions, so by induction over the events every taint, site, condition and
+  end-of-call value is the same;
+- what is added to the learned state is unioned in (`deps`, sites, `stored`, `addressed`,
+  `gated`, edges, exits, locations read first and written), so the second call adds nothing,
+  except one thing that is not a function of the call: the implicit flows. A store site's
+  controlling branches enter `deps` at the end of every call that ran the branch, from the
+  first call that reached the store site on. A repeat therefore adds, for each implicit pair
+  `(loc, branch)` learned since its class last ran and each branch the class ran, that
+  branch's condition as the class's first call left it. The learner keeps those conditions per
+  class and adds exactly these.
+
+So a `Learner` fed a census (`NativeMPU.learn(..., census=...)`) taints each class's first
+call, from its entry state (the registers and the memory any earlier call modified, kept by
+the census with an undo log of first writes), and for each later call adds only the implicit
+flows it would. Its result equals running every call (`test_learning_each_class_once_is_learning_every_call`).
+Class identity is exact: calls are hashed, and equal hashes compared event by event.
+
+A read of memory no call writes taints nothing whatever its address (and in explicit mode is
+the constant of its PC), and that memory is never persistent, so the learner coarsens the
+census classes: it makes each such read alike (one read of a constant, by its kind), the
+written memory being its own `written` and the census' own, and taints the first call of each
+coarse class. A song read at an advancing pointer then learns as one class
+(`Learner.classes` counts them).
+
+The control dependence and written memory are of all the calls learned from, so a learner
+over `n` calls is taken on to `m` only when calls `n` to `m` see no new edge, exit or written
+address. Edges and accesses alone do not decide what a call teaches: a call can take only
+edges and accesses seen before and still combine them into a path no call took, making a
+new dependence (`COMBO` in the tests: `z = y` happens only when bits 7 and 6 of a counter are
+both set, after every edge and access has been seen). The class of that call is new, so it is
+learned.
 
 `NativeMPU.orbit(..., cells=locations)` hashes only those locations (addresses and
 `REG + index`) for the state, e.g. `comps.feed`, where RAM holding stale scratch would not

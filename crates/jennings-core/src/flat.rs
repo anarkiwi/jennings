@@ -569,6 +569,12 @@ impl FlatMemory {
         (mum(h0, K[1]) as u128) << 64 | mum(h1, K[2]) as u128
     }
 
+    /// Whether no page is mapped (an image or I/O) and no address watched or observed, so
+    /// every access is of RAM ([`RamBus`]).
+    pub fn plain(&self) -> bool {
+        self.rpage.iter().chain(&self.wpage).all(|f| f.get() == 0)
+    }
+
     /// A host read: page-mapped, raster and read watches apply; observers do not.
     pub fn peek<H: Hooks>(&self, h: &mut H, addr: u16) -> u8 {
         self.read_as(h, addr, Access::Host)
@@ -630,6 +636,47 @@ impl<H: Hooks> Bus for FlatBus<'_, H> {
     #[inline(always)]
     fn sync(&mut self, cpu: &Cpu) {
         self.mem.hot.now.set(cpu.cycles)
+    }
+
+    #[inline(always)]
+    fn peek(&mut self, addr: u16) -> u8 {
+        self.mem.ram(addr)
+    }
+
+    #[inline(always)]
+    fn poke(&mut self, addr: u16, v: u8) {
+        self.mem.set_ram(addr, v)
+    }
+}
+
+/// A [`FlatMemory`] with nothing mapped or watched ([`FlatMemory::plain`]) as a [`Bus`] on its
+/// RAM alone: every access as [`FlatBus`] makes it, without the page checks.
+pub struct RamBus<'a> {
+    mem: &'a FlatMemory,
+}
+
+impl<'a> RamBus<'a> {
+    /// The bus of `mem`, None unless it is [`FlatMemory::plain`].
+    pub fn of(mem: &'a FlatMemory) -> Option<Self> {
+        mem.plain().then_some(RamBus { mem })
+    }
+}
+
+impl Bus for RamBus<'_> {
+    #[inline(always)]
+    fn read(&mut self, addr: u16) -> u8 {
+        self.mem.ram(addr)
+    }
+
+    #[inline(always)]
+    fn write(&mut self, addr: u16, v: u8) {
+        self.mem.set_ram(addr, v)
+    }
+
+    #[inline(always)]
+    fn load(&mut self, addr: u16) -> u8 {
+        self.mem.hot.last_load.set(Some(addr));
+        self.mem.ram(addr)
     }
 }
 

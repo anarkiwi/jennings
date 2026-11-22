@@ -224,6 +224,9 @@ pub fn run_to_rts<B: Bus, S: FnMut() -> bool>(
     }
     cpu.a = acc;
     cpu.pc = pc;
+    if stop_pcs.is_none() {
+        return to_rts(cpu, bus, start_sp - 1, max_cycles, trace, stopped);
+    }
     let mut until = Until {
         sp_above: Some(start_sp - 1),
         max_cycles: Some(max_cycles),
@@ -232,4 +235,36 @@ pub fn run_to_rts<B: Bus, S: FnMut() -> bool>(
         ..Until::default()
     };
     run_until(cpu, bus, &mut until, stopped)
+}
+
+/// [`run_until`] with only `sp_above`, `max_cycles` and `trace`, as [`run_to_rts`] sets them
+/// when it has no `stop_pcs`, its checks in the same order.
+#[inline(always)]
+fn to_rts<B: Bus, S: FnMut() -> bool>(
+    cpu: &mut Cpu,
+    bus: &mut B,
+    sp_above: i32,
+    max_cycles: u64,
+    mut trace: Option<&mut Trace>,
+    mut stopped: S,
+) -> Stop {
+    let end = cpu.cycles.saturating_add(max_cycles).saturating_add(1);
+    loop {
+        if cpu.sp as i32 > sp_above {
+            return Stop::Sp;
+        }
+        if cpu.cycles >= end {
+            return Stop::Cycles;
+        }
+        if let Some(t) = trace.as_deref_mut() {
+            t.start(cpu);
+        }
+        cpu.step(bus);
+        if let Some(t) = trace.as_deref_mut() {
+            t.end(cpu);
+        }
+        if stopped() {
+            return Stop::Stopped;
+        }
+    }
 }
