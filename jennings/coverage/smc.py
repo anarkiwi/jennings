@@ -151,9 +151,9 @@ def _refine(regs, fo, flag, value):
     return tuple(regs), out
 
 
-def _carry(fo, writes, new):
-    """Flag origins after an instruction writing registers ``writes`` with ``new`` origins."""
-    out = {f: o for f, o in fo.items() if f not in writes and o[0] not in writes}
+def _carry(fo, wrote, new):
+    """Flag origins after an instruction writing registers ``wrote`` with ``new`` origins."""
+    out = {f: o for f, o in fo.items() if f not in wrote and o[0] not in wrote}
     out.update(new)
     return out
 
