@@ -1330,12 +1330,15 @@ impl PyLearner {
         self.0.calls()
     }
 
-    /// ``{"persistent", "deps", "edges", "sites", "exits", "written"}`` as little-endian
-    /// arrays: uint32 locations read before written by some call and written by some; uint64
-    /// ``loc << 32 | src``, the end-of-call ``loc`` depending on entry ``src`` (``loc`` itself
-    /// included); uint64 ``pc << 16 | next``; uint64 ``(pc << 2 | kind) << 18 | loc``, ``loc``
-    /// tainting a load's (0) or store's (1) address, where control goes (2) or a data store's
-    /// byte (3) at ``pc``; uint16 PCs that ended a call; uint16 addresses some call wrote.
+    /// ``{"persistent", "deps", "edges", "sites", "stored", "addressed", "gated", "exits",
+    /// "written"}`` as little-endian arrays: uint32 locations read before written by some call
+    /// and written by some; uint64 ``loc << 32 | src``, the end-of-call ``loc`` depending on
+    /// entry ``src`` (``loc`` itself included); uint64 ``pc << 16 | next``; uint64
+    /// ``(pc << 2 | kind) << 18 | loc``, ``loc`` tainting a load's (0) or store's (1) address,
+    /// where control goes (2) or a data store's byte (3) at ``pc``; explicit only, uint64
+    /// ``loc << 32 | src`` over every data store to memory ``loc``, ``src`` tainting its byte,
+    /// its address, or the conditions it is stored under; uint16 PCs that ended a call; uint16
+    /// addresses some call wrote.
     fn learned<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         let l = self.0.learned();
         let d = PyDict::new(py);
@@ -1346,6 +1349,9 @@ impl PyLearner {
         d.set_item("deps", PyBytes::new(py, &le64(&l.deps)))?;
         d.set_item("edges", PyBytes::new(py, &le64(&l.edges)))?;
         d.set_item("sites", PyBytes::new(py, &le64(&l.sites)))?;
+        d.set_item("stored", PyBytes::new(py, &le64(&l.stored)))?;
+        d.set_item("addressed", PyBytes::new(py, &le64(&l.addressed)))?;
+        d.set_item("gated", PyBytes::new(py, &le64(&l.gated)))?;
         d.set_item("exits", PyBytes::new(py, &le16(&l.exits)))?;
         d.set_item("written", PyBytes::new(py, &le16(&l.written)))?;
         Ok(d)

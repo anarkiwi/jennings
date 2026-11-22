@@ -445,6 +445,45 @@ def test_a_store_under_a_branch_is_control_not_an_explicit_flow():
     assert flows.sites[(br, C.CONTROL)] == frozenset({flag})
 
 
+VOICES = """
+    ldx #14
+loop lda pos,x
+st  sta $d400,x
+    inc pos,x
+    lda flag,x
+br  beq +
+    lda #1
+    sta $d404,x
++   lda flag,x
+    eor #1
+    sta flag,x
+    dex
+    dex
+    dex
+    dex
+    dex
+    dex
+    dex
+    bpl loop
+    rts
+pos  !fill 15, 0
+flag !fill 15, 0
+"""
+
+
+def test_one_store_serving_three_voices_keeps_each_voice_apart():
+    ram, s = image(VOICES)
+    pos, flag = s["pos"], s["flag"]
+    flows = C.explicit(ram, PLAY, 4)
+    assert flows.sites[(s["st"], C.VALUE)] == frozenset({pos, pos + 7, pos + 14})
+    assert flows.stored[0xD400] == frozenset({pos})
+    assert flows.stored[0xD407] == frozenset({pos + 7})
+    assert flows.sites[(s["br"], C.CONTROL)] == frozenset({flag, flag + 7, flag + 14})
+    assert flows.gated[0xD404] == frozenset({flag})
+    assert 0xD404 not in flows.stored and 0xD400 not in flows.gated
+    assert not flows.addressed
+
+
 def test_explicit_flows_follow_a_remap_and_zero_reads_are_empty():
     ram, s = image("""
 ld  lda $0400
@@ -601,15 +640,16 @@ def _loc(x):
 
 
 def reference(ram, calls, control, written, explicit=False):
-    """``(persistent, deps, edges, sites)`` of ``calls`` calls of ``PLAY``, by
-    :func:`jennings.dataflow.flow` on each executed instruction; ``explicit`` as an explicit
-    ``Learner``."""
+    """``(persistent, deps, edges, sites, stored, addressed, gated)`` of ``calls`` calls of
+    ``PLAY``, by :func:`jennings.dataflow.flow` on each executed instruction; ``explicit`` as
+    an explicit ``Learner``."""
     m = C.machine(ram)
     mem = m.memory
     loads, stores = [], []
     mem.observe_data_access(loads.append, lambda a, _v: stores.append(a), stack=True)
     deps, first, wrote = defaultdict(set), set(), set()
     sites, edges, store_sites, implicit = defaultdict(set), set(), set(), set()
+    per = {k: defaultdict(set) for k in C._PER}
     for _ in range(calls):
         taint, cond, touched, prev = {}, {}, set(), None
 
@@ -677,7 +717,7 @@ def reference(ram, calls, control, written, explicit=False):
             code_t = get(pc)
             ctl = set().union(*(cond.get(b, set()) for b in control.get(pc, ())))
             base = set() if explicit else code_t | ctl
-            ctrl, out = set(code_t), []
+            ctrl, out, stored = set(code_t), [], set()
             for dst, ins in vals.items():
                 if dst == "PC":
                     ctrl |= u(ins)
@@ -685,10 +725,16 @@ def reference(ram, calls, control, written, explicit=False):
                     out.append((_loc(dst), u(ins) | base))
                     if isinstance(dst, int) and op not in (0x08, 0x48):
                         sites[(pc, C.VALUE)] |= out[-1][1]
+                        stored.add(dst)
+                        if explicit:
+                            per["stored"][dst] |= out[-1][1]
+                            per["gated"][dst] |= ctl
             if op not in (0x08, 0x28, 0x48, 0x68):
-                for store, _a, ins in addrs:
+                for store, a, ins in addrs:
                     if u(ins):
                         sites[(pc, C.STORE if store else C.LOAD)] |= u(ins)
+                    if store and explicit:
+                        per["addressed"][a] |= u(ins)
             if kind == "br":
                 ctrl |= get(pc + 1)
             if kind in ("jmp", "jsr", "jmpind"):
@@ -710,20 +756,22 @@ def reference(ram, calls, control, written, explicit=False):
                 touch(loc, False)
                 wrote.add(loc)
                 taint[loc] = s
-                if not explicit and control.get(pc) and (loc, pc) not in store_sites:
+                gates = not explicit or loc in stored
+                if gates and control.get(pc) and (loc, pc) not in store_sites:
                     store_sites.add((loc, pc))
                     implicit |= {(loc, b) for b in control[pc]}
         for loc, s in taint.items():
             deps[loc] |= s
         for loc, b in implicit:
             if b in cond:
-                deps[loc] |= cond[b]
+                (per["gated"] if explicit else deps)[loc] |= cond[b]
     persistent = sorted(loc for loc in first & wrote if loc < REG or loc in STATE)
     return (
         persistent,
         {k: v for k, v in deps.items() if v},
         edges,
         {k: v for k, v in sites.items() if v},
+        *({k: v for k, v in per[n].items() if v} for n in C._PER),
     )
 
 
@@ -742,10 +790,6 @@ def test_native_taint_matches_the_flow_reference(seed, explicit):
     learner = Learner(cd, written, explicit)
     assert C.machine(ram).learn(learner, PLAY, 0, C.MAX_CYCLES, calls) == "sp"
     got = learner.learned()
-    d = np.frombuffer(got["deps"], np.uint64)
-    got_deps = defaultdict(set)
-    for loc, src_ in zip((d >> 32).tolist(), (d & 0xFFFFFFFF).tolist()):
-        got_deps[loc].add(src_)
     s = np.frombuffer(got["sites"], np.uint64)
     got_sites = defaultdict(set)
     for key, loc in zip((s >> 18).tolist(), (s & 0x3FFFF).tolist()):
@@ -754,9 +798,11 @@ def test_native_taint_matches_the_flow_reference(seed, explicit):
     written = set(written)
     want = reference(ram, calls, cd, written, explicit)
     assert np.frombuffer(got["persistent"], np.uint32).tolist() == want[0]
-    assert dict(got_deps) == want[1]
+    assert C._by_loc(got["deps"]) == want[1]
     assert set(zip((e >> 16).tolist(), (e & 0xFFFF).tolist())) == want[2]
     assert dict(got_sites) == want[3]
+    assert [C._by_loc(got[k]) for k in C._PER] == list(want[4:])
+    assert explicit or not any(want[4:])
 
 
 def test_first_repeats_are_found_on_growing_prefixes():

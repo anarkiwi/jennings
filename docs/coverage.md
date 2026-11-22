@@ -533,12 +533,14 @@ jump's target, an `RTS`/`RTI` frame, an opcode byte, or the byte a data store at
 store or control site's taint with their ancestors) and `feeding` (the closures containing
 one). A location's dependence on itself is left out of `deps`.
 
-**explicit** gives the explicit flows alone, as `Flows(deps, sites, calls)`: it runs `control`
-for the memory the calls write, then an explicit `Learner`, in which
+**explicit** gives the explicit flows alone, as `Flows(deps, sites, stored, addressed, gated,
+calls)`: it runs `control` for the control dependence and the memory the calls write, then an
+explicit `Learner`, in which
 
 - each output takes only its data inputs, from the table's `vals` (`dataflow.flow(...,
   addressed=False)`): a load's value is the byte it reads, not its address. No opcode byte, no
-  branch conditions, no store-site conditions at the end of a call;
+  branch conditions, no store-site conditions at the end of a call: control enters `gated`
+  alone;
 - a data load (not a stack pull or an operand fetch) of a location no call writes at `pc` is
   the constant `CONST + pc` (`CONST = 0x20000`; `location` names it `#$hhhh`), so a song-table
   read shows where it happened. A constant operand byte still taints nothing, and a `Remap`
@@ -551,10 +553,27 @@ table it reads), `CONTROL` keeps the opcode byte, condition, operands and frames
 is the explicit taint of the stored byte. Pointer bytes or other data loads of constants
 feeding an address or a condition appear there as `CONST + pc` too.
 
+Sites are per `pc`, so one store serving three voices (`STA $D400,X`, X = 0, 7, 14) unions
+their taints. `stored`, `addressed` and `gated` are per memory location a data store (not a
+push, not a `Remap`-suppressed write) reaches, each unioned over every such store of every
+call:
+
+- `stored[loc]`: the explicit taint of each byte stored to `loc` (every store, not only the
+  call's last, as `deps` has);
+- `addressed[loc]`: the taint of each such store's address, what its `STORE` site gets;
+- `gated[loc]`: the conditions each store was made under: the union of `cond[br]` over the
+  branches `br` it is directly control dependent on that ran in the call, `cond[br]` being
+  `br`'s `CONTROL` taint with its own conditions, so nesting is transitive; and, at the end of
+  each call, `cond[br]` of each branch `br` a store site of `loc` is control dependent on that
+  ran in the call, the implicit flow `learn` puts in `deps` (the branch's last condition in
+  the call, so per `pc`).
+
 ```python
 f = C.explicit(mpu, play, 2_000)
 f.sites[(sta_pc, C.VALUE)]   # e.g. {C.CONST + lda_pc}: a table byte, read at lda_pc
 f.sites[(lda_pc, C.LOAD)]    # {pos}: the index
+f.stored[0xD400]             # {pos}: voice 0's, where f.sites[(sta_pc, C.VALUE)] has all three
+f.gated[0xD404]              # {flag}: the condition voice 0's gate register was stored under
 ```
 
 **trajectory** records the persistent locations at each call's entry natively, one uint8

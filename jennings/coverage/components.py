@@ -49,6 +49,7 @@ CHUNK = 4096
 LOAD, STORE, CONTROL, VALUE = "r", "w", "b", "v"
 _KINDS = (LOAD, STORE, CONTROL, VALUE)
 _BITS = 18
+_PER = ("stored", "addressed", "gated")
 
 
 def location(loc):
@@ -121,11 +122,19 @@ class Flows:
         deps: each location written to the entry locations (and :data:`CONST` + pc constants)
             its end-of-call value depends on by data, itself included.
         sites: ``(pc, kind)`` as :attr:`Components.sites`, each taint explicit.
+        stored: each memory location a data store reaches to the explicit taints of the bytes
+            stored there, over every store.
+        addressed: as ``stored``, the taints of those stores' addresses.
+        gated: as ``stored``, the conditions those stores are under (transitively) and those
+            of the branches its store sites are control dependent on that a call ran.
         calls: the calls learned from.
     """
 
     deps: dict
     sites: dict = field(repr=False)
+    stored: dict = field(default_factory=dict, repr=False)
+    addressed: dict = field(default_factory=dict, repr=False)
+    gated: dict = field(default_factory=dict, repr=False)
     calls: int = 0
 
 
@@ -212,6 +221,15 @@ def control(state, pc, calls, *, acc=0, max_cycles=MAX_CYCLES, remap=None):
     return {p: sorted(b) for p, b in cd.items()}, np.frombuffer(got["written"], np.uint16).tolist()
 
 
+def _by_loc(raw):
+    """``{loc: set(src)}`` of uint64 ``loc << 32 | src`` bytes."""
+    d = np.frombuffer(raw, np.uint64)
+    out = {}
+    for loc, src in zip((d >> 32).tolist(), (d & 0xFFFFFFFF).tolist()):
+        out.setdefault(loc, set()).add(src)
+    return out
+
+
 def _learned(state, pc, calls, cd, written, explicit_, acc, max_cycles, remap):
     """The native ``Learner`` result of ``calls`` calls and its ``(deps, sites)``: ``{loc: set}``
     self included, ``{(pc, kind): set}``."""
@@ -220,10 +238,7 @@ def _learned(state, pc, calls, cd, written, explicit_, acc, max_cycles, remap):
     desc = "explicit" if explicit_ else "learn"
     _drive(lambda n: m.learn(learner, pc, acc, max_cycles, n, remap), calls, desc)
     got = learner.learned()
-    d = np.frombuffer(got["deps"], np.uint64)
-    deps = {}
-    for loc, src in zip((d >> 32).tolist(), (d & 0xFFFFFFFF).tolist()):
-        deps.setdefault(loc, set()).add(src)
+    deps = _by_loc(got["deps"])
     s = np.frombuffer(got["sites"], np.uint64)
     sites = {}
     for key, loc in zip((s >> _BITS).tolist(), (s & ((1 << _BITS) - 1)).tolist()):
@@ -259,12 +274,14 @@ def learn(state, pc, calls, *, acc=0, max_cycles=MAX_CYCLES, remap=None, exclude
 
 
 def explicit(state, pc, calls, *, acc=0, max_cycles=MAX_CYCLES, remap=None):
-    """:class:`Flows` of ``calls`` calls of ``pc`` (as :func:`learn`): the explicit flows, each
-    load's value apart from its address, no control; a data load of a location no call writes
-    at ``pc`` is the constant :data:`CONST` + ``pc``."""
-    _cd, written = control(state, pc, calls, acc=acc, max_cycles=max_cycles, remap=remap)
-    _got, deps, sites = _learned(state, pc, calls, {}, written, True, acc, max_cycles, remap)
-    return Flows(deps={k: frozenset(v) for k, v in deps.items()}, sites=sites, calls=calls)
+    """:class:`Flows` of ``calls`` calls of ``pc`` (as :func:`learn`), by data alone.
+
+    Each load's value is apart from its address; a data load of a location no call writes at
+    ``pc`` is the constant :data:`CONST` + ``pc``. Control enters only ``gated``."""
+    cd, written = control(state, pc, calls, acc=acc, max_cycles=max_cycles, remap=remap)
+    got, deps, sites = _learned(state, pc, calls, cd, written, True, acc, max_cycles, remap)
+    per = {k: {loc: frozenset(v) for loc, v in _by_loc(got[k]).items()} for k in _PER}
+    return Flows(deps={k: frozenset(v) for k, v in deps.items()}, sites=sites, calls=calls, **per)
 
 
 def trajectory(state, pc, cells, calls, *, acc=0, max_cycles=MAX_CYCLES, remap=None):
