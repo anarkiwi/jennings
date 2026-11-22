@@ -13,11 +13,12 @@ from jennings.opcodes import CYCLES, EXTRA, OPCODES, ILLEGAL_OPCODES, MODE_TOKEN
 
 if NATIVE:
     # pylint: disable-next=import-error,no-name-in-module
-    from jennings._core import Core, Remap
+    from jennings._core import REG, Core, Learner, Remap
 else:  # pragma: no cover - sdist install without the native core
-    Core = Remap = None
+    Core = Learner = Remap = None
+    REG = 0x10000
 
-__all__ = ["MPU", "NativeMPU", "Remap", "ILLEGAL_OPCODES"]
+__all__ = ["MPU", "NativeMPU", "Remap", "Learner", "REG", "ILLEGAL_OPCODES"]
 
 # PcodeVM.reg indices: 0-3 A/X/Y/SP; flags C/Z/I/D/B/V/N at 8-14.
 _A, _X, _Y, _SP = 0, 1, 2, 3
@@ -458,7 +459,7 @@ class NativeMPU(MPU):
         return Trace(pcs, cycles, None), memoryview(log).cast("Q")
 
     # pylint: disable-next=too-many-arguments,too-many-positional-arguments
-    def orbit(self, pc, acc, max_cycles, limit, keep=None, volatile=None, remap=None):
+    def orbit(self, pc, acc, max_cycles, limit, keep=None, volatile=None, remap=None, cells=None):
         """Calls of ``pc`` with ``acc`` repeated natively until a state repeats.
 
         Each call runs as :meth:`run_to_rts_accesses`; before each, the
@@ -469,12 +470,29 @@ class NativeMPU(MPU):
         ``"stop"``; ``states`` the distinct states; ``accesses`` the distinct access keys
         (``pc << 17 | write << 16 | addr``, ``remap`` applied) and ``edges`` the distinct
         ``pc << 16 | next`` of consecutive instructions within a call, both ascending uint64
-        :class:`memoryview`.
+        :class:`memoryview`. ``cells``, locations (addresses, :data:`REG` + a register index),
+        are the state hashed in place of ``keep``'s RAM.
         """
         end, states, acc_log, edges = self._core.orbit(
-            pc, acc, max_cycles, limit, keep, volatile, remap
+            pc, acc, max_cycles, limit, keep, volatile, remap, cells
         )
         return end, states, memoryview(acc_log).cast("Q"), memoryview(edges).cast("Q")
+
+    # pylint: disable-next=too-many-arguments,too-many-positional-arguments
+    def trajectory(self, pc, acc, max_cycles, calls, cells, remap=None):
+        """``(stop, rows)``: ``calls`` calls of ``pc`` with ``acc`` (as :meth:`run_to_rts`),
+        ``rows`` uint8 ``[calls, len(cells)]`` the values of ``cells`` (as :meth:`orbit` takes
+        them) at each call's entry; ``stop`` ``"sp"`` unless the last call ended otherwise."""
+        import numpy as np  # pylint: disable=import-outside-toplevel
+
+        stop, rows = self._core.trajectory(pc, acc, max_cycles, calls, list(cells), remap)
+        return stop, np.frombuffer(rows, np.uint8).reshape(-1, len(cells))
+
+    # pylint: disable-next=too-many-arguments,too-many-positional-arguments
+    def learn(self, learner, pc, acc, max_cycles, calls, remap=None):
+        """Add ``calls`` calls of ``pc`` with ``acc`` (as :meth:`run_to_rts`) to a
+        :class:`Learner`; ``"sp"`` unless the last call ended otherwise."""
+        return self._core.learn(learner, pc, acc, max_cycles, calls, remap)
 
     def run_to_rts_until(self, pc, acc, pcs, max_cycles, remap=None):
         """``pysidtracker.emu.run_to_rts_until`` on the native core; a :class:`Remap`

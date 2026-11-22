@@ -112,3 +112,16 @@ def test_register_names_come_from_the_lifter():
         13: "V",
         14: "N",
     }
+
+
+def test_addresses_lists_each_access_with_its_address_inputs():
+    mem = bytearray(0x10000)
+    mem[PC : PC + 2] = bytes((0x91, 0x10))
+    got = []
+    out = dataflow.flow(mem, PC, [0x10, 0x11], [0x1234], {1: "op"}, got)
+    assert out[0x1234] == {"A"}
+    assert got == [
+        (False, 0x10, {"op"}),
+        (False, 0x11, {"op"}),
+        (True, 0x1234, {"op", "Y", 0x10, 0x11}),
+    ]

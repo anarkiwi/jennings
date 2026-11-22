@@ -36,13 +36,14 @@ pub struct Orbit {
 }
 
 /// A set of keys `hi << 16 | lo`: one 64 Ki-bit page per distinct `hi`.
-struct Keys {
+#[derive(Clone)]
+pub(crate) struct Keys {
     slot: Vec<u32>,
     pages: Vec<(u32, Box<[u64; 1024]>)>,
 }
 
 impl Keys {
-    fn new(his: usize) -> Self {
+    pub(crate) fn new(his: usize) -> Self {
         Keys {
             slot: vec![0; his],
             pages: Vec::new(),
@@ -50,7 +51,7 @@ impl Keys {
     }
 
     #[inline(always)]
-    fn insert(&mut self, key: u64) {
+    pub(crate) fn insert(&mut self, key: u64) {
         let hi = (key >> 16) as usize;
         let s = match self.slot[hi] {
             0 => {
@@ -64,7 +65,7 @@ impl Keys {
         self.pages[s].1[lo >> 6] |= 1 << (lo & 63);
     }
 
-    fn sorted(mut self) -> Vec<u64> {
+    pub(crate) fn sorted(mut self) -> Vec<u64> {
         self.pages.sort_unstable_by_key(|p| p.0);
         let mut out = Vec::new();
         for (hi, bits) in &self.pages {
@@ -81,8 +82,8 @@ impl Keys {
 }
 
 /// Call `pc` with `A = acc` (each call to its RTS or `max_cycles`, as [`run_to_rts`]) from the
-/// state `bus` holds, again and again, until `digest` of the state a call would start from
-/// was seen before, `limit` calls ran, or a call loads an address in `volatile` or jams.
+/// state `cpu` and `bus` hold, again and again, until `digest` of the state a call would start
+/// from was seen before, `limit` calls ran, or a call loads an address in `volatile` or jams.
 /// `remap` redirects its instructions' accesses ([`Accesses`]); `stopped` is polled after
 /// each instruction.
 #[allow(clippy::too_many_arguments)]
@@ -95,14 +96,14 @@ pub fn orbit<B: Bus>(
     limit: usize,
     remap: Option<&Remap>,
     volatile: &AddrSet,
-    mut digest: impl FnMut(&mut B) -> u128,
+    mut digest: impl FnMut(&Cpu, &mut B) -> u128,
     mut stopped: impl FnMut() -> bool,
 ) -> Orbit {
     let (mut accesses, mut edges) = (Keys::new(1 << 17), Keys::new(1 << 16));
     let (mut seen, mut end) = (HashSet::new(), End::Open);
     let (mut trace, mut log) = (Trace::new(false), Vec::new());
     for k in 0..=limit {
-        if !seen.insert(digest(bus)) {
+        if !seen.insert(digest(cpu, bus)) {
             end = End::Closed;
             break;
         }

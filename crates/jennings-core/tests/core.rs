@@ -1,8 +1,9 @@
 use std::cell::RefCell;
 
 use jennings_core::{
-    access_key, orbit, run_to_rts, run_until, Access, Accesses, AddrSet, Bus, Cpu, End, FlatMemory,
-    Hooks, NoHooks, Periodic, Remap, Stop, Until, AS_IS, ZERO,
+    access_key, cells_digest, learn, orbit, run_to_rts, run_until, trajectory, Access, Accesses,
+    AddrSet, Bus, Cpu, End, FlatMemory, Hooks, NoHooks, Periodic, Remap, Stop, Until, AS_IS, REG,
+    ZERO,
 };
 
 fn ram(prog: &[(u16, &[u8])]) -> Box<[u8; 0x10000]> {
@@ -486,7 +487,7 @@ fn counter() -> Box<[u8; 0x10000]> {
     )])
 }
 
-fn zero_page(b: &mut [u8; 0x10000]) -> u128 {
+fn zero_page(_c: &Cpu, b: &mut [u8; 0x10000]) -> u128 {
     use std::hash::{DefaultHasher, Hash, Hasher};
     let mut h = DefaultHasher::new();
     b[..0x100].hash(&mut h);
@@ -602,4 +603,79 @@ fn orbit_runs_under_the_remap() {
     // INC reads 0 and stores nothing: every call starts from the same state.
     assert_eq!((o.end, o.states, m[0x10]), (End::Closed, 1, 0));
     assert!(o.accesses.contains(&access_key(0x1000, true, 0x10)));
+}
+
+#[test]
+fn learn_taints_the_counter_and_its_branch() {
+    let mut m = counter();
+    let written: AddrSet = [0x10].into_iter().collect();
+    let control = [(0x1008, vec![0x1006]), (0x100A, vec![0x1006])];
+    let (l, stop) = learn(
+        &mut Cpu::new(),
+        &mut *m,
+        0x1000,
+        0,
+        1000,
+        6,
+        &control,
+        written,
+        None,
+    );
+    assert_eq!(stop, Stop::Sp);
+    assert_eq!(l.persistent, [0x10]);
+    let dep = |loc: u32, src: u32| (loc as u64) << 32 | src as u64;
+    assert!(l.deps.contains(&dep(REG, 0x10)) && l.deps.contains(&dep(REG + 9, 0x10)));
+    assert!(!l.deps.iter().any(|&d| d >> 32 == 0x10));
+    assert!(l.sites.contains(&((0x1006u64 << 2 | 2) << 17 | 0x10)));
+    assert_eq!(l.edges.len(), 7);
+    assert_eq!((l.exits, l.written), (vec![0x100C], vec![0x10]));
+}
+
+#[test]
+fn learn_stops_at_a_call_that_does_not_return() {
+    let mut m = ram(&[(0x1000, &[0x4C, 0x00, 0x10])]);
+    let (_, stop) = learn(
+        &mut Cpu::new(),
+        &mut *m,
+        0x1000,
+        0,
+        100,
+        3,
+        &[],
+        AddrSet::default(),
+        None,
+    );
+    assert_eq!(stop, Stop::Cycles);
+}
+
+#[test]
+fn trajectory_records_cells_at_each_entry_and_digests_them() {
+    let (mut m, mut c) = (counter(), Cpu::new());
+    c.x = 7;
+    let mut out = Vec::new();
+    let peek = |b: &mut [u8; 0x10000], a: u16| b[a as usize];
+    let cells = [0x10, REG + 1];
+    let stop = trajectory(
+        &mut c,
+        &mut *m,
+        0x1000,
+        0,
+        1000,
+        4,
+        &cells,
+        None,
+        peek,
+        &mut out,
+        || false,
+    );
+    assert_eq!(stop, Stop::Sp);
+    assert_eq!(out, [0, 7, 1, 7, 2, 7, 0, 7]);
+    let mut p = peek;
+    let d = cells_digest(&c, &mut *m, &mut p, &cells);
+    m[0x10] ^= 0x80;
+    assert_ne!(cells_digest(&c, &mut *m, &mut p, &cells), d);
+    m[0x10] ^= 0x80;
+    c.y = 9;
+    m[0x11] = 9;
+    assert_eq!(cells_digest(&c, &mut *m, &mut p, &cells), d);
 }

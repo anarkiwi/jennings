@@ -17,7 +17,7 @@ REGISTERS = {
 }
 
 
-def flow(mem, pc, loads=(), stores=(), operands=None):
+def flow(mem, pc, loads=(), stores=(), operands=None, addresses=None):
     """``{output: frozenset(inputs)}`` of the instruction at ``pc`` in ``mem``.
 
     Locations are :data:`REGISTERS` names and memory addresses. ``loads``/``stores`` are
@@ -25,7 +25,9 @@ def flow(mem, pc, loads=(), stores=(), operands=None):
     reports them; the dummy bus accesses have no data use and are not among them);
     a load depends on its address, a store's byte only on the value stored.
     ``operands`` ``{offset: location}`` makes constants built from those operand bytes
-    depend on the given locations (e.g. self-modified operands).
+    depend on the given locations (e.g. self-modified operands). ``addresses``, a list, receives
+    ``(store, location, inputs)`` for each data access in order: whether it is a store, the
+    address it reached and the locations its address came from.
     """
     rec = lift(mem, pc)
     loads, stores = iter(loads), iter(stores)
@@ -53,12 +55,15 @@ def flow(mem, pc, loads=(), stores=(), operands=None):
                 addr = next(stores, None)
                 if addr is not None:
                     out[addr] = src(ins[1], (i, 1))
+                    if addresses is not None:
+                        addresses.append((True, addr, src(ins[0], (i, 0))))
             continue
         deps = frozenset().union(*(src(vn, (i, j)) for j, vn in enumerate(ins)))
         if mn == "LOAD":
-            deps |= frozenset(
-                a for a in (next(loads, None) for _ in range(dst[2])) if a is not None
-            )
+            got = [a for a in (next(loads, None) for _ in range(dst[2])) if a is not None]
+            if addresses is not None:
+                addresses.extend((False, a, src(ins[0], (i, 0))) for a in got)
+            deps |= frozenset(got)
         if dst[0] == "r":
             regs[dst[1]] = deps
             out[REGISTERS.get(dst[1], "r%d" % dst[1])] = deps

@@ -11,14 +11,14 @@ use std::ffi::{c_int, c_void};
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering};
 
 use jennings_core::{
-    orbit, run_to_rts, run_until, Access, Accesses, AddrSet, Bus, Cpu, End, FlatBus, FlatMemory,
-    Hooks, Periodic, Remap, Stop, Trace, Until,
+    cells_digest, orbit, run_to_rts, run_until, trajectory, Access, Accesses, AddrSet, Bus, Cpu,
+    End, FlatBus, FlatMemory, Hooks, Learn, Periodic, Remap, Stop, Trace, Until, REG,
 };
 use pyo3::buffer::PyBuffer;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::ffi;
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyRange, PyRangeMethods, PySlice};
+use pyo3::types::{PyBytes, PyDict, PyRange, PyRangeMethods, PySlice};
 use pyo3::{PyTraverseError, PyVisit};
 
 const PAL: (u32, u32) = (63, 312);
@@ -1087,8 +1087,9 @@ impl Core {
     /// `states` the distinct states, `accesses` the distinct keys of the calls' data accesses
     /// (as `run_to_rts_accesses` logs them, `remap` applied) and `edges` the distinct
     /// `pc << 16 | next` of consecutive instructions within a call, both ascending
-    /// little-endian uint64.
-    #[pyo3(signature = (pc, acc, max_cycles, limit, keep=None, volatile=None, remap=None))]
+    /// little-endian uint64. `cells`, locations (addresses, `REG` + a register index), are
+    /// the state hashed in place of the RAM at `keep`.
+    #[pyo3(signature = (pc, acc, max_cycles, limit, keep=None, volatile=None, remap=None, cells=None))]
     #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     fn orbit<'py>(
         &self,
@@ -1100,6 +1101,7 @@ impl Core {
         keep: Option<&Bound<'py, PyAny>>,
         volatile: Option<&Bound<'py, PyAny>>,
         remap: Option<&Bound<'py, PyRemap>>,
+        cells: Option<Vec<u32>>,
     ) -> PyResult<(
         &'static str,
         usize,
@@ -1107,6 +1109,7 @@ impl Core {
         Bound<'py, PyBytes>,
     )> {
         let keep = keep.map_or(Ok(vec![(0, 0x10000)]), spans)?;
+        let cells = cells.map(locations).transpose()?;
         let mut vol = AddrSet::default();
         for (lo, hi) in volatile.map_or(Ok(vec![]), spans)? {
             vol.insert_range(lo, hi);
@@ -1122,7 +1125,10 @@ impl Core {
                 limit,
                 rm,
                 &vol,
-                |b| b.inner.mem.digest(keep.iter().copied()),
+                |c, b| match &cells {
+                    Some(cl) => cells_digest(c, b, &mut |b: &mut PyBus, a| b.inner.mem.ram(a), cl),
+                    None => b.inner.mem.digest(keep.iter().copied()),
+                },
                 || stop.load(Ordering::Relaxed) && stop.swap(false, Ordering::Relaxed),
             )
         })?;
@@ -1140,6 +1146,67 @@ impl Core {
             PyBytes::new(py, &le(&o.accesses)),
             PyBytes::new(py, &le(&o.edges)),
         ))
+    }
+
+    /// `calls` calls of `pc` with `acc` (each as `run_to_rts`, `remap` applied), each preceded
+    /// by the values of `cells` (locations as `orbit` takes them): `(stop, rows)`, `rows` one
+    /// byte per cell per call and `stop` "sp" unless a call ended otherwise (it is the last).
+    #[pyo3(signature = (pc, acc, max_cycles, calls, cells, remap=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn trajectory<'py>(
+        &self,
+        py: Python<'py>,
+        pc: u16,
+        acc: i64,
+        max_cycles: u64,
+        calls: usize,
+        cells: Vec<u32>,
+        remap: Option<&Bound<'py, PyRemap>>,
+    ) -> PyResult<(&'static str, Bound<'py, PyBytes>)> {
+        let cells = locations(cells)?;
+        let rm = remap.map(|r| &r.get().0);
+        let mut out = Vec::new();
+        let r = self.drive(py, true, |cpu, bus, stop| {
+            trajectory(
+                cpu,
+                bus,
+                pc,
+                acc as u8,
+                max_cycles,
+                calls,
+                &cells,
+                rm,
+                |b, a| b.inner.mem.ram(a),
+                &mut out,
+                || stop.load(Ordering::Relaxed) && stop.swap(false, Ordering::Relaxed),
+            )
+        })?;
+        Ok((reason(r), PyBytes::new(py, &out)))
+    }
+
+    /// Add `calls` calls of `pc` with `acc` (each as `run_to_rts`, `remap` applied) to
+    /// `learner`; "sp" unless a call ended otherwise (it is the last).
+    #[pyo3(signature = (learner, pc, acc, max_cycles, calls, remap=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn learn<'py>(
+        &self,
+        py: Python<'py>,
+        learner: &Bound<'py, PyLearner>,
+        pc: u16,
+        acc: i64,
+        max_cycles: u64,
+        calls: usize,
+        remap: Option<&Bound<'py, PyRemap>>,
+    ) -> PyResult<&'static str> {
+        let rm = remap.map(|r| &r.get().0);
+        let mut l = learner.borrow_mut();
+        let eng: &mut Learn = &mut l.0;
+        let r = self.drive(py, true, |cpu, bus, stop| {
+            eng.run(cpu, bus, pc, acc as u8, max_cycles, calls, rm, || {
+                stop.load(Ordering::Relaxed) && stop.swap(false, Ordering::Relaxed)
+            })
+        })?;
+        Ok(reason(r))
     }
 
     /// `pysidtracker.emu.run_to_rts_until`: as `run_to_rts`, True on entering `pcs`.
@@ -1205,10 +1272,71 @@ impl PyRemap {
     }
 }
 
+/// Locations checked: addresses below `REG`, then `REG` + a register index below 16.
+fn locations(cells: Vec<u32>) -> PyResult<Vec<u32>> {
+    if cells.iter().any(|&c| c >= REG + 16) {
+        return Err(PyValueError::new_err(
+            "locations are addresses or REG + a register index",
+        ));
+    }
+    Ok(cells)
+}
+
+/// The dependence of a call's state on the state before it, gathered by `Core.learn`
+/// (`jennings_core::Learn`).
+///
+/// ``Learner(control, written)``: ``control`` ``{pc: branches}``, the branches each
+/// instruction is directly control dependent on; ``written`` the memory a call may write
+/// (addresses and ``range``s), the rest taken as constant.
+#[pyclass(module = "jennings._core", name = "Learner")]
+pub struct PyLearner(Learn);
+
+#[pymethods]
+impl PyLearner {
+    #[new]
+    fn new(control: HashMap<u16, Vec<u16>>, written: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let mut w = AddrSet::default();
+        for (lo, hi) in spans(written)? {
+            w.insert_range(lo, hi);
+        }
+        let control: Vec<(u16, Vec<u16>)> = control.into_iter().collect();
+        Ok(PyLearner(Learn::new(&control, w)))
+    }
+
+    /// Calls learned from so far.
+    #[getter]
+    fn calls(&self) -> u32 {
+        self.0.calls()
+    }
+
+    /// ``{"persistent", "deps", "edges", "sites", "exits", "written"}`` as little-endian
+    /// arrays: uint32 locations read before written by some call and written by some; uint64
+    /// ``loc << 32 | src``, the end-of-call ``loc`` depending on entry ``src``; uint64
+    /// ``pc << 16 | next``; uint64 ``(pc << 2 | kind) << 17 | loc``, ``loc`` tainting a
+    /// load's (0) or store's (1) address or where control goes (2) at ``pc``; uint16 PCs that
+    /// ended a call; uint16 addresses some call wrote.
+    fn learned<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let l = self.0.learned();
+        let d = PyDict::new(py);
+        let le32: Vec<u8> = l.persistent.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let le64 = |v: &[u64]| v.iter().flat_map(|k| k.to_le_bytes()).collect::<Vec<u8>>();
+        let le16 = |v: &[u16]| v.iter().flat_map(|k| k.to_le_bytes()).collect::<Vec<u8>>();
+        d.set_item("persistent", PyBytes::new(py, &le32))?;
+        d.set_item("deps", PyBytes::new(py, &le64(&l.deps)))?;
+        d.set_item("edges", PyBytes::new(py, &le64(&l.edges)))?;
+        d.set_item("sites", PyBytes::new(py, &le64(&l.sites)))?;
+        d.set_item("exits", PyBytes::new(py, &le16(&l.exits)))?;
+        d.set_item("written", PyBytes::new(py, &le16(&l.written)))?;
+        Ok(d)
+    }
+}
+
 #[pymodule]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Memory>()?;
     m.add_class::<Core>()?;
     m.add_class::<PyRemap>()?;
+    m.add_class::<PyLearner>()?;
+    m.add("REG", REG)?;
     Ok(())
 }

@@ -58,7 +58,10 @@ MPU executes, given the addresses an observed run accessed.
 `jennings.coverage` records 6502 code coverage (executed bytes, branch directions, data
 accesses, dynamic edges), reports it through coverage.py on listings that can follow computed
 jumps through constant tables, derives self-modifying-code and interrupt-vector obligations,
-explains one-way branches, and records per-test coverage from pytest. See [docs/coverage.md](docs/coverage.md).
+explains one-way branches, and records per-test coverage from pytest. `jennings.coverage.components`
+splits a repeatedly called routine into autonomous components by native data and control taint,
+measures each one's cycle and gives the calls that cover every access and edge it can make. See
+[docs/coverage.md](docs/coverage.md).
 
 ## Native core
 

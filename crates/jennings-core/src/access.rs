@@ -100,9 +100,14 @@ impl<'a, B: Bus> Accesses<'a, B> {
 
     /// `inner` with `remap`'s instructions' accesses redirected and nothing logged.
     pub fn remapped(inner: &'a mut B, remap: &'a Remap) -> Self {
+        Accesses::unlogged(inner, Some(remap))
+    }
+
+    /// `inner`, with `remap`'s instructions' accesses redirected if given, and nothing logged.
+    pub fn unlogged(inner: &'a mut B, remap: Option<&'a Remap>) -> Self {
         Accesses {
             logs: false,
-            ..Accesses::new(inner, Some(remap))
+            ..Accesses::new(inner, remap)
         }
     }
 
@@ -115,7 +120,7 @@ impl<'a, B: Bus> Accesses<'a, B> {
 
     /// Where the current instruction's access of `addr` goes: None as it is.
     #[inline(always)]
-    fn target(&self, addr: u16) -> Option<i32> {
+    pub fn target(&self, addr: u16) -> Option<i32> {
         let src = self.table?[addr as usize];
         if src == AS_IS || self.keep.is_some_and(|(a, b)| addr == a || addr == b) {
             return None;
