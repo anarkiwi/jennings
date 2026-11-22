@@ -1,8 +1,8 @@
 use std::cell::RefCell;
 
 use jennings_core::{
-    access_key, run_to_rts, run_until, Access, Accesses, AddrSet, Bus, Cpu, FlatMemory, Hooks,
-    NoHooks, Periodic, Remap, Stop, Until, AS_IS, ZERO,
+    access_key, orbit, run_to_rts, run_until, Access, Accesses, AddrSet, Bus, Cpu, End, FlatMemory,
+    Hooks, NoHooks, Periodic, Remap, Stop, Until, AS_IS, ZERO,
 };
 
 fn ram(prog: &[(u16, &[u8])]) -> Box<[u8; 0x10000]> {
@@ -419,4 +419,132 @@ fn digest_covers_the_spans_only() {
     }
     assert_ne!(m.digest([(0, 0x8000), (0x8000, 0x10000)]), d0);
     assert_eq!(m.digest([(0x20000, 0x30000), (5, 5)]), m.digest([]));
+}
+
+/// $1000 INC $10 ; LDA $10 ; CMP #3 ; BNE $100C ; LDA #0 ; STA $10 ; $100C RTS: $10 counts 0, 1, 2.
+fn counter() -> Box<[u8; 0x10000]> {
+    ram(&[(
+        0x1000,
+        &[
+            0xE6, 0x10, 0xA5, 0x10, 0xC9, 0x03, 0xD0, 0x04, 0xA9, 0x00, 0x85, 0x10, 0x60,
+        ],
+    )])
+}
+
+fn zero_page(b: &mut [u8; 0x10000]) -> u128 {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    b[..0x100].hash(&mut h);
+    h.finish() as u128
+}
+
+#[test]
+fn orbit_closes_at_the_first_repeated_state() {
+    let (mut m, mut c) = (counter(), Cpu::new());
+    let none = AddrSet::default();
+    let o = orbit(
+        &mut c,
+        &mut *m,
+        0x1000,
+        0,
+        1000,
+        100,
+        None,
+        &none,
+        zero_page,
+        || false,
+    );
+    assert_eq!((o.end, o.states, m[0x10]), (End::Closed, 3, 0));
+    assert_eq!(
+        o.accesses,
+        [
+            access_key(0x1000, false, 0x10),
+            access_key(0x1000, true, 0x10),
+            access_key(0x1002, false, 0x10),
+            access_key(0x100A, true, 0x10),
+        ]
+    );
+    let edge = |a: u64, b: u64| a << 16 | b;
+    assert_eq!(
+        o.edges,
+        [
+            edge(0x1000, 0x1002),
+            edge(0x1002, 0x1004),
+            edge(0x1004, 0x1006),
+            edge(0x1006, 0x1008),
+            edge(0x1006, 0x100C),
+            edge(0x1008, 0x100A),
+            edge(0x100A, 0x100C),
+        ]
+    );
+}
+
+#[test]
+fn orbit_ends_at_the_limit_a_volatile_load_or_a_jam() {
+    let none = AddrSet::default();
+    let run = |m: &mut [u8; 0x10000], limit, vol: &AddrSet| {
+        orbit(
+            &mut Cpu::new(),
+            m,
+            0x1000,
+            0,
+            1000,
+            limit,
+            None,
+            vol,
+            zero_page,
+            || false,
+        )
+    };
+    let mut m = counter();
+    let o = run(&mut m, 2, &none);
+    assert_eq!((o.end, o.states, m[0x10]), (End::Open, 3, 2));
+    assert!(!o.accesses.contains(&access_key(0x100A, true, 0x10)));
+    let mut m = counter();
+    assert_eq!(run(&mut m, 3, &none).end, End::Closed);
+    let mut vol = AddrSet::default();
+    vol.insert(0x10);
+    let mut m = counter();
+    let o = run(&mut m, 100, &vol);
+    assert_eq!((o.end, o.states, m[0x10]), (End::Volatile, 1, 1));
+    let mut m = ram(&[(0x1000, &[0x02])]);
+    assert_eq!(run(&mut m, 100, &none).end, End::Jam);
+    let mut m = counter();
+    let o = orbit(
+        &mut Cpu::new(),
+        &mut *m,
+        0x1000,
+        0,
+        1000,
+        100,
+        None,
+        &none,
+        zero_page,
+        || true,
+    );
+    assert_eq!((o.end, o.states), (End::Stopped, 1));
+}
+
+#[test]
+fn orbit_runs_under_the_remap() {
+    let mut r = Remap::default();
+    let mut t = vec![AS_IS; 0x10000];
+    t[0x10] = ZERO;
+    r.insert(0x1000, &t);
+    let mut m = counter();
+    let o = orbit(
+        &mut Cpu::new(),
+        &mut *m,
+        0x1000,
+        0,
+        1000,
+        100,
+        Some(&r),
+        &AddrSet::default(),
+        zero_page,
+        || false,
+    );
+    // INC reads 0 and stores nothing: every call starts from the same state.
+    assert_eq!((o.end, o.states, m[0x10]), (End::Closed, 1, 0));
+    assert!(o.accesses.contains(&access_key(0x1000, true, 0x10)));
 }

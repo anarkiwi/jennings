@@ -453,6 +453,25 @@ class NativeMPU(MPU):
         pcs, cycles, log = self._core.run_to_rts_accesses(pc, acc, max_cycles, remap)
         return Trace(pcs, cycles, None), memoryview(log).cast("Q")
 
+    # pylint: disable-next=too-many-arguments,too-many-positional-arguments
+    def orbit(self, pc, acc, max_cycles, limit, keep=None, volatile=None, remap=None):
+        """Calls of ``pc`` with ``acc`` repeated natively until a state repeats.
+
+        Each call runs as :meth:`run_to_rts_accesses`; before each, the
+        :meth:`~jennings.memory.NativeMemory.digest` of RAM at ``keep`` (default all) is taken
+        and the calls end at one seen before, after ``limit`` calls, or after a call that
+        loads an address of ``volatile`` (spans as ``keep``) or jams. Returns ``(end, states,
+        accesses, edges)``: ``end`` ``"closed"``, ``"open"``, ``"volatile"``, ``"jam"`` or
+        ``"stop"``; ``states`` the distinct states; ``accesses`` the distinct access keys
+        (``pc << 17 | write << 16 | addr``, ``remap`` applied) and ``edges`` the distinct
+        ``pc << 16 | next`` of consecutive instructions within a call, both ascending uint64
+        :class:`memoryview`.
+        """
+        end, states, acc_log, edges = self._core.orbit(
+            pc, acc, max_cycles, limit, keep, volatile, remap
+        )
+        return end, states, memoryview(acc_log).cast("Q"), memoryview(edges).cast("Q")
+
     def run_to_rts_until(self, pc, acc, pcs, max_cycles):
         """``pysidtracker.emu.run_to_rts_until`` on the native core."""
         return self._core.run_to_rts_until(pc, acc, pcs, max_cycles)

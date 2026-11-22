@@ -708,3 +708,68 @@ def test_digest_of_spans():
     mem[0x150] = 1
     assert mem.digest([range(0, 0x100), range(0x200, 0x10000)]) == parts
     assert mem.digest() != whole and mem.digest(range(0x150, 0x151)) != mem.digest([0x151])
+
+
+def _counter():
+    """INC $10 ; LDA $10 ; CMP #3 ; BNE +4 ; LDA #0 ; STA $10 ; RTS: $10 counts 0, 1, 2."""
+    mem = NativeMemory()
+    mem[0x1000:0x100D] = [0xE6, 0x10, 0xA5, 0x10, 0xC9, 0x03, 0xD0, 0x04]
+    mem[0x1008:0x100D] = [0xA9, 0x00, 0x85, 0x10, 0x60]
+    return MPU(memory=mem)
+
+
+def _orbit_by_calls(mpu, limit, keep, volatile=()):
+    """The orbit of $1000 by single calls of run_to_rts_accesses and digest."""
+    seen, accesses, edges, end = set(), set(), set(), "open"
+    for k in range(limit + 1):
+        state = mpu.memory.digest(keep)
+        if state in seen:
+            end = "closed"
+            break
+        seen.add(state)
+        if k == limit:
+            break
+        trace, log = mpu.run_to_rts_accesses(0x1000, 0, 1000)
+        accesses.update(log)
+        edges.update(a << 16 | b for a, b in zip(trace.pc[:-1], trace.pc[1:]))
+        if any(not k >> 16 & 1 and (k & 0xFFFF) in volatile for k in log):
+            end = "volatile"
+            break
+    return end, len(seen), sorted(accesses), sorted(edges)
+
+
+# The stack bytes the first call's return address takes are a state of the whole RAM.
+@pytest.mark.parametrize(
+    "keep,limit,ends",
+    [
+        (None, 2, ("open", 3)),
+        (None, 3, ("open", 4)),
+        (None, 100, ("closed", 4)),
+        ([range(0, 0x100)], 2, ("open", 3)),
+        ([range(0, 0x100)], 3, ("closed", 3)),
+        ([range(0x11, 0x10000)], 100, ("closed", 2)),
+    ],
+)
+def test_orbit_is_its_calls_until_a_state_repeats(keep, limit, ends):
+    want = _orbit_by_calls(_counter(), limit, range(0x10000) if keep is None else keep)
+    end, states, accesses, edges = _counter().orbit(0x1000, 0, 1000, limit, keep)
+    assert (end, states, list(accesses), list(edges)) == want
+    assert (end, states) == ends
+
+
+def test_orbit_ends_at_a_volatile_load_or_a_jam():
+    want = _orbit_by_calls(_counter(), 100, range(0x10000), volatile={0x10})
+    got = _counter().orbit(0x1000, 0, 1000, 100, volatile=[range(0x10, 0x11)])
+    assert got[0] == "volatile" and (got[0], got[1], list(got[2]), list(got[3])) == want
+    mpu = _counter()
+    mpu.memory[0x1000] = 0x02
+    assert mpu.orbit(0x1000, 0, 1000, 100)[:2] == ("jam", 1)
+
+
+def test_orbit_runs_under_a_remap():
+    mpu = _counter()
+    table = np.full(0x10000, -1, np.int32)
+    table[0x10] = -2
+    end, states, accesses, _ = mpu.orbit(0x1000, 0, 1000, 100, remap=Remap({0x1000: table}))
+    assert (end, states, mpu.memory[0x10]) == ("closed", 2, 0)
+    assert 0x1000 << 17 | 1 << 16 | 0x10 in list(accesses)
