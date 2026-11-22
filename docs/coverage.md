@@ -598,7 +598,8 @@ again over the bound and repeats. One census of the `limit + 1` calls gives the 
 and every relearning (a `Calls`, given as `ran`, is that census run on as far as it needs:
 `Calls.repeat` runs one on, doubling, to a cell set's first repeat, `Calls.seen` gives what a
 prefix of its calls first saw, the accesses and edges among it, and `Calls.fork` takes its
-first calls on under another remap); a relearning takes the last learner on where the calls between saw no
+first calls on under another remap; one recording more cells than the components' persistent
+ones serves their rows and those of every relearning's cells it records); a relearning takes the last learner on where the calls between saw no
 new edge, exit or written address (so its control dependence and written memory are those of
 the longer run), and starts a learner afresh where they did. None means the feed set does not repeat within `limit`. A feed set's period can exceed the calls after which coverage
 stops growing when a branch condition reads a long-period component whose both outcomes come

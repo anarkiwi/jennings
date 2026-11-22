@@ -255,10 +255,18 @@ class Calls:
             raise
         return self
 
-    def rows(self, calls=None):
-        """uint8 ``[calls, len(cells)]``: the cells at the entry of each of the first ``calls``
-        calls run (all where None), by column."""
-        return _rows(self.census, self.cells)[:calls]
+    def rows(self, calls=None, cells=None):
+        """uint8 ``[calls, len(cells)]``: the ``cells`` (of these calls' cells; all where None)
+        at the entry of each of the first ``calls`` calls run (all where None), by column."""
+        rows = _rows(self.census, self.cells)[:calls]
+        if cells is None or tuple(cells) == self.cells:
+            return rows
+        col = {c: i for i, c in enumerate(self.cells)}
+        return rows[:, [col[c] for c in cells]]
+
+    def holds(self, cells):
+        """Whether these calls record every one of ``cells``."""
+        return set(cells) <= set(self.cells)
 
     def repeat(self, cells, limit, start=1):
         """The calls before the first entry at which the ``cells`` (of these calls' cells)
@@ -538,16 +546,22 @@ def cover_calls(
 
     One :func:`census` of the ``limit + 1`` calls gives the trajectory and every relearning:
     each a learner over its calls' classes, taken on from the last where no new edge, exit or
-    written address comes between. Given ``ran``, :class:`Calls` of these with
-    ``comps.persistent`` its cells, that census is theirs, run on as far as it needs."""
+    written address comes between. Given ``ran``, :class:`Calls` of these recording
+    ``comps.persistent`` among their cells, that census is theirs, run on as far as it needs,
+    and so is the trajectory of every relearning's cells it records."""
     kw = {"acc": acc, "max_cycles": max_cycles, "remap": remap}
     if ran is None:
         ran = Calls(state, pc, comps.persistent, **kw)
     cen = ran.run(max(ran.calls, limit + 1)).census
-    rows, cells, run = ran.rows(limit + 1), comps.persistent, None
+    rows, cells, run = ran.rows(limit + 1, comps.persistent), comps.persistent, None
     while True:
         if cells != comps.persistent:
-            rows, cells = trajectory(state, pc, comps.persistent, limit, **kw), comps.persistent
+            cells = comps.persistent
+            rows = (
+                ran.rows(limit + 1, cells)
+                if ran.holds(cells)
+                else trajectory(state, pc, cells, limit, **kw)
+            )
         cyc, comps = _autonomous(rows, comps)
         calls = None if cyc.feed is None else cyc.feed[0] + cyc.feed[1]
         if calls is None or calls <= comps.calls:

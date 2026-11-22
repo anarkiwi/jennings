@@ -1050,3 +1050,7 @@ def test_forked_calls_are_the_calls_run_anew():
     ran = C.Calls(ram, PLAY, comps.persistent)
     assert C.cover_calls(ram, PLAY, comps, 600, ran=ran) == C.cover_calls(ram, PLAY, comps, 600)
     assert ran.calls == 601
+    wide = C.Calls(ram, PLAY, (*cells, *comps.persistent, 0x10))
+    assert wide.holds(comps.persistent) and not ran.holds([0x10])
+    assert C.cover_calls(ram, PLAY, comps, 600, ran=wide) == C.cover_calls(ram, PLAY, comps, 600)
+    assert wide.rows(5, [0x10]).shape == (5, 1)
