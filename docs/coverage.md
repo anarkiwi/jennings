@@ -473,3 +473,68 @@ plugin's `.coveragerc`:
 pytest -n auto --cov6502
 coverage combine && coverage report -m && coverage html --show-contexts
 ```
+
+## Components and cover calls
+
+`jennings.coverage.components` splits a repeatedly called, input-free routine (a
+playroutine) into autonomous components and says how many calls cover everything it can do:
+every data access `(pc, read/write, address)` and every control edge. It runs on the native
+core.
+
+```python
+from jennings.coverage import components as C
+
+comps = C.learn(mpu, play, 12_000)          # NativeMPU, or 64 KiB of RAM
+cyc = C.cycles(mpu, play, comps, 1_000_000)  # (preperiod, period) per closure
+calls, comps = C.cover_calls(mpu, play, comps, 1_000_000)
+```
+
+Each function runs from a flat copy of the state (`machine`: RAM, plus the registers of an
+MPU), calling `pc` as `run_to_rts` does (`acc`, `max_cycles`, `remap` as there); a call
+that does not return raises.
+
+**learn** first runs the calls natively for their edges (`NativeMPU.orbit`), takes
+`cfg.control_dependence` of them, then runs them again on a `Learner`, which taints every
+location (64 KiB of memory and the registers, `REG + index`) with the entry locations its
+value came from:
+
+- data, per instruction, from `tools/gen_flow.py`'s table: `dataflow.flow` read once per
+  opcode on symbolic registers, operand bytes and accesses, so it follows the same lifted
+  P-Code the core is generated from. A load depends on its address and the byte it reads,
+  a store's byte on the value stored; `PHA`/`PLA` flow through the stack page, `JSR`/`RTS`/
+  `RTI`/`BRK` through their frames;
+- control: every output of an instruction also takes the conditions of the branches it is
+  directly control dependent on (and its own opcode byte), and a location's store sites
+  pass their controlling conditions on at the end of a call, so a store that did not happen
+  still makes the location depend on why;
+- at entry, a location written by no call is a constant and taints nothing; operand bytes
+  are read at fetch, so a self-modified operand or opcode is state. `Remap` applies: a
+  redirected read is of the location it reads from, a `ZERO` read is a constant and a
+  redirected write writes nothing.
+
+`Components` holds `persistent` (locations some call reads before writing and some call
+writes, the stack page and I/O excluded by `exclude`; of the registers only X, Y and the
+flags but B), `deps` (each location's end-of-call dependence), `closures` (each sink SCC of
+`deps` over the persistent locations with its ancestors: autonomous by construction),
+`sites` (`(pc, kind)` to the locations tainting a load's (`LOAD`) or store's (`STORE`)
+address or where control goes from `pc` (`CONTROL`): a branch's condition and offset, a
+jump's target, an `RTS`/`RTI` frame, an opcode byte), `feed` (the persistent locations in
+any site's taint with their ancestors) and `feeding` (the closures containing one).
+
+**trajectory** records the persistent locations at each call's entry natively, one uint8
+row per call (`NativeMPU.trajectory`). **cycles** finds each closure's and the feed set's
+first repeat `(preperiod, period)` on it (`orbit` is the max preperiod and lcm period of all
+the closures) and checks autonomy: equal projections must have equal successors. A conflict
+`(t1, t2, cells)` means a dependence learning did not see; `widen` adds the cells that told
+the two entries apart, with their ancestors.
+
+**cover_calls** widens until there is no conflict and returns the feed set's preperiod plus
+period: the state the addresses and control of a call are a function of has then taken every
+value it ever takes, so every reachable access and edge has been seen. None means it does
+not repeat within `limit`. A feed set's period can exceed the calls after which coverage
+stops growing when a branch condition reads a long-period component whose both outcomes come
+early (a sweep reversing at its bounds): the bound is the one the components prove.
+
+`NativeMPU.orbit(..., cells=locations)` hashes only those locations (addresses and
+`REG + index`) for the state, e.g. `comps.feed`, where RAM holding stale scratch would not
+repeat.

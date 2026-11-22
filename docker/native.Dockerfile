@@ -39,5 +39,5 @@ RUN pip install --no-cache-dir --no-deps /wheels/*.whl \
 # Only tests and tools are copied so imports resolve to the installed wheel.
 COPY tests tests
 COPY tools tools
-COPY crates/jennings-core/src/cpu_gen.rs crates/jennings-core/src/cpu_gen.rs
-CMD ["sh", "-c", "pytest tests -n auto -q && python tools/gen_cpu.py --check"]
+COPY crates/jennings-core/src/cpu_gen.rs crates/jennings-core/src/flow_gen.rs crates/jennings-core/src/
+CMD ["sh", "-c", "pytest tests -n auto -q && python tools/gen_cpu.py --check && python tools/gen_flow.py --check"]
