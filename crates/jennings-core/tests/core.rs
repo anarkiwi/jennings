@@ -1,9 +1,9 @@
 use std::cell::RefCell;
 
 use jennings_core::{
-    access_key, cells_digest, learn, orbit, run_to_rts, run_until, trajectory, Access, Accesses,
-    AddrSet, Bus, Cpu, End, FlatMemory, Hooks, NoHooks, Periodic, Remap, Stop, Until, AS_IS, CONST,
-    REG, ZERO,
+    access_key, cells_digest, learn, orbit, periods, run_to_rts, run_until, trajectory, Access,
+    Accesses, AddrSet, Bus, Census, Cpu, End, FlatMemory, Hooks, Learn, NoHooks, Period, Periodic,
+    RamBus, Remap, Stop, Until, AS_IS, CONST, REG, ZERO,
 };
 
 fn ram(prog: &[(u16, &[u8])]) -> Box<[u8; 0x10000]> {
@@ -444,13 +444,15 @@ fn remapped_redirects_without_logging() {
         m[0x2005] = 1;
         m[0x2006] = 2;
         let mut c = Cpu::new();
-        let mut bus = if remapped {
-            Accesses::remapped(&mut *m, &r)
+        let n = if remapped {
+            let mut bus = Accesses::remapped(&mut *m, &r);
+            run_to_rts(&mut c, &mut bus, 0x1000, 0, None, 100, None, || false);
+            0
         } else {
-            Accesses::new(&mut *m, Some(&r))
+            let mut bus = Accesses::new(&mut *m, Some(&r));
+            run_to_rts(&mut c, &mut bus, 0x1000, 0, None, 100, None, || false);
+            bus.log.len()
         };
-        run_to_rts(&mut c, &mut bus, 0x1000, 0, None, 100, None, || false);
-        let n = bus.log.len();
         (c.a, m[0x2007], n)
     };
     assert_eq!(run(false), (2, 0, 2));
@@ -719,4 +721,81 @@ fn trajectory_records_cells_at_each_entry_and_digests_them() {
     c.y = 9;
     m[0x11] = 9;
     assert_eq!(cells_digest(&c, &mut *m, &mut p, &cells), d);
+}
+
+#[test]
+fn census_classes_calls_and_restores_their_entry_state() {
+    let (mut m, mut c) = (counter(), Cpu::new());
+    let mut census = Census::new(vec![0x10]);
+    let peek = |b: &mut [u8; 0x10000], a: u16| b[a as usize];
+    let stop = census.run(&mut c, &mut *m, 0x1000, 0, 1000, 6, None, peek, || false);
+    assert_eq!(stop, Stop::Sp);
+    assert_eq!((census.calls(), census.classes()), (6, 2));
+    let classes: Vec<u32> = (0..6).map(|k| census.class(k).unwrap()).collect();
+    assert_eq!(classes, [0, 0, 1, 0, 0, 1]);
+    assert_eq!(census.columns, [vec![0, 1, 2, 0, 1, 2]]);
+    assert_eq!(census.written, [(0x10, 0)]);
+    let (mut fresh, mut cpu) = (counter(), Cpu::new());
+    census.restore(1, &mut cpu, |a, v| fresh[a as usize] = v);
+    assert_eq!(fresh[0x10], 2);
+    let control = [(0x1008, vec![0x1006]), (0x100A, vec![0x1006])];
+    let written: AddrSet = [0x10].into_iter().collect();
+    let (full, _) = learn(
+        &mut Cpu::new(),
+        &mut *counter(),
+        0x1000,
+        0,
+        1000,
+        6,
+        &control,
+        written.clone(),
+        false,
+        None,
+    );
+    let mut l = Learn::new(&control, written, false);
+    let poke = |b: &mut [u8; 0x10000], a: u16, v: u8| b[a as usize] = v;
+    let mut m = counter();
+    let stop = l.run_census(
+        &mut Cpu::new(),
+        &mut *m,
+        &census,
+        0x1000,
+        0,
+        1000,
+        6,
+        None,
+        poke,
+        || false,
+    );
+    assert_eq!((stop, l.classes()), (Stop::Sp, 2));
+    assert_eq!(l.learned(), full);
+}
+
+#[test]
+fn periods_find_first_repeats_and_where_they_break() {
+    let a = [0u8, 1, 2, 0, 1, 2, 0, 1, 2, 0];
+    let b = [5u8, 6, 7, 5, 6, 7, 5, 6, 9, 5];
+    let got = periods(&[&a, &b], &[vec![0], vec![0, 1], vec![]]);
+    let p = |first, conflict| Period { first, conflict };
+    assert_eq!(got[0], p(Some((0, 3)), None));
+    assert_eq!(
+        got[1],
+        p(Some((0, 3)), Some(4)),
+        "rows 4, 7 agree; 5, 8 do not"
+    );
+    assert_eq!(got[2], p(Some((0, 1)), None));
+}
+
+#[test]
+fn a_plain_memory_runs_on_its_ram_alone() {
+    let mem = FlatMemory::new();
+    mem.set_ram(0x1000, 0xAD);
+    mem.set_ram(0x1001, 0x34);
+    mem.set_ram(0x1002, 0x12);
+    let mut bus = RamBus::of(&mem).expect("nothing mapped or watched");
+    assert_eq!(bus.load(0x1000), 0xAD);
+    bus.poke(0x2000, 5);
+    assert_eq!((bus.peek(0x2000), mem.last_load()), (5, Some(0x1000)));
+    mem.set_io(true);
+    assert!(RamBus::of(&mem).is_none());
 }

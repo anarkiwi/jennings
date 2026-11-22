@@ -10,8 +10,9 @@
 use std::collections::{HashMap, HashSet};
 use std::hash::{BuildHasherDefault, Hasher};
 
-use crate::access::{Accesses, Remap, ZERO};
+use crate::access::{Accesses, Remap};
 use crate::bus::Bus;
+use crate::census::{Census, Classes};
 use crate::cpu::Cpu;
 use crate::flow_gen::FLOW;
 use crate::orbit::Keys;
@@ -30,8 +31,8 @@ pub const STATE_REGS: u32 = 0b110 | FLAGS;
 const O1: u32 = 16;
 const O2: u32 = 17;
 const LOAD0: u32 = 20;
-const STORE0: u8 = 16;
-const PC_OUT: u8 = 31;
+pub(crate) const STORE0: u8 = 16;
+pub(crate) const PC_OUT: u8 = 31;
 
 /// An opcode's control class, as `deity_informant.lifter.template` gives it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -61,11 +62,11 @@ pub(crate) struct Flow {
 }
 
 #[derive(Default)]
-struct Fx(u64);
+pub(crate) struct Fx(pub(crate) u64);
 
 impl Fx {
     #[inline(always)]
-    fn add(&mut self, v: u64) {
+    pub(crate) fn add(&mut self, v: u64) {
         self.0 = (self.0.rotate_left(5) ^ v).wrapping_mul(0x517C_C1B7_2722_0A95);
     }
 }
@@ -96,7 +97,7 @@ impl Hasher for Fx {
     }
 }
 
-type FxMap<K, V> = HashMap<K, V, BuildHasherDefault<Fx>>;
+pub(crate) type FxMap<K, V> = HashMap<K, V, BuildHasherDefault<Fx>>;
 type FxSet<K> = HashSet<K, BuildHasherDefault<Fx>>;
 
 /// Interned sorted location sets; id 0 is the empty set and unions are memoised.
@@ -170,13 +171,13 @@ impl Sets {
     }
 }
 
-const LOAD: u8 = 0;
-const STACK_LOAD: u8 = 1;
-const STORE: u8 = 2;
-const STACK_STORE: u8 = 3;
-const READ: u8 = 4;
-const WRITE: u8 = 5;
-const SUPPRESSED: i32 = -1;
+pub(crate) const LOAD: u8 = 0;
+pub(crate) const STACK_LOAD: u8 = 1;
+pub(crate) const STORE: u8 = 2;
+pub(crate) const STACK_STORE: u8 = 3;
+pub(crate) const READ: u8 = 4;
+pub(crate) const WRITE: u8 = 5;
+pub(crate) const SUPPRESSED: i32 = -1;
 
 /// What [`learn`] gathers over the calls it runs; [`Learn::run`] adds calls to it.
 pub struct Learn {
@@ -208,6 +209,12 @@ pub struct Learn {
     exits: AddrSet,
     active: bool,
     explicit: bool,
+    is_branch: Vec<bool>,
+    ran: Vec<u16>,
+    replay: Vec<(usize, Vec<(u16, u32)>)>,
+    alike: Vec<u32>,
+    coarse: Classes,
+    scratch: Vec<u32>,
 }
 
 /// What [`Learn`] found, each list ascending.
@@ -246,8 +253,10 @@ impl Learn {
     /// load of a constant at `pc` is tainted with [`CONST`] + `pc`.
     pub fn new(control: &[(u16, Vec<u16>)], written: AddrSet, explicit: bool) -> Self {
         let mut by_pc: Vec<Vec<u16>> = vec![Vec::new(); 0x10000];
+        let mut is_branch = vec![false; 0x10000];
         for (pc, brs) in control {
             by_pc[*pc as usize].extend_from_slice(brs);
+            brs.iter().for_each(|&b| is_branch[b as usize] = true);
         }
         let (mut cd_off, mut cd) = (Vec::with_capacity(0x10001), Vec::new());
         for v in &mut by_pc {
@@ -305,12 +314,23 @@ impl Learn {
             exits: AddrSet::default(),
             active: false,
             explicit,
+            is_branch,
+            ran: Vec::new(),
+            replay: Vec::new(),
+            alike: Vec::new(),
+            coarse: Classes::default(),
+            scratch: Vec::new(),
         }
     }
 
     /// Calls run so far.
     pub fn calls(&self) -> u32 {
         self.call - 1
+    }
+
+    /// The classes [`Learn::run_census`] has learned, one call of each tainted.
+    pub fn classes(&self) -> usize {
+        self.coarse.len()
     }
 
     /// The taint `loc` holds now: its own at entry unless constant or written this call.
@@ -565,6 +585,9 @@ impl Learn {
         }
         self.site(2, ctrl);
         self.cond[pc as usize] = self.sets.union(ctrl, ctl);
+        if self.is_branch[pc as usize] && self.cstamp[pc as usize] != self.call {
+            self.ran.push(pc);
+        }
         self.cstamp[pc as usize] = self.call;
         let (lo, hi) = (self.cd_off[pc as usize], self.cd_off[pc as usize + 1]);
         for &(loc, s) in &out[..n] {
@@ -647,20 +670,97 @@ impl Learn {
         mut stopped: impl FnMut() -> bool,
     ) -> Stop {
         for _ in 0..calls {
-            let mut tb = TaintBus {
-                inner: Accesses::unlogged(bus, remap),
-                eng: self,
-            };
-            let stop = run_to_rts(cpu, &mut tb, pc, acc, None, max_cycles, None, &mut stopped);
+            let stop = observed_call(cpu, bus, self, pc, acc, max_cycles, remap, &mut stopped);
             self.end_call();
-            if stop != Stop::Sp {
-                return stop;
-            }
-            if cpu.jammed {
-                return Stop::Jam;
+            if let Some(s) = ended(cpu, stop) {
+                return s;
             }
         }
         Stop::Sp
+    }
+
+    /// [`Learn::run`] over the calls `census` ran from the state this learner's first call
+    /// started from, which `cpu` and `bus` held then, the next `calls` from [`Learn::calls`].
+    ///
+    /// A call of a class seen before (the same instructions, opcodes and accesses in order)
+    /// taints as its first did, so it is not run: only the implicit flows learned since then
+    /// are added for the branches it ran. A first one starts from its entry state, restored
+    /// by `poke` from the census' snapshot; ends as [`Learn::run`] does.
+    #[allow(clippy::too_many_arguments)]
+    pub fn run_census<B: Bus>(
+        &mut self,
+        cpu: &mut Cpu,
+        bus: &mut B,
+        census: &Census,
+        pc: u16,
+        acc: u8,
+        max_cycles: u64,
+        calls: usize,
+        remap: Option<&Remap>,
+        mut poke: impl FnMut(&mut B, u16, u8),
+        mut stopped: impl FnMut() -> bool,
+    ) -> Stop {
+        for _ in 0..calls {
+            let k = self.calls() as usize;
+            let fine = census.class(k).expect("the census ran this call");
+            let class = self.alike(census, fine) as usize;
+            if class < self.replay.len() {
+                self.replay_class(class);
+                self.call += 1;
+                continue;
+            }
+            census.restore(fine as usize, cpu, |a, v| poke(bus, a, v));
+            self.ran.clear();
+            let stop = observed_call(cpu, bus, self, pc, acc, max_cycles, remap, &mut stopped);
+            self.end_call();
+            let mut conds: Vec<(u16, u32)> = self
+                .ran
+                .iter()
+                .map(|&b| (b, self.cond[b as usize]))
+                .collect();
+            conds.sort_unstable();
+            self.replay.push((self.implicit.len(), conds));
+            if let Some(s) = ended(cpu, stop) {
+                return s;
+            }
+        }
+        Stop::Sp
+    }
+
+    /// The class this learner learns census class `fine` as: its events with reads of memory
+    /// no call writes made alike ([`Census::canonical`]), numbered in order of first call.
+    fn alike(&mut self, census: &Census, fine: u32) -> u32 {
+        if let Some(&c) = self.alike.get(fine as usize) {
+            return c;
+        }
+        let mut ev = std::mem::take(&mut self.scratch);
+        let written = &self.written;
+        census.canonical(fine, |a| !written.contains(a), &mut ev);
+        let c = self.coarse.intern(&ev).0;
+        self.scratch = ev;
+        debug_assert_eq!(
+            self.alike.len(),
+            fine as usize,
+            "census classes come in order"
+        );
+        self.alike.push(c);
+        c
+    }
+
+    /// The implicit flows learned since class `class` last ran, for the branches it ran.
+    fn replay_class(&mut self, class: usize) {
+        let (from, conds) = &mut self.replay[class];
+        for &(loc, br) in &self.implicit[*from..] {
+            if let Ok(i) = conds.binary_search_by_key(&br, |c| c.0) {
+                let d = if self.explicit {
+                    &mut self.per_loc[2][loc as usize]
+                } else {
+                    &mut self.deps[loc as usize]
+                };
+                *d = self.sets.union(*d, conds[i].1);
+            }
+        }
+        *from = self.implicit.len();
     }
 
     /// What the calls so far found.
@@ -714,39 +814,71 @@ impl Learn {
     }
 }
 
-/// `inner` with each access of the current instruction recorded for [`Learn::finish`] as the
-/// location it reaches (after `inner`'s redirection).
-struct TaintBus<'a, 'e, B: Bus> {
-    inner: Accesses<'a, B>,
-    eng: &'e mut Learn,
+/// What an [`Observed`] bus tells of a call: each instruction's start and each access after.
+pub(crate) trait Observer {
+    /// Whether an instruction has started (accesses before the first are not noted).
+    fn active(&self) -> bool;
+    /// An access of `kind` of `addr` reaching `c`: an address, [`crate::ZERO`] or
+    /// [`SUPPRESSED`].
+    fn note(&mut self, kind: u8, addr: u16, c: i32);
+    /// The instruction at `pc` with opcode `op` starts.
+    fn start(&mut self, pc: u16, op: u8);
+    /// Whether [`Observer::wrote`] is told of each write that reaches memory.
+    const WRITES: bool = false;
+    /// A write reaching `addr`, which held `old`, even before the first instruction.
+    #[inline(always)]
+    fn wrote(&mut self, _addr: u16, _old: u8) {}
 }
 
-impl<B: Bus> TaintBus<'_, '_, B> {
+impl Observer for Learn {
+    #[inline(always)]
+    fn active(&self) -> bool {
+        self.active
+    }
+
+    #[inline(always)]
+    fn note(&mut self, kind: u8, _addr: u16, c: i32) {
+        self.rec.push((kind, c));
+    }
+
+    #[inline(always)]
+    fn start(&mut self, pc: u16, op: u8) {
+        self.finish();
+        self.begin(pc, op);
+    }
+}
+
+/// `inner` with each access of the current instruction told to `eng` as the location it
+/// reaches (after `inner`'s redirection, [`Bus::target`]).
+pub(crate) struct Observed<'a, 'e, B: Bus, O: Observer> {
+    pub(crate) inner: &'a mut B,
+    pub(crate) eng: &'e mut O,
+}
+
+impl<B: Bus, O: Observer> Observed<'_, '_, B, O> {
     #[inline(always)]
     fn note_read(&mut self, kind: u8, addr: u16) {
-        if self.eng.active {
-            let c = match self.inner.target(addr) {
-                None => addr as i32,
-                Some(ZERO) => ZERO,
-                Some(s) => s,
-            };
-            self.eng.rec.push((kind, c));
+        if self.eng.active() {
+            let c = self.inner.target(addr).unwrap_or(addr as i32);
+            self.eng.note(kind, addr, c);
         }
     }
 
     #[inline(always)]
     fn note_write(&mut self, kind: u8, addr: u16) {
-        if self.eng.active {
-            let c = match self.inner.target(addr) {
-                None => addr as i32,
-                Some(_) => SUPPRESSED,
-            };
-            self.eng.rec.push((kind, c));
+        let reaches = self.inner.target(addr).is_none();
+        if O::WRITES && reaches {
+            let old = self.inner.peek(addr);
+            self.eng.wrote(addr, old);
+        }
+        if self.eng.active() {
+            self.eng
+                .note(kind, addr, if reaches { addr as i32 } else { SUPPRESSED });
         }
     }
 }
 
-impl<B: Bus> Bus for TaintBus<'_, '_, B> {
+impl<B: Bus, O: Observer> Bus for Observed<'_, '_, B, O> {
     #[inline(always)]
     fn read(&mut self, addr: u16) -> u8 {
         self.note_read(READ, addr);
@@ -790,10 +922,68 @@ impl<B: Bus> Bus for TaintBus<'_, '_, B> {
 
     #[inline(always)]
     fn sync(&mut self, cpu: &Cpu) {
-        self.eng.finish();
         let op = self.inner.fetch(cpu.pc);
-        self.eng.begin(cpu.pc, op);
+        self.eng.start(cpu.pc, op);
         self.inner.sync(cpu);
+    }
+}
+
+/// One call of `pc` (as [`run_to_rts`]) on `bus`, through [`Accesses`] only under a `remap`.
+#[allow(clippy::too_many_arguments)]
+#[inline(always)]
+pub(crate) fn plain_call<B: Bus>(
+    cpu: &mut Cpu,
+    bus: &mut B,
+    pc: u16,
+    acc: u8,
+    max_cycles: u64,
+    remap: Option<&Remap>,
+    stopped: &mut impl FnMut() -> bool,
+) -> Stop {
+    match remap {
+        Some(r) => {
+            let mut a = Accesses::remapped(bus, r);
+            run_to_rts(cpu, &mut a, pc, acc, None, max_cycles, None, stopped)
+        }
+        None => run_to_rts(cpu, bus, pc, acc, None, max_cycles, None, stopped),
+    }
+}
+
+/// [`plain_call`] with its instructions and accesses told to `eng` ([`Observed`]).
+#[allow(clippy::too_many_arguments)]
+#[inline(always)]
+pub(crate) fn observed_call<B: Bus, O: Observer>(
+    cpu: &mut Cpu,
+    bus: &mut B,
+    eng: &mut O,
+    pc: u16,
+    acc: u8,
+    max_cycles: u64,
+    remap: Option<&Remap>,
+    stopped: &mut impl FnMut() -> bool,
+) -> Stop {
+    match remap {
+        Some(r) => {
+            let mut a = Accesses::remapped(bus, r);
+            let mut ob = Observed { inner: &mut a, eng };
+            run_to_rts(cpu, &mut ob, pc, acc, None, max_cycles, None, stopped)
+        }
+        None => {
+            let mut ob = Observed { inner: bus, eng };
+            run_to_rts(cpu, &mut ob, pc, acc, None, max_cycles, None, stopped)
+        }
+    }
+}
+
+/// The stop that ends a run of calls after one that stopped with `stop`: None to go on.
+#[inline(always)]
+pub(crate) fn ended(cpu: &Cpu, stop: Stop) -> Option<Stop> {
+    if stop != Stop::Sp {
+        Some(stop)
+    } else if cpu.jammed {
+        Some(Stop::Jam)
+    } else {
+        None
     }
 }
 
@@ -860,13 +1050,9 @@ pub fn trajectory<B: Bus>(
             let v = value(cpu, bus, &mut peek, c);
             out.push(v);
         }
-        let mut a = Accesses::unlogged(bus, remap);
-        let stop = run_to_rts(cpu, &mut a, pc, acc, None, max_cycles, None, &mut stopped);
-        if stop != Stop::Sp {
-            return stop;
-        }
-        if cpu.jammed {
-            return Stop::Jam;
+        let stop = plain_call(cpu, bus, pc, acc, max_cycles, remap, &mut stopped);
+        if let Some(s) = ended(cpu, stop) {
+            return s;
         }
     }
     Stop::Sp

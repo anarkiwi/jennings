@@ -13,13 +13,23 @@ from jennings.opcodes import CYCLES, EXTRA, OPCODES, ILLEGAL_OPCODES, MODE_TOKEN
 
 if NATIVE:
     # pylint: disable-next=import-error,no-name-in-module
-    from jennings._core import CONST, REG, Core, Learner, Remap
+    from jennings._core import CONST, REG, Census, Core, Learner, Remap, periods_of
 else:  # pragma: no cover - sdist install without the native core
-    Core = Learner = Remap = None
+    Census = Core = Learner = Remap = periods_of = None
     REG = 0x10000
     CONST = 0x20000
 
-__all__ = ["MPU", "NativeMPU", "Remap", "Learner", "REG", "CONST", "ILLEGAL_OPCODES"]
+__all__ = [
+    "MPU",
+    "NativeMPU",
+    "Remap",
+    "Learner",
+    "Census",
+    "periods_of",
+    "REG",
+    "CONST",
+    "ILLEGAL_OPCODES",
+]
 
 # PcodeVM.reg indices: 0-3 A/X/Y/SP; flags C/Z/I/D/B/V/N at 8-14.
 _A, _X, _Y, _SP = 0, 1, 2, 3
@@ -495,10 +505,17 @@ class NativeMPU(MPU):
         return stop, np.frombuffer(rows, np.uint8).reshape(-1, len(cells))
 
     # pylint: disable-next=too-many-arguments,too-many-positional-arguments
-    def learn(self, learner, pc, acc, max_cycles, calls, remap=None):
+    def learn(self, learner, pc, acc, max_cycles, calls, remap=None, census=None):
         """Add ``calls`` calls of ``pc`` with ``acc`` (as :meth:`run_to_rts`) to a
-        :class:`Learner`; ``"sp"`` unless the last call ended otherwise."""
-        return self._core.learn(learner, pc, acc, max_cycles, calls, remap)
+        :class:`Learner`; ``"sp"`` unless the last call ended otherwise. With a :class:`Census`
+        of them from this core's state at the learner's first call, each class's first runs."""
+        return self._core.learn(learner, pc, acc, max_cycles, calls, remap, census)
+
+    # pylint: disable-next=too-many-arguments,too-many-positional-arguments
+    def census(self, census, pc, acc, max_cycles, calls, remap=None):
+        """Add ``calls`` calls of ``pc`` with ``acc`` (as :meth:`run_to_rts`) to a
+        :class:`Census`; ``"sp"`` unless the last call ended otherwise."""
+        return self._core.census(census, pc, acc, max_cycles, calls, remap)
 
     def run_to_rts_until(self, pc, acc, pcs, max_cycles, remap=None):
         """``pysidtracker.emu.run_to_rts_until`` on the native core; a :class:`Remap`

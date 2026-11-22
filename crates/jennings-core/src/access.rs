@@ -141,9 +141,15 @@ impl<'a, B: Bus> Accesses<'a, B> {
         }
     }
 
-    /// `inner` with `remap`'s instructions' accesses redirected and nothing logged.
-    pub fn remapped(inner: &'a mut B, remap: &'a Remap) -> Self {
-        Accesses::unlogged(inner, Some(remap))
+    /// `inner` with `remap`'s instructions' accesses redirected and nothing logged: a
+    /// [`Redirect`], which does only that.
+    pub fn remapped(inner: &'a mut B, remap: &'a Remap) -> Redirect<'a, B> {
+        Redirect {
+            inner,
+            remap,
+            table: None,
+            keep: None,
+        }
     }
 
     /// `inner`, with `remap`'s instructions' accesses redirected if given, and nothing logged.
@@ -200,6 +206,16 @@ impl<'a, B: Bus> Accesses<'a, B> {
 }
 
 impl<B: Bus> Bus for Accesses<'_, B> {
+    #[inline(always)]
+    fn target(&self, addr: u16) -> Option<i32> {
+        Accesses::target(self, addr)
+    }
+
+    #[inline(always)]
+    fn peek(&mut self, addr: u16) -> u8 {
+        self.inner.peek(addr)
+    }
+
     #[inline(always)]
     fn read(&mut self, addr: u16) -> u8 {
         self.redirected_read(addr)
@@ -271,6 +287,107 @@ impl<B: Bus> Bus for Accesses<'_, B> {
         if let (Some(r), Some(_)) = (self.remap, self.table) {
             let op = self.inner.fetch(cpu.pc);
             if r.pointer[op as usize] {
+                let x = if indexed_by_x(op) { cpu.x } else { 0 };
+                let zp = self.inner.fetch(cpu.pc.wrapping_add(1)).wrapping_add(x) as u16;
+                self.keep = Some((zp, (zp + 1) & 0xFF));
+            }
+        }
+    }
+}
+
+/// `inner` with the accesses of `remap`'s instructions redirected as [`Accesses`] redirects
+/// them, and nothing logged ([`Accesses::remapped`]).
+pub struct Redirect<'a, B: Bus> {
+    inner: &'a mut B,
+    remap: &'a Remap,
+    table: Option<&'a [i32]>,
+    keep: Option<(u16, u16)>,
+}
+
+impl<B: Bus> Redirect<'_, B> {
+    #[inline(always)]
+    fn read_as(&mut self, addr: u16, plain: impl FnOnce(&mut B, u16) -> u8) -> u8 {
+        match Bus::target(self, addr) {
+            None => plain(self.inner, addr),
+            Some(ZERO) => 0,
+            Some(s) => self.inner.read(s as u16),
+        }
+    }
+}
+
+impl<B: Bus> Bus for Redirect<'_, B> {
+    #[inline(always)]
+    fn target(&self, addr: u16) -> Option<i32> {
+        let src = self.table?[addr as usize];
+        if src == AS_IS || self.keep.is_some_and(|(a, b)| addr == a || addr == b) {
+            return None;
+        }
+        Some(src)
+    }
+
+    #[inline(always)]
+    fn peek(&mut self, addr: u16) -> u8 {
+        self.inner.peek(addr)
+    }
+
+    #[inline(always)]
+    fn poke(&mut self, addr: u16, v: u8) {
+        self.inner.poke(addr, v)
+    }
+
+    #[inline(always)]
+    fn read(&mut self, addr: u16) -> u8 {
+        self.read_as(addr, |b, a| b.read(a))
+    }
+
+    #[inline(always)]
+    fn write(&mut self, addr: u16, v: u8) {
+        if Bus::target(self, addr).is_none() {
+            self.inner.write(addr, v)
+        }
+    }
+
+    #[inline(always)]
+    fn fetch(&mut self, addr: u16) -> u8 {
+        self.inner.fetch(addr)
+    }
+
+    #[inline(always)]
+    fn load(&mut self, addr: u16) -> u8 {
+        match Bus::target(self, addr) {
+            None => self.inner.load(addr),
+            Some(ZERO) => 0,
+            Some(s) => self.inner.load(s as u16),
+        }
+    }
+
+    #[inline(always)]
+    fn store(&mut self, addr: u16, v: u8) {
+        if Bus::target(self, addr).is_none() {
+            self.inner.store(addr, v)
+        }
+    }
+
+    #[inline(always)]
+    fn stack_read(&mut self, addr: u16) -> u8 {
+        self.read_as(addr, |b, a| b.stack_read(a))
+    }
+
+    #[inline(always)]
+    fn stack_write(&mut self, addr: u16, v: u8) {
+        if Bus::target(self, addr).is_none() {
+            self.inner.stack_write(addr, v)
+        }
+    }
+
+    #[inline(always)]
+    fn sync(&mut self, cpu: &Cpu) {
+        self.inner.sync(cpu);
+        self.table = self.remap.table(cpu.pc);
+        self.keep = None;
+        if self.table.is_some() {
+            let op = self.inner.fetch(cpu.pc);
+            if self.remap.pointer[op as usize] {
                 let x = if indexed_by_x(op) { cpu.x } else { 0 };
                 let zp = self.inner.fetch(cpu.pc.wrapping_add(1)).wrapping_add(x) as u16;
                 self.keep = Some((zp, (zp + 1) & 0xFF));

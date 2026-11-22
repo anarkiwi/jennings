@@ -50,6 +50,25 @@ pub trait Bus {
     /// instruction-start registers from inside any of its accesses.
     #[inline(always)]
     fn sync(&mut self, _cpu: &Cpu) {}
+
+    /// Where the current instruction's access of `addr` goes when this bus redirects it
+    /// ([`crate::Accesses`]): None as it is, else the source address or [`crate::ZERO`].
+    #[inline(always)]
+    fn target(&self, _addr: u16) -> Option<i32> {
+        None
+    }
+
+    /// The byte a write to `addr` replaces, read as the host would (no watch or observer).
+    #[inline(always)]
+    fn peek(&mut self, addr: u16) -> u8 {
+        self.read(addr)
+    }
+
+    /// Set the byte at `addr` as the host would (no watch or observer).
+    #[inline(always)]
+    fn poke(&mut self, addr: u16, v: u8) {
+        self.write(addr, v)
+    }
 }
 
 impl Bus for [u8; 0x10000] {

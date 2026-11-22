@@ -3,10 +3,42 @@
 
 use std::collections::HashSet;
 
-use crate::access::{Accesses, Remap};
+use crate::access::Remap;
 use crate::bus::Bus;
+use crate::census::Classes;
 use crate::cpu::Cpu;
-use crate::run::{run_to_rts, AddrSet, Stop, Trace};
+use crate::run::{AddrSet, Stop};
+use crate::taint::{observed_call, Observer, LOAD, STORE};
+
+const STEP: u32 = 1 << 31;
+
+/// A call's instructions and data accesses as [`orbit`] keeps them: [`STEP`] with each
+/// instruction's PC, then `write << 16 | addr` of each data access it names.
+#[derive(Default)]
+struct Walk {
+    ev: Vec<u32>,
+    active: bool,
+}
+
+impl Observer for Walk {
+    #[inline(always)]
+    fn active(&self) -> bool {
+        self.active
+    }
+
+    #[inline(always)]
+    fn note(&mut self, kind: u8, addr: u16, _c: i32) {
+        if kind == LOAD || kind == STORE {
+            self.ev.push(((kind == STORE) as u32) << 16 | addr as u32);
+        }
+    }
+
+    #[inline(always)]
+    fn start(&mut self, pc: u16, _op: u8) {
+        self.active = true;
+        self.ev.push(STEP | pc as u32);
+    }
+}
 
 /// Why an [`orbit`] ended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -52,6 +84,12 @@ impl Keys {
 
     #[inline(always)]
     pub(crate) fn insert(&mut self, key: u64) {
+        self.insert_new(key);
+    }
+
+    /// Insert `key`; whether it was not in the set.
+    #[inline(always)]
+    pub(crate) fn insert_new(&mut self, key: u64) -> bool {
         let hi = (key >> 16) as usize;
         let s = match self.slot[hi] {
             0 => {
@@ -62,7 +100,10 @@ impl Keys {
             i => i as usize - 1,
         };
         let lo = key as usize & 0xFFFF;
-        self.pages[s].1[lo >> 6] |= 1 << (lo & 63);
+        let (w, bit) = (&mut self.pages[s].1[lo >> 6], 1u64 << (lo & 63));
+        let new = *w & bit == 0;
+        *w |= bit;
+        new
     }
 
     pub(crate) fn sorted(mut self) -> Vec<u64> {
@@ -81,11 +122,12 @@ impl Keys {
     }
 }
 
-/// Call `pc` with `A = acc` (each call to its RTS or `max_cycles`, as [`run_to_rts`]) from the
-/// state `cpu` and `bus` hold, again and again, until `digest` of the state a call would start
-/// from was seen before, `limit` calls ran, or a call loads an address in `volatile` or jams.
-/// `remap` redirects its instructions' accesses ([`Accesses`]); `stopped` is polled after
-/// each instruction.
+/// Call `pc` with `A = acc` (each call to its RTS or `max_cycles`, as [`crate::run_to_rts`])
+/// from the state `cpu` and `bus` hold, again and again, until `digest` of the state a call
+/// would start from was seen before, `limit` calls ran, or a call loads an address in `volatile`
+/// or jams. `remap` redirects its instructions' accesses ([`crate::Accesses`]); `stopped` is
+/// polled after each instruction. A call whose instructions and accesses repeat an earlier
+/// call's, in order, adds nothing, so only new sequences are added to the sets.
 #[allow(clippy::too_many_arguments)]
 pub fn orbit<B: Bus>(
     cpu: &mut Cpu,
@@ -101,7 +143,7 @@ pub fn orbit<B: Bus>(
 ) -> Orbit {
     let (mut accesses, mut edges) = (Keys::new(1 << 17), Keys::new(1 << 16));
     let (mut seen, mut end) = (HashSet::new(), End::Open);
-    let (mut trace, mut log) = (Trace::new(false), Vec::new());
+    let (mut eng, mut calls) = (Walk::default(), Classes::default());
     for k in 0..=limit {
         if !seen.insert(digest(cpu, bus)) {
             end = End::Closed;
@@ -110,29 +152,25 @@ pub fn orbit<B: Bus>(
         if k == limit {
             break;
         }
-        trace.pc.clear();
-        trace.cycles.clear();
-        log.clear();
-        let mut a = Accesses::new(bus, remap);
-        a.log = std::mem::take(&mut log);
-        let stop = run_to_rts(
-            cpu,
-            &mut a,
-            pc,
-            acc,
-            None,
-            max_cycles,
-            Some(&mut trace),
-            &mut stopped,
-        );
-        log = a.log;
+        eng.ev.clear();
+        eng.active = false;
+        let stop = observed_call(cpu, bus, &mut eng, pc, acc, max_cycles, remap, &mut stopped);
         let mut read_volatile = false;
-        for &key in &log {
-            accesses.insert(key);
-            read_volatile |= key & 1 << 16 == 0 && volatile.contains(key as u16);
-        }
-        for w in trace.pc.windows(2) {
-            edges.insert((w[0] as u64) << 16 | w[1] as u64);
+        if calls.intern(&eng.ev).1 {
+            let mut prev: Option<u16> = None;
+            for &e in &eng.ev {
+                if e & STEP != 0 {
+                    let at = e as u16;
+                    if let Some(p) = prev {
+                        edges.insert((p as u64) << 16 | at as u64);
+                    }
+                    prev = Some(at);
+                    continue;
+                }
+                let key = (prev.unwrap_or(0) as u64) << 17 | e as u64;
+                accesses.insert(key);
+                read_volatile |= key & 1 << 16 == 0 && volatile.contains(key as u16);
+            }
         }
         if stop == Stop::Stopped {
             end = End::Stopped;

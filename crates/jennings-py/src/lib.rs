@@ -11,8 +11,9 @@ use std::ffi::{c_int, c_void};
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering};
 
 use jennings_core::{
-    cells_digest, orbit, run_to_rts, run_until, trajectory, Access, Accesses, AddrSet, Bus, Cpu,
-    End, FlatBus, FlatMemory, Hooks, Learn, Periodic, Remap, Stop, Trace, Until, CONST, REG,
+    cells_digest, orbit, periods, run_to_rts, run_until, trajectory, Access, Accesses, AddrSet,
+    Bus, Census, Cpu, End, FlatBus, FlatMemory, Hooks, Learn, Periodic, RamBus, Remap, Stop, Trace,
+    Until, CONST, REG,
 };
 use pyo3::buffer::PyBuffer;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -596,6 +597,14 @@ impl Bus for PyBus<'_, '_> {
         self.inner.stack_write(addr, v)
     }
     #[inline(always)]
+    fn peek(&mut self, addr: u16) -> u8 {
+        self.inner.peek(addr)
+    }
+    #[inline(always)]
+    fn poke(&mut self, addr: u16, v: u8) {
+        self.inner.poke(addr, v)
+    }
+    #[inline(always)]
     fn sync(&mut self, cpu: &Cpu) {
         self.inner.sync(cpu);
         self.live
@@ -701,6 +710,22 @@ impl Core {
 }
 
 /// Bind `$b` to `$bus`, wrapped in [`Accesses::remapped`] when `$rm` is a remap, for `$body`.
+/// Bind `$b` to a [`RamBus`] on `$bus`'s memory when it is plain, else to `$bus`, for `$body`.
+macro_rules! on_ram {
+    ($bus:ident, |$b:ident| $body:expr) => {
+        match RamBus::of($bus.inner.mem) {
+            Some(mut r) => {
+                let $b = &mut r;
+                $body
+            }
+            None => {
+                let $b = $bus;
+                $body
+            }
+        }
+    };
+}
+
 macro_rules! remapped {
     ($bus:ident, $rm:expr, |$b:ident| $body:expr) => {
         match $rm {
@@ -1130,9 +1155,10 @@ impl Core {
         }
         let rm = remap.map(|r| &r.get().0);
         let o = self.drive(py, true, |cpu, bus, stop| {
-            orbit(
+            let flat = bus.inner.mem;
+            on_ram!(bus, |b| orbit(
                 cpu,
-                bus,
+                b,
                 pc,
                 acc as u8,
                 max_cycles,
@@ -1140,11 +1166,11 @@ impl Core {
                 rm,
                 &vol,
                 |c, b| match &cells {
-                    Some(cl) => cells_digest(c, b, &mut |b: &mut PyBus, a| b.inner.mem.ram(a), cl),
-                    None => b.inner.mem.digest(keep.iter().copied()),
+                    Some(cl) => cells_digest(c, b, &mut |b, a| b.peek(a), cl),
+                    None => flat.digest(keep.iter().copied()),
                 },
                 || stop.load(Ordering::Relaxed) && stop.swap(false, Ordering::Relaxed),
-            )
+            ))
         })?;
         let end = match o.end {
             End::Closed => "closed",
@@ -1181,26 +1207,28 @@ impl Core {
         let rm = remap.map(|r| &r.get().0);
         let mut out = Vec::new();
         let r = self.drive(py, true, |cpu, bus, stop| {
-            trajectory(
+            on_ram!(bus, |b| trajectory(
                 cpu,
-                bus,
+                b,
                 pc,
                 acc as u8,
                 max_cycles,
                 calls,
                 &cells,
                 rm,
-                |b, a| b.inner.mem.ram(a),
+                |b, a| b.peek(a),
                 &mut out,
                 || stop.load(Ordering::Relaxed) && stop.swap(false, Ordering::Relaxed),
-            )
+            ))
         })?;
         Ok((reason(r), PyBytes::new(py, &out)))
     }
 
     /// Add `calls` calls of `pc` with `acc` (each as `run_to_rts`, `remap` applied) to
-    /// `learner`; "sp" unless a call ended otherwise (it is the last).
-    #[pyo3(signature = (learner, pc, acc, max_cycles, calls, remap=None))]
+    /// `learner`; "sp" unless a call ended otherwise (it is the last). With a `census` of
+    /// those calls from the state this core held at the learner's first call, only each
+    /// class's first call runs, from its snapshot (`jennings_core::Learn::run_census`).
+    #[pyo3(signature = (learner, pc, acc, max_cycles, calls, remap=None, census=None))]
     #[allow(clippy::too_many_arguments)]
     fn learn<'py>(
         &self,
@@ -1211,14 +1239,68 @@ impl Core {
         max_cycles: u64,
         calls: usize,
         remap: Option<&Bound<'py, PyRemap>>,
+        census: Option<&Bound<'py, PyCensus>>,
     ) -> PyResult<&'static str> {
         let rm = remap.map(|r| &r.get().0);
         let mut l = learner.borrow_mut();
         let eng: &mut Learn = &mut l.0;
+        let cen = census.map(|c| c.borrow());
+        if let Some(c) = &cen {
+            if eng.calls() as usize + calls > c.0.calls() {
+                return Err(PyValueError::new_err("the census ran fewer calls"));
+            }
+        }
+        let cen = cen.as_ref().map(|c| &c.0);
         let r = self.drive(py, true, |cpu, bus, stop| {
-            eng.run(cpu, bus, pc, acc as u8, max_cycles, calls, rm, || {
-                stop.load(Ordering::Relaxed) && stop.swap(false, Ordering::Relaxed)
+            let stopped = || stop.load(Ordering::Relaxed) && stop.swap(false, Ordering::Relaxed);
+            on_ram!(bus, |b| match cen {
+                Some(c) => eng.run_census(
+                    cpu,
+                    b,
+                    c,
+                    pc,
+                    acc as u8,
+                    max_cycles,
+                    calls,
+                    rm,
+                    |b, a, v| b.poke(a, v),
+                    stopped,
+                ),
+                None => eng.run(cpu, b, pc, acc as u8, max_cycles, calls, rm, stopped),
             })
+        })?;
+        Ok(reason(r))
+    }
+
+    /// Add `calls` calls of `pc` with `acc` (each as `run_to_rts`, `remap` applied) to
+    /// `census`; "sp" unless a call ended otherwise (it is the last).
+    #[pyo3(signature = (census, pc, acc, max_cycles, calls, remap=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn census<'py>(
+        &self,
+        py: Python<'py>,
+        census: &Bound<'py, PyCensus>,
+        pc: u16,
+        acc: i64,
+        max_cycles: u64,
+        calls: usize,
+        remap: Option<&Bound<'py, PyRemap>>,
+    ) -> PyResult<&'static str> {
+        let rm = remap.map(|r| &r.get().0);
+        let mut c = census.borrow_mut();
+        let cen: &mut Census = &mut c.0;
+        let r = self.drive(py, true, |cpu, bus, stop| {
+            on_ram!(bus, |b| cen.run(
+                cpu,
+                b,
+                pc,
+                acc as u8,
+                max_cycles,
+                calls,
+                rm,
+                |b, a| b.peek(a),
+                || stop.load(Ordering::Relaxed) && stop.swap(false, Ordering::Relaxed),
+            ))
         })?;
         Ok(reason(r))
     }
@@ -1330,6 +1412,13 @@ impl PyLearner {
         self.0.calls()
     }
 
+    /// Classes learned from a census, one call of each tainted (reads of memory no call
+    /// writes alike).
+    #[getter]
+    fn classes(&self) -> usize {
+        self.0.classes()
+    }
+
     /// ``{"persistent", "deps", "edges", "sites", "stored", "addressed", "gated", "exits",
     /// "written"}`` as little-endian arrays: uint32 locations read before written by some call
     /// and written by some; uint64 ``loc << 32 | src``, the end-of-call ``loc`` depending on
@@ -1358,12 +1447,116 @@ impl PyLearner {
     }
 }
 
+/// The calls of an entry sorted into classes by what a `Learner` sees of each
+/// (`jennings_core::Census`), filled by `Core.census`.
+///
+/// ``Census(cells)``: ``cells`` (locations as `Core.orbit` takes them) recorded at each
+/// call's entry.
+#[pyclass(module = "jennings._core", name = "Census")]
+pub struct PyCensus(Census);
+
+#[pymethods]
+impl PyCensus {
+    #[new]
+    fn new(cells: Vec<u32>) -> PyResult<Self> {
+        Ok(PyCensus(Census::new(locations(cells)?)))
+    }
+
+    /// Calls run so far.
+    #[getter]
+    fn calls(&self) -> usize {
+        self.0.calls()
+    }
+
+    /// Distinct classes of those calls.
+    #[getter]
+    fn classes(&self) -> usize {
+        self.0.classes()
+    }
+
+    /// One byte per call per cell, cell after cell: the cells at each call's entry.
+    fn columns<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.0.columns.concat())
+    }
+
+    /// ``{"edges", "exits", "written"}``, each ``(items, calls)`` as little-endian arrays in
+    /// order of first sight: uint64 ``pc << 16 | next``, uint16 PCs ending a call and uint16
+    /// addresses written, each with the uint32 call it was first seen in.
+    fn firsts<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let d = PyDict::new(py);
+        let at =
+            |v: &mut dyn Iterator<Item = u32>| v.flat_map(u32::to_le_bytes).collect::<Vec<u8>>();
+        let e = &self.0.edges;
+        let keys: Vec<u8> = e.iter().flat_map(|x| x.0.to_le_bytes()).collect();
+        let calls = at(&mut e.iter().map(|x| x.1));
+        d.set_item("edges", (PyBytes::new(py, &keys), PyBytes::new(py, &calls)))?;
+        for (name, v) in [("exits", &self.0.exits), ("written", &self.0.written)] {
+            let items: Vec<u8> = v.iter().flat_map(|x| x.0.to_le_bytes()).collect();
+            let calls = at(&mut v.iter().map(|x| x.1));
+            d.set_item(name, (PyBytes::new(py, &items), PyBytes::new(py, &calls)))?;
+        }
+        Ok(d)
+    }
+}
+
+/// ``periods(rows, subsets)``: per column list of ``subsets``, of the uint8 C- or
+/// Fortran-contiguous 2-D buffer ``rows`` on those columns, ``((preperiod, period), t)``: the
+/// first row equal there to an earlier one (None if none), and the first ``t`` from the
+/// preperiod with rows ``t`` and ``t + period`` equal there and rows ``t + 1`` and
+/// ``t + 1 + period`` not (None if none).
+#[pyfunction]
+#[allow(clippy::type_complexity)]
+fn periods_of(
+    py: Python<'_>,
+    rows: &Bound<'_, PyAny>,
+    subsets: Vec<Vec<usize>>,
+) -> PyResult<Vec<(Option<(usize, usize)>, Option<usize>)>> {
+    let buf = PyBuffer::<u8>::get(rows)?;
+    let shape = buf.shape();
+    let by_row = shape.len() == 2 && shape[1] > 1 && !buf.is_fortran_contiguous();
+    if shape.len() != 2 || !(buf.is_c_contiguous() || buf.is_fortran_contiguous()) {
+        return Err(PyValueError::new_err(
+            "rows is a contiguous 2-D uint8 array",
+        ));
+    }
+    let (n, width) = (shape[0], shape[1]);
+    if subsets.iter().flatten().any(|&c| c >= width) {
+        return Err(PyValueError::new_err("a column is out of range"));
+    }
+    // SAFETY: `buf` keeps the contiguous export alive and unmoved until it is dropped.
+    let data = unsafe { std::slice::from_raw_parts(buf.buf_ptr() as *const u8, buf.len_bytes()) };
+    let got = py.detach(|| {
+        let mut owned: Vec<Vec<u8>> = vec![Vec::new(); width];
+        if by_row {
+            let mut used: Vec<usize> = subsets.iter().flatten().copied().collect();
+            used.sort_unstable();
+            used.dedup();
+            used.iter().for_each(|&c| owned[c] = vec![0; n]);
+            for (t, row) in data.chunks_exact(width).enumerate() {
+                for &c in &used {
+                    owned[c][t] = row[c];
+                }
+            }
+        }
+        let cols: Vec<&[u8]> = (0..width)
+            .map(|c| match by_row {
+                true => &owned[c][..],
+                false => &data[c * n..(c + 1) * n],
+            })
+            .collect();
+        periods(&cols, &subsets)
+    });
+    Ok(got.into_iter().map(|p| (p.first, p.conflict)).collect())
+}
+
 #[pymodule]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Memory>()?;
     m.add_class::<Core>()?;
     m.add_class::<PyRemap>()?;
     m.add_class::<PyLearner>()?;
+    m.add_class::<PyCensus>()?;
+    m.add_function(wrap_pyfunction!(periods_of, m)?)?;
     m.add("REG", REG)?;
     m.add("CONST", CONST)?;
     Ok(())
