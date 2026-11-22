@@ -139,8 +139,8 @@ costs its instructions and accesses whatever the orbit's length. `cells`, locati
 max_cycles, calls, remap=None)` adds calls to a `Learner(control, written, explicit=False)`
 (`control` `{pc: branches}` it is directly control dependent on, `written` the memory a call
 may write, `explicit` tainting by data alone, a load's value apart from its address and a
-data load of a constant at `pc` as `CONST + pc`, `CONST = 0x20000`). `learner.learned()`
-returns a dict of little-endian arrays:
+data load of a constant at `pc` as `CONST + pc`, `CONST = 0x20000`, control only into
+`gated`). `learner.learned()` returns a dict of little-endian arrays:
 
 | key | dtype | entry |
 |---|---|---|
@@ -148,6 +148,9 @@ returns a dict of little-endian arrays:
 | `deps` | uint64 | `loc << 32 \| src`: end-of-call `loc` depends on entry `src` (`loc` itself included) |
 | `edges` | uint64 | `pc << 16 \| next`, consecutive instructions within a call |
 | `sites` | uint64 | `(pc << 2 \| kind) << 18 \| loc`: `loc` taints a data load's (kind 0) or store's (1) address, where control goes (2), or a data store's byte (3) at `pc` |
+| `stored` | uint64 | explicit only (else empty), `loc << 32 \| src` over every data store to memory `loc`: `src` taints the byte stored |
+| `addressed` | uint64 | as `stored`: `src` taints the store's address |
+| `gated` | uint64 | as `stored`: `src` taints the conditions of the branches the store is (transitively) under, and at each call's end those of the branches `loc`'s store sites are control dependent on that ran |
 | `exits` | uint16 | a PC that ended a call |
 | `written` | uint16 | an address some call wrote |
 

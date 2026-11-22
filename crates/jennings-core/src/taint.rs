@@ -199,6 +199,7 @@ pub struct Learn {
     implicit_seen: FxSet<u64>,
     implicit: Vec<(u32, u16)>,
     sites: [Vec<u32>; 4],
+    per_loc: [Vec<u32>; 3],
     edges: Keys,
     rec: Vec<(u8, i32)>,
     pc: u16,
@@ -224,6 +225,14 @@ pub struct Learned {
     /// store (1) at `pc`, where control goes from `pc` (2), or the byte a data store at `pc`
     /// stores (3).
     pub sites: Vec<u64>,
+    /// Explicit only, `loc << 32 | src` over every data store to memory `loc`: `src` taints
+    /// the stored byte.
+    pub stored: Vec<u64>,
+    /// Explicit only, as `stored`: `src` taints the store's address.
+    pub addressed: Vec<u64>,
+    /// Explicit only, as `stored`: `src` taints the conditions of the branches the store is
+    /// under, transitively, and of those its store sites are control dependent on.
+    pub gated: Vec<u64>,
     /// The PCs of the instructions that ended a call.
     pub exits: Vec<u16>,
     /// The memory some call wrote.
@@ -281,6 +290,13 @@ impl Learn {
             implicit_seen: FxSet::default(),
             implicit: Vec::new(),
             sites: std::array::from_fn(|_| vec![0; 0x10000]),
+            per_loc: std::array::from_fn(|_| {
+                if explicit {
+                    vec![0; 0x10000]
+                } else {
+                    Vec::new()
+                }
+            }),
             edges: Keys::new(1 << 16),
             rec: Vec::with_capacity(16),
             pc: 0,
@@ -466,6 +482,10 @@ impl Learn {
                     let (c, s) = (stores[k], self.sets.union(s, base));
                     if data_stores >> k & 1 != 0 {
                         self.site(3, s);
+                        if self.explicit && c >= 0 {
+                            self.per(0, c, s);
+                            self.per(2, c, ctl);
+                        }
                     }
                     if c >= 0 {
                         out[n] = (c as u32, s);
@@ -484,6 +504,9 @@ impl Learn {
             if data_stores >> k & 1 != 0 {
                 let s = self.gather(mask, &loads);
                 self.site(1, s);
+                if self.explicit && stores[k] >= 0 {
+                    self.per(1, stores[k], s);
+                }
             }
         }
         let operands = |me: &mut Self| {
@@ -543,11 +566,7 @@ impl Learn {
         self.site(2, ctrl);
         self.cond[pc as usize] = self.sets.union(ctrl, ctl);
         self.cstamp[pc as usize] = self.call;
-        let (lo, hi) = if self.explicit {
-            (0, 0)
-        } else {
-            (self.cd_off[pc as usize], self.cd_off[pc as usize + 1])
-        };
+        let (lo, hi) = (self.cd_off[pc as usize], self.cd_off[pc as usize + 1]);
         for &(loc, s) in &out[..n] {
             let l = loc as usize;
             self.touch(loc, false);
@@ -557,7 +576,11 @@ impl Learn {
                 self.dirty.push(loc);
             }
             self.taint[l] = s;
-            if lo < hi && self.store_sites.insert((loc as u64) << 16 | pc as u64) {
+            if lo < hi
+                && (!self.explicit
+                    || (0..ns).any(|k| stores[k] == loc as i32 && data_stores >> k & 1 != 0))
+                && self.store_sites.insert((loc as u64) << 16 | pc as u64)
+            {
                 for k in lo..hi {
                     let br = self.cd[k as usize];
                     if self.implicit_seen.insert((loc as u64) << 16 | br as u64) {
@@ -566,6 +589,12 @@ impl Learn {
                 }
             }
         }
+    }
+
+    #[inline(always)]
+    fn per(&mut self, k: usize, c: i32, s: u32) {
+        let v = &mut self.per_loc[k][c as usize];
+        *v = self.sets.union(*v, s);
     }
 
     #[inline(always)]
@@ -586,8 +615,13 @@ impl Learn {
         for k in 0..self.implicit.len() {
             let (loc, br) = self.implicit[k];
             if self.cstamp[br as usize] == self.call {
-                let l = loc as usize;
-                self.deps[l] = self.sets.union(self.deps[l], self.cond[br as usize]);
+                let (l, c) = (loc as usize, self.cond[br as usize]);
+                let d = if self.explicit {
+                    &mut self.per_loc[2][l]
+                } else {
+                    &mut self.deps[l]
+                };
+                *d = self.sets.union(*d, c);
             }
         }
         self.dirty.clear();
@@ -638,14 +672,19 @@ impl Learn {
                     && (l < REG || STATE_REGS >> (l - REG) & 1 != 0)
             })
             .collect();
-        let mut deps = Vec::new();
-        for (l, &d) in self.deps.iter().enumerate() {
-            deps.extend(
-                self.sets.members[d as usize]
-                    .iter()
-                    .map(|&s| (l as u64) << 32 | s as u64),
-            );
-        }
+        let pairs = |v: &[u32]| -> Vec<u64> {
+            let mut out = Vec::new();
+            for (l, &d) in v.iter().enumerate() {
+                out.extend(
+                    self.sets.members[d as usize]
+                        .iter()
+                        .map(|&s| (l as u64) << 32 | s as u64),
+                );
+            }
+            out
+        };
+        let [stored, addressed, gated] = self.per_loc.each_ref().map(|v| pairs(v));
+        let deps = pairs(&self.deps);
         let mut sites = Vec::new();
         for pc in 0..0x10000usize {
             for kind in 0..4 {
@@ -662,6 +701,9 @@ impl Learn {
             deps,
             edges: self.edges.clone().sorted(),
             sites,
+            stored,
+            addressed,
+            gated,
             exits: (0..=0xFFFFu16)
                 .filter(|&a| self.exits.contains(a))
                 .collect(),
