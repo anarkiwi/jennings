@@ -1,7 +1,8 @@
 """Generate ``crates/jennings-core/src/flow_gen.rs`` from :func:`jennings.dataflow.flow`.
 
 Each opcode's flow is read on symbolic locations (registers, operand bytes ``O1``/``O2``, loads
-``L0``... and stores ``S0``...) into bit masks of each output's and each access address's inputs.
+``L0``... and stores ``S0``...) into bit masks of each output's and each access address's inputs,
+and of each output's explicit inputs (loads not depending on their addresses).
 """
 
 from __future__ import annotations
@@ -47,30 +48,34 @@ def _mask(syms):
     return m
 
 
+def _dst(dst):
+    if dst == "PC":
+        return PCOUT
+    return REG[dst] if dst in REG else STORE0 + int(dst[1:])
+
+
 def opcode_flow(op):
-    """``(kind, len, loads, stores, outs, load_addrs, store_addrs)`` of opcode ``op``; ``outs`` is
-    ``[(dst, mask)]``, ``dst`` a register index, ``16 + k`` for store ``k`` or 31 for a branch's
-    condition."""
+    """``(kind, len, loads, stores, outs, load_addrs, store_addrs, vals)`` of opcode ``op``;
+    ``outs`` is ``[(dst, mask)]``, ``dst`` a register index, ``16 + k`` for store ``k`` or 31 for
+    a branch's condition; ``vals`` is ``outs`` with loads not depending on their addresses."""
     mem = bytearray(0x10000)
     mem[PC : PC + 3] = bytes((op, BASE & 0xFF, BASE >> 8))
     addrs = []
-    out = flow(
-        mem,
-        PC,
-        ["L%d" % k for k in range(8)],
-        ["S%d" % k for k in range(8)],
-        {1: "O1", 2: "O2"},
-        addrs,
-    )
-    outs = []
-    for dst, ins in out.items():
-        if dst == "PC":
-            code = PCOUT
-        elif dst in REG:
-            code = REG[dst]
-        else:
-            code = STORE0 + int(dst[1:])
-        outs.append((code, _mask(ins)))
+
+    def run(addressed, addresses=None):
+        out = flow(
+            mem,
+            PC,
+            ["L%d" % k for k in range(8)],
+            ["S%d" % k for k in range(8)],
+            {1: "O1", 2: "O2"},
+            addresses,
+            addressed=addressed,
+        )
+        return sorted((_dst(dst), _mask(ins)) for dst, ins in out.items())
+
+    outs, vals = run(True, addrs), run(False)
+    assert [d for d, _m in outs] == [d for d, _m in vals], op
     loads = [m for store, _a, m in addrs if not store]
     stores = [m for store, _a, m in addrs if store]
     t = template(op)
@@ -79,9 +84,10 @@ def opcode_flow(op):
         t.len,
         len(loads),
         len(stores),
-        sorted(outs),
+        outs,
         [_mask(m) for m in loads],
         [_mask(m) for m in stores],
+        vals,
     )
 
 
@@ -98,21 +104,18 @@ def _words(v):
     return "&[%s]" % ", ".join("0x%x" % m for m in v)
 
 
+def _pairs(v):
+    return "&[%s]" % ", ".join("(%d, 0x%x)" % o for o in v)
+
+
 def generate() -> str:
     out = [HEADER]
     for op in range(256):
-        kind, n, _nl, _ns, outs, la, sa = opcode_flow(op)
+        kind, n, _nl, _ns, outs, la, sa, vals = opcode_flow(op)
         out.append(
-            "    Flow { kind: Kind::%s, len: %d, outs: &[%s], load_addr: %s, store_addr: %s }, "
-            "// %02X\n"
-            % (
-                kind,
-                n,
-                ", ".join("(%d, 0x%x)" % o for o in outs),
-                _words(la),
-                _words(sa),
-                op,
-            )
+            "    Flow { kind: Kind::%s, len: %d, outs: %s, load_addr: %s, store_addr: %s, "
+            "vals: %s }, // %02X\n"
+            % (kind, n, _pairs(outs), _words(la), _words(sa), _pairs(vals), op)
         )
     out.append("];\n")
     return "".join(out)

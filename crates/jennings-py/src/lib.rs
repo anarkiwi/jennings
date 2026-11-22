@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering}
 
 use jennings_core::{
     cells_digest, orbit, run_to_rts, run_until, trajectory, Access, Accesses, AddrSet, Bus, Cpu,
-    End, FlatBus, FlatMemory, Hooks, Learn, Periodic, Remap, Stop, Trace, Until, REG,
+    End, FlatBus, FlatMemory, Hooks, Learn, Periodic, Remap, Stop, Trace, Until, CONST, REG,
 };
 use pyo3::buffer::PyBuffer;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -1299,22 +1299,29 @@ fn locations(cells: Vec<u32>) -> PyResult<Vec<u32>> {
 /// The dependence of a call's state on the state before it, gathered by `Core.learn`
 /// (`jennings_core::Learn`).
 ///
-/// ``Learner(control, written)``: ``control`` ``{pc: branches}``, the branches each
-/// instruction is directly control dependent on; ``written`` the memory a call may write
-/// (addresses and ``range``s), the rest taken as constant.
+/// ``Learner(control, written, explicit=False)``: ``control`` ``{pc: branches}``, the branches
+/// each instruction is directly control dependent on; ``written`` the memory a call may write
+/// (addresses and ``range``s), the rest taken as constant; ``explicit`` taints by data alone,
+/// a load's value apart from its address, a data load of a constant at ``pc`` as
+/// ``CONST + pc``.
 #[pyclass(module = "jennings._core", name = "Learner")]
 pub struct PyLearner(Learn);
 
 #[pymethods]
 impl PyLearner {
     #[new]
-    fn new(control: HashMap<u16, Vec<u16>>, written: &Bound<'_, PyAny>) -> PyResult<Self> {
+    #[pyo3(signature = (control, written, explicit=false))]
+    fn new(
+        control: HashMap<u16, Vec<u16>>,
+        written: &Bound<'_, PyAny>,
+        explicit: bool,
+    ) -> PyResult<Self> {
         let mut w = AddrSet::default();
         for (lo, hi) in spans(written)? {
             w.insert_range(lo, hi);
         }
         let control: Vec<(u16, Vec<u16>)> = control.into_iter().collect();
-        Ok(PyLearner(Learn::new(&control, w)))
+        Ok(PyLearner(Learn::new(&control, w, explicit)))
     }
 
     /// Calls learned from so far.
@@ -1325,10 +1332,10 @@ impl PyLearner {
 
     /// ``{"persistent", "deps", "edges", "sites", "exits", "written"}`` as little-endian
     /// arrays: uint32 locations read before written by some call and written by some; uint64
-    /// ``loc << 32 | src``, the end-of-call ``loc`` depending on entry ``src``; uint64
-    /// ``pc << 16 | next``; uint64 ``(pc << 2 | kind) << 17 | loc``, ``loc`` tainting a
-    /// load's (0) or store's (1) address or where control goes (2) at ``pc``; uint16 PCs that
-    /// ended a call; uint16 addresses some call wrote.
+    /// ``loc << 32 | src``, the end-of-call ``loc`` depending on entry ``src`` (``loc`` itself
+    /// included); uint64 ``pc << 16 | next``; uint64 ``(pc << 2 | kind) << 18 | loc``, ``loc``
+    /// tainting a load's (0) or store's (1) address, where control goes (2) or a data store's
+    /// byte (3) at ``pc``; uint16 PCs that ended a call; uint16 addresses some call wrote.
     fn learned<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         let l = self.0.learned();
         let d = PyDict::new(py);
@@ -1352,5 +1359,6 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyRemap>()?;
     m.add_class::<PyLearner>()?;
     m.add("REG", REG)?;
+    m.add("CONST", CONST)?;
     Ok(())
 }

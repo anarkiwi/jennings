@@ -88,10 +88,13 @@ def test_flow_is_exact_on_a_few_instructions():
     binary = {"A", "C", "X", 0x1236}
     assert flow["Z"] == binary
     assert flow["A"] == flow["C"] == flow["V"] == flow["N"] == binary | {"D"}
+    assert dataflow.flow(mem, PC, [0x1236], addressed=False)["Z"] == {"A", "C", 0x1236}
     mem[PC : PC + 2] = bytes([0xC9, 0x02])  # CMP #$02
     assert dataflow.flow(mem, PC) == {r: {"A"} for r in ("C", "Z", "N")}
     mem[PC : PC + 2] = bytes([0xB1, 0x34])  # LDA ($34),Y
     assert dataflow.flow(mem, PC, [0x34, 0x35, 0x2005])["A"] == {"Y", 0x34, 0x35, 0x2005}
+    explicit = dataflow.flow(mem, PC, [0x34, 0x35, 0x2005], addressed=False)
+    assert explicit["A"] == {0x2005}
     mem[PC] = 0x48  # PHA: the pushed byte is A, the address is SP's
     assert dataflow.flow(mem, PC, (), [0x1FF]) == {0x1FF: {"A"}, "SP": {"SP"}}
     mem[PC : PC + 2] = bytes([0xF0, 0x02])  # BEQ

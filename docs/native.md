@@ -41,8 +41,9 @@ throughout its accesses: callbacks read it in place, with no per-instruction cop
 
 `tools/gen_flow.py` reads `jennings.dataflow.flow` once per opcode on symbolic locations
 (registers, operand bytes, the instruction's loads and stores in order) into
-`flow_gen.rs`: each output's and each access address's inputs as a bit mask, the opcode's
-length and control class. `tests/test_gen_flow.py` checks regeneration is a no-op.
+`flow_gen.rs`: each output's and each access address's inputs as a bit mask, each output's
+explicit inputs (`vals`, read with `addressed=False`), the opcode's length and control
+class. `tests/test_gen_flow.py` checks regeneration is a no-op.
 
 ## Access classes
 
@@ -135,12 +136,24 @@ costs its instructions and accesses whatever the orbit's length. `cells`, locati
 
 `trajectory(pc, acc, max_cycles, calls, cells, remap=None)` returns `(stop, rows)`: uint8
 `[calls, len(cells)]`, the locations at each call's entry. `learn(learner, pc, acc,
-max_cycles, calls, remap=None)` adds calls to a `Learner(control, written)` (`control`
-`{pc: branches}` it is directly control dependent on, `written` the memory a call may
-write); `learner.learned()` returns a dict of little-endian arrays: its persistent
-locations, dependences, edges, site taints, the PCs that ended a call (`exits`) and the
-memory written. Both stop early at a call that does not return (`stop`
-other than `"sp"`). See [coverage.md](coverage.md#components-and-cover-calls).
+max_cycles, calls, remap=None)` adds calls to a `Learner(control, written, explicit=False)`
+(`control` `{pc: branches}` it is directly control dependent on, `written` the memory a call
+may write, `explicit` tainting by data alone, a load's value apart from its address and a
+data load of a constant at `pc` as `CONST + pc`, `CONST = 0x20000`). `learner.learned()`
+returns a dict of little-endian arrays:
+
+| key | dtype | entry |
+|---|---|---|
+| `persistent` | uint32 | a location some call reads before writing and some call writes |
+| `deps` | uint64 | `loc << 32 \| src`: end-of-call `loc` depends on entry `src` (`loc` itself included) |
+| `edges` | uint64 | `pc << 16 \| next`, consecutive instructions within a call |
+| `sites` | uint64 | `(pc << 2 \| kind) << 18 \| loc`: `loc` taints a data load's (kind 0) or store's (1) address, where control goes (2), or a data store's byte (3) at `pc` |
+| `exits` | uint16 | a PC that ended a call |
+| `written` | uint16 | an address some call wrote |
+
+Locations are addresses, `REG + index` for registers and `CONST + pc` for constants. Both
+stop early at a call that does not return (`stop` other than `"sp"`). See
+[coverage.md](coverage.md#components-and-cover-calls).
 
 A driver claims its core and memory for the running thread. Other threads touching
 either get `RuntimeError` until it returns; independent MPUs run in parallel threads.

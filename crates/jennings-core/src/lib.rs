@@ -24,4 +24,4 @@ pub use cpu::Cpu;
 pub use flat::{Access, FlatBus, FlatMemory, Hooks, NoHooks};
 pub use orbit::{orbit, End, Orbit};
 pub use run::{run_to_rts, run_until, AddrSet, Periodic, Stop, Trace, Until};
-pub use taint::{cells_digest, learn, trajectory, Learn, Learned, REG, STATE_REGS};
+pub use taint::{cells_digest, learn, trajectory, Learn, Learned, CONST, REG, STATE_REGS};

@@ -527,9 +527,35 @@ writes, the stack page and I/O excluded by `exclude`; of the registers only X, Y
 flags but B), `deps` (each location's end-of-call dependence), `closures` (each sink SCC of
 `deps` over the persistent locations with its ancestors: autonomous by construction),
 `sites` (`(pc, kind)` to the locations tainting a load's (`LOAD`) or store's (`STORE`)
-address or where control goes from `pc` (`CONTROL`): a branch's condition and offset, a
-jump's target, an `RTS`/`RTI` frame, an opcode byte), `feed` (the persistent locations in
-any site's taint with their ancestors) and `feeding` (the closures containing one).
+address, where control goes from `pc` (`CONTROL`): a branch's condition and offset, a
+jump's target, an `RTS`/`RTI` frame, an opcode byte, or the byte a data store at `pc` stores
+(`VALUE`), as the stored location gets it), `feed` (the persistent locations in any load,
+store or control site's taint with their ancestors) and `feeding` (the closures containing
+one). A location's dependence on itself is left out of `deps`.
+
+**explicit** gives the explicit flows alone, as `Flows(deps, sites, calls)`: it runs `control`
+for the memory the calls write, then an explicit `Learner`, in which
+
+- each output takes only its data inputs, from the table's `vals` (`dataflow.flow(...,
+  addressed=False)`): a load's value is the byte it reads, not its address. No opcode byte, no
+  branch conditions, no store-site conditions at the end of a call;
+- a data load (not a stack pull or an operand fetch) of a location no call writes at `pc` is
+  the constant `CONST + pc` (`CONST = 0x20000`; `location` names it `#$hhhh`), so a song-table
+  read shows where it happened. A constant operand byte still taints nothing, and a `Remap`
+  `ZERO` read is the constant 0, tainting nothing.
+
+`Flows.deps` maps each location written to the entry locations and constants its end-of-call
+value depends on by data, itself included (`INC c` gives `c` in `deps[c]`); `Flows.sites` is
+keyed as `Components.sites`. The `LOAD`/`STORE` taints are the addresses' (an index, not the
+table it reads), `CONTROL` keeps the opcode byte, condition, operands and frames, and `VALUE`
+is the explicit taint of the stored byte. Pointer bytes or other data loads of constants
+feeding an address or a condition appear there as `CONST + pc` too.
+
+```python
+f = C.explicit(mpu, play, 2_000)
+f.sites[(sta_pc, C.VALUE)]   # e.g. {C.CONST + lda_pc}: a table byte, read at lda_pc
+f.sites[(lda_pc, C.LOAD)]    # {pos}: the index
+```
 
 **trajectory** records the persistent locations at each call's entry natively, one uint8
 row per call (`NativeMPU.trajectory`). **cycles** finds each closure's and the feed set's
