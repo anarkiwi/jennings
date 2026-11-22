@@ -402,6 +402,34 @@ fn remap_replaces_a_table() {
 }
 
 #[test]
+fn remap_keeps_zpx_pointer_bytes_indexed_by_x() {
+    // $1000 LDX #$04 ; $1002 LDA ($10,X) ; $1004 RTS: the pointer is $14/$15, not $10/$11.
+    let mut m = ram(&[(0x1000, &[0xA2, 0x04, 0xA1, 0x10, 0x60])]);
+    m[0x14..0x16].copy_from_slice(&[0x10, 0x00]);
+    m[0x2014..0x2016].copy_from_slice(&[0x10, 0x00]);
+    m[0x10] = 9;
+    m[0x2010] = 7;
+    let t: Vec<i32> = (0..0x10000)
+        .map(|a| if a < 0x100 { a + 0x2000 } else { AS_IS })
+        .collect();
+    let mut r = Remap::default();
+    r.insert(0x1002, &t);
+    r.set_pointer_opcodes([0xA1]);
+    let mut c = Cpu::new();
+    run_to_rts(
+        &mut c,
+        &mut Accesses::remapped(&mut *m, &r),
+        0x1000,
+        0,
+        None,
+        100,
+        None,
+        || false,
+    );
+    assert_eq!(c.a, 7);
+}
+
+#[test]
 fn remapped_redirects_without_logging() {
     let prog: &[u8] = &[0xAD, 0x05, 0x20, 0x8D, 0x07, 0x20, 0x60];
     let mut t = vec![AS_IS; 0x10000];

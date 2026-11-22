@@ -7,7 +7,8 @@ import numpy as np
 
 from jennings.coverage._core import EXEC, FALLTHRU, OPERAND, TAKEN, WRITE
 from jennings.coverage.smc import _carry, _refine
-from jennings.coverage.vsa import TOP8, TOP16, bits, from_bool, is_single, step, template, word
+from jennings.coverage.vsa import TOP8, TOP16, bits, from_bool, is_single, step, template
+from jennings.coverage.vsa import word, writes
 from jennings.isa import is_read, is_rmw, is_store, mode
 
 __all__ = ["DEPTH", "Tables"]
@@ -26,7 +27,7 @@ _PUSHES = frozenset(
     op
     for op in range(256)
     if template(op).ctrl[0] == "next"
-    and 3 in template(op).writes
+    and 3 in writes(op)
     and any(o[0] == "STORE" for o in template(op).ops)
 )
 
@@ -249,7 +250,7 @@ class Tables:
                     if idx is not None and regs[idx[0]]:
                         first = (idx[1] + (regs[idx[0]] & -regs[idx[0]]).bit_length() - 1) & idx[2]
                     trace.append((view.reads, view.writes, first))
-                fo = _carry(fo, t.writes, origins)
+                fo = _carry(fo, writes(op), origins)
                 if i == len(path) - 1:
                     tg = 0
                     for f, targets, _ in succ:
@@ -259,7 +260,7 @@ class Tables:
                 for f, targets, regs2 in succ:
                     cut = (regs2, fo)
                     if f != EXEC:
-                        cut = _refine(tuple(regs2), fo, t.ctrl[1][1], t.ctrl[2] ^ (f != TAKEN))
+                        cut = _refine(tuple(regs2), fo, t.ctrl[1], t.ctrl[2] ^ (f != TAKEN))
                     if f == flag and targets >> path[i + 1][0] & 1 and cut is not None:
                         nxt.append((list(cut[0]), view.ov, cut[1], key, cells))
             states = nxt
@@ -275,15 +276,15 @@ class Tables:
         val, adr, out = [_READS[t], trace[-1][0]], [frozenset(), 0], {}
         for i in range(len(path) - 2, -1, -1):
             op = int(self.m[path[i][0]])
-            reads, writes, first = trace[i]
-            w = template(op).writes
-            hit = [bool(w & s[0] or writes & s[1]) for s in (val, adr)]
+            reads, wrote, first = trace[i]
+            w = writes(op)
+            hit = [bool(w & s[0] or wrote & s[1]) for s in (val, adr)]
             idx = {_INDEX[_MODE[op]][0]} if first is not None else set()
             if hit[0] and first is not None:
                 out[i] = first
             for s in (val, adr):
                 s[0] -= w
-                s[1] &= ~writes if is_single(writes) else -1
+                s[1] &= ~wrote if is_single(wrote) else -1
             if hit[0]:
                 val[0] |= _READS[op] - idx
                 val[1] |= reads

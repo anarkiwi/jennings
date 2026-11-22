@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jennings"
-version = "0.17.0"
+version = "0.17.1"
 description = "py65-compatible 6502/6510 MPU, assembler, and disassembler with first-class NMOS illegal-opcode support."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -21,7 +21,7 @@ classifiers = [
     "Topic :: Software Development :: Disassemblers",
     "Topic :: System :: Emulators",
 ]
-dependencies = ["deity-informant>=0.7.0"]
+dependencies = ["deity-informant>=0.40.20"]
 
 [project.optional-dependencies]
 superopt = ["z3-solver>=4.12", "numpy>=1.23"]

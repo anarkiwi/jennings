@@ -19,12 +19,11 @@ an sdist install (no Rust toolchain) has the Python engine only and
 
 ## Generated semantics
 
-`tools/gen_cpu.py` lifts every opcode with `deity_informant.lifter.lift` under two
-sentinel sets (operand bytes and the zero-page pointer they name all differ between
-sets). Each operand-derived constant is bound to an operand expression (`b1`, the word
-`w`, `(b1+1)&$FF`, `(b2+1)&$FF`) from the lifter's own provenance map, and every binding
-is checked to reproduce the lifted value under both lifts. A constant that differs
-between lifts without provenance fails generation.
+`tools/gen_cpu.py` emits every opcode's `deity_informant.lifter.template`: its P-Code
+with each operand-derived constant bound to an operand expression (`b1`, the word `w`,
+`(b1+1)&$FF`, `(b2+1)&$FF`), base cycles, control class and page-cross penalty. The
+template's sentinel lifts check every binding; a constant that differs between lifts
+without provenance fails generation.
 
 Each opcode becomes one `op_XX` function: operand fetches, the P-Code as straight-line
 Rust (`LOAD`/`STORE` whose address derives from SP become stack accesses, the rest data
@@ -103,8 +102,9 @@ memoryview of `pc << 17 | write << 16 | addr` (`pc` the instruction's start), lo
 natively with no callback. `Remap({pc: table}, pointer_opcodes)` redirects the accesses of
 the instructions at its PCs: a table holds one int32 per address, -1 accessed as it is, -2
 reads 0, else the address the read takes its byte from; a redirected write stores nothing.
-The page-zero pointer bytes (operand, operand + 1) of an opcode in `pointer_opcodes` are
-accessed as they are. The log keeps the address the instruction named. `run_to_rts`,
+The page-zero pointer bytes of an opcode in `pointer_opcodes` (operand + X and operand + X + 1
+for `(zp,X)`, operand and operand + 1 for `(zp),Y`, wrapping in page zero) are accessed as
+they are. The log keeps the address the instruction named. `run_to_rts`,
 `run_to_rts_until` and `run_until` take the same `remap=None`, applied without a log
 (`Accesses::remapped` in jennings-core).
 `mem.digest(spans=None)` is a 16-byte digest of the RAM in `spans` (as
