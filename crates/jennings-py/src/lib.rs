@@ -11,8 +11,8 @@ use std::ffi::{c_int, c_void};
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering};
 
 use jennings_core::{
-    run_to_rts, run_until, Access, Accesses, AddrSet, Bus, Cpu, FlatBus, FlatMemory, Hooks,
-    Periodic, Remap, Stop, Trace, Until,
+    orbit, run_to_rts, run_until, Access, Accesses, AddrSet, Bus, Cpu, End, FlatBus, FlatMemory,
+    Hooks, Periodic, Remap, Stop, Trace, Until,
 };
 use pyo3::buffer::PyBuffer;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -1042,6 +1042,68 @@ impl Core {
         let (pcs, cycles, _) = columns(py, tr);
         let bytes: Vec<u8> = log.iter().flat_map(|v| v.to_le_bytes()).collect();
         Ok((pcs, cycles, PyBytes::new(py, &bytes)))
+    }
+
+    /// Calls of `pc` with `acc` (each as `run_to_rts`) repeated until the state a call starts
+    /// from (the 16-byte `digest` of RAM at `keep`, default all) was seen before, `limit` calls
+    /// ran, or a call loads an address of `volatile` or jams, that call included: `(end,
+    /// states, accesses, edges)`, `end` one of "closed", "open", "volatile", "jam", "stop",
+    /// `states` the distinct states, `accesses` the distinct keys of the calls' data accesses
+    /// (as `run_to_rts_accesses` logs them, `remap` applied) and `edges` the distinct
+    /// `pc << 16 | next` of consecutive instructions within a call, both ascending
+    /// little-endian uint64.
+    #[pyo3(signature = (pc, acc, max_cycles, limit, keep=None, volatile=None, remap=None))]
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    fn orbit<'py>(
+        &self,
+        py: Python<'py>,
+        pc: u16,
+        acc: i64,
+        max_cycles: u64,
+        limit: usize,
+        keep: Option<&Bound<'py, PyAny>>,
+        volatile: Option<&Bound<'py, PyAny>>,
+        remap: Option<&Bound<'py, PyRemap>>,
+    ) -> PyResult<(
+        &'static str,
+        usize,
+        Bound<'py, PyBytes>,
+        Bound<'py, PyBytes>,
+    )> {
+        let keep = keep.map_or(Ok(vec![(0, 0x10000)]), spans)?;
+        let mut vol = AddrSet::default();
+        for (lo, hi) in volatile.map_or(Ok(vec![]), spans)? {
+            vol.insert_range(lo, hi);
+        }
+        let rm = remap.map(|r| &r.get().0);
+        let o = self.drive(py, true, |cpu, bus, stop| {
+            orbit(
+                cpu,
+                bus,
+                pc,
+                acc as u8,
+                max_cycles,
+                limit,
+                rm,
+                &vol,
+                |b| b.inner.mem.digest(keep.iter().copied()),
+                || stop.load(Ordering::Relaxed) && stop.swap(false, Ordering::Relaxed),
+            )
+        })?;
+        let end = match o.end {
+            End::Closed => "closed",
+            End::Open => "open",
+            End::Volatile => "volatile",
+            End::Jam => "jam",
+            End::Stopped => "stop",
+        };
+        let le = |v: &[u64]| v.iter().flat_map(|k| k.to_le_bytes()).collect::<Vec<u8>>();
+        Ok((
+            end,
+            o.states,
+            PyBytes::new(py, &le(&o.accesses)),
+            PyBytes::new(py, &le(&o.edges)),
+        ))
     }
 
     /// `pysidtracker.emu.run_to_rts_until`: as `run_to_rts`, True on entering `pcs`.
