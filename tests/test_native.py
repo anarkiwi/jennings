@@ -696,6 +696,11 @@ def test_remap_redirects_its_instructions():
     mpu.memory[0x2300] = 0
     mpu.run_to_rts_accesses(0x1000, 0, 1000, Remap({0x1000: tables[0x1000]}))
     assert mpu.memory[0x2105] == 4
+    seen = []
+    mpu.memory.observe_data_access(on_read=seen.append)
+    mpu.memory[0x2300] = 6
+    mpu.run_to_rts(0x1000, 0, 1000, remap)
+    assert seen == [0x2003, 0x10, 0x11]
     with pytest.raises(ValueError):
         Remap({0x1000: np.full(5, -1, np.int32)})
     with pytest.raises(ValueError):
