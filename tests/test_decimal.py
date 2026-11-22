@@ -5,7 +5,7 @@ Every accumulator, operand and carry, with the decimal flag set (invalid BCD inc
 
 import pytest
 
-import decimal_ref as ref
+from jennings import testing as ref
 from jennings.devices.mpu6502 import MPU
 from jennings.memory import NATIVE, NativeMemory
 

@@ -104,7 +104,9 @@ natively with no callback. `Remap({pc: table}, pointer_opcodes)` redirects the a
 the instructions at its PCs: a table holds one int32 per address, -1 accessed as it is, -2
 reads 0, else the address the read takes its byte from; a redirected write stores nothing.
 The page-zero pointer bytes (operand, operand + 1) of an opcode in `pointer_opcodes` are
-accessed as they are. The log keeps the address the instruction named.
+accessed as they are. The log keeps the address the instruction named. `run_to_rts`,
+`run_to_rts_until` and `run_until` take the same `remap=None`, applied without a log
+(`Accesses::remapped` in jennings-core).
 `mem.digest(spans=None)` is a 16-byte digest of the RAM in `spans` (as
 `observe_data_access` takes them, default all): equal RAM there gives an equal digest, so a
 run of calls detects a repeated state without copying memory to Python.

@@ -7,7 +7,7 @@ import sys
 import pytest
 
 from acme_cases import ERRORS, EXPECTED, SOURCES, UNSUPPORTED
-from jennings.acme import Acme, AcmeError, assemble, main, mnemonics
+from jennings.acme import Acme, AcmeError, assemble, main, mnemonics, read_symbol_list
 
 
 @pytest.mark.parametrize("name", sorted(SOURCES))
@@ -17,6 +17,19 @@ def test_to_directive(name):
     want = {k: v for k, v in EXPECTED[name].items() if k not in ("labels", "out")}
     assert ({acme.outname: acme.output()} if acme.outname else {}) == want
     assert acme.symbol_list() == EXPECTED[name]["labels"]
+
+
+@pytest.mark.parametrize("name", sorted(SOURCES))
+def test_read_symbol_list_inverts_symbol_list(name):
+    """The defined symbols, values as the list prints them (32-bit), size suffixes dropped."""
+    acme = Acme([("src.asm", SOURCES[name])]).run()
+    want = {n: v & 0xFFFFFFFF for n, v in acme.symbols().items() if v is not None}
+    assert read_symbol_list(EXPECTED[name]["labels"]) == want
+
+
+def test_read_symbol_list_forms():
+    text = "\tb+2\t= $3\n\tz\t= ?\t; ?\n  name=$C000\t; unused\nnot a line\n"
+    assert read_symbol_list(text) == {"b": 3, "name": 0xC000}
 
 
 @pytest.mark.parametrize("name", sorted(SOURCES))

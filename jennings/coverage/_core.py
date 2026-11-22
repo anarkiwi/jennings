@@ -253,13 +253,22 @@ class CoverageMPU(MPU):
         self.cov.entries.add((self.NMI, self.pc))
 
 
-def call(mpu, addr, a=0, x=0, y=0, max_steps=1_000_000):
+#: The VIC-II raster counter :func:`call` drives with ``raster``.
+RASTER = 0xD012
+
+
+def call(mpu, addr, a=0, x=0, y=0, max_steps=1_000_000, raster=None):
     """Run the subroutine at ``addr`` with registers ``a``/``x``/``y`` until it returns to the
-    sentinel return address ``RETURN`` it pushed; ``RuntimeError`` after ``max_steps``."""
+    sentinel return address ``RETURN`` it pushed; ``RuntimeError`` after ``max_steps``.
+
+    With ``raster``, ``$D012`` counts instructions for raster polls: before the ``n``-th
+    instruction of the call (from 0) it holds ``n // raster & $FF``."""
     sp = mpu.sp
     mpu._push_word((RETURN - 1) & 0xFFFF)
     mpu.a, mpu.x, mpu.y, mpu.pc = a, x, y, addr
-    for _ in range(max_steps):
+    for n in range(max_steps):
+        if raster is not None:
+            mpu.memory[RASTER] = n // raster & 0xFF
         mpu.step()
         if mpu.pc == RETURN and mpu.sp == sp:
             return mpu

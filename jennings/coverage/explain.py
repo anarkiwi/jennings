@@ -10,7 +10,8 @@ from functools import lru_cache
 
 import numpy as np
 
-from jennings.coverage._core import EXEC, TAKEN, FALLTHRU, CoverageMPU, CoverageVM
+from jennings.coverage._core import EXEC, TAKEN, CoverageMPU, CoverageVM
+from jennings.coverage.cfg import _one_way_pcs
 from jennings.dataflow import REGISTERS, flow
 
 __all__ = [
@@ -253,8 +254,8 @@ def explain(run, cov, smcmap=None, symbols=None, progress=False):
     mpu = TraceMPU()
     run(mpu)
     trace = mpu.trace
-    bt = cov.flags & (TAKEN | FALLTHRU)
-    half = set(np.flatnonzero((bt == TAKEN) | (bt == FALLTHRU)).tolist())
+    bt, pcs = _one_way_pcs(cov)
+    half = set(pcs.tolist())
     last = {rec[0]: i for i, rec in enumerate(trace) if rec[0] in half}
     taken = {v for v, _ in cov.entries}
     out = []

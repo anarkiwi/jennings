@@ -700,6 +700,23 @@ impl Core {
     }
 }
 
+/// Bind `$b` to `$bus`, wrapped in [`Accesses::remapped`] when `$rm` is a remap, for `$body`.
+macro_rules! remapped {
+    ($bus:ident, $rm:expr, |$b:ident| $body:expr) => {
+        match $rm {
+            Some(r) => {
+                let mut w = Accesses::remapped($bus, r);
+                let $b = &mut w;
+                $body
+            }
+            None => {
+                let $b = $bus;
+                $body
+            }
+        }
+    };
+}
+
 fn reason(s: Stop) -> &'static str {
     match s {
         Stop::Cycles => "cycles",
@@ -923,7 +940,7 @@ impl Core {
     ///
     /// `irq_period` takes an IRQ (dropped if masked) after the instruction that
     /// reaches `irq_due`, which then advances by the period and persists across runs.
-    #[pyo3(signature = (max_cycles=None, stop_pcs=None, sp_above=None, stop_on_jam=true, irq_period=None, trace=None, stop_ranges=None, stop_on_idle=false, stop_on_irq=false))]
+    #[pyo3(signature = (max_cycles=None, stop_pcs=None, sp_above=None, stop_on_jam=true, irq_period=None, trace=None, stop_ranges=None, stop_on_idle=false, stop_on_irq=false, remap=None))]
     #[allow(clippy::too_many_arguments)]
     fn run_until<'py>(
         &self,
@@ -937,6 +954,7 @@ impl Core {
         stop_ranges: Option<Vec<(u32, u32)>>,
         stop_on_idle: bool,
         stop_on_irq: bool,
+        remap: Option<&Bound<'py, PyRemap>>,
     ) -> PyResult<(&'static str, Option<Columns<'py>>)> {
         if irq_period == Some(0) {
             return Err(PyValueError::new_err("irq_period must be positive"));
@@ -944,6 +962,7 @@ impl Core {
         let pcs = pc_set(stop_pcs, stop_ranges)?;
         let due = &self.irq_due;
         let mut tr = trace.map(Trace::new);
+        let rm = remap.map(|r| &r.get().0);
         let r = self.drive(py, true, |cpu, bus, stop| {
             let irq = irq_period.map(|period| Periodic {
                 period,
@@ -962,9 +981,9 @@ impl Core {
                 irq,
                 trace: tr.as_mut(),
             };
-            let r = run_until(cpu, bus, &mut until, || {
+            let r = remapped!(bus, rm, |b| run_until(cpu, b, &mut until, || {
                 stop.load(Ordering::Relaxed) && stop.swap(false, Ordering::Relaxed)
-            });
+            }));
             if let Some(p) = until.irq {
                 due.store(p.due, Ordering::Relaxed);
             }
@@ -973,12 +992,29 @@ impl Core {
         Ok((r, tr.map(|t| columns(py, t))))
     }
 
-    /// `vagrant_moses.cpu.run_to_rts`: call `pc` with `A = acc` until its RTS or the cap.
-    fn run_to_rts(&self, py: Python<'_>, pc: u16, acc: i64, max_cycles: u64) -> PyResult<()> {
+    /// `vagrant_moses.cpu.run_to_rts`: call `pc` with `A = acc` until its RTS or the cap,
+    /// `remap`'s instructions' accesses redirected.
+    #[pyo3(signature = (pc, acc, max_cycles, remap=None))]
+    fn run_to_rts<'py>(
+        &self,
+        py: Python<'py>,
+        pc: u16,
+        acc: i64,
+        max_cycles: u64,
+        remap: Option<&Bound<'py, PyRemap>>,
+    ) -> PyResult<()> {
+        let rm = remap.map(|r| &r.get().0);
         self.drive(py, true, move |cpu, bus, stop| {
-            run_to_rts(cpu, bus, pc, acc as u8, None, max_cycles, None, || {
-                stop.load(Ordering::Relaxed) && stop.swap(false, Ordering::Relaxed)
-            });
+            remapped!(bus, rm, |b| run_to_rts(
+                cpu,
+                b,
+                pc,
+                acc as u8,
+                None,
+                max_cycles,
+                None,
+                || stop.load(Ordering::Relaxed) && stop.swap(false, Ordering::Relaxed)
+            ));
         })
     }
 
@@ -1107,32 +1143,35 @@ impl Core {
     }
 
     /// `pysidtracker.emu.run_to_rts_until`: as `run_to_rts`, True on entering `pcs`.
-    fn run_to_rts_until(
+    #[pyo3(signature = (pc, acc, pcs, max_cycles, remap=None))]
+    fn run_to_rts_until<'py>(
         &self,
-        py: Python<'_>,
+        py: Python<'py>,
         pc: u16,
         acc: i64,
         pcs: &Bound<'_, PyAny>,
         max_cycles: u64,
+        remap: Option<&Bound<'py, PyRemap>>,
     ) -> PyResult<bool> {
         let set = pc_set(Some(pcs), None)?;
+        let rm = remap.map(|r| &r.get().0);
         self.drive(py, true, move |cpu, bus, stop| {
-            let r = run_to_rts(
+            let r = remapped!(bus, rm, |b| run_to_rts(
                 cpu,
-                bus,
+                b,
                 pc,
                 acc as u8,
                 set.as_ref(),
                 max_cycles,
                 None,
-                || stop.load(Ordering::Relaxed) && stop.swap(false, Ordering::Relaxed),
-            );
+                || stop.load(Ordering::Relaxed) && stop.swap(false, Ordering::Relaxed)
+            ));
             r == Stop::Pc
         })
     }
 }
 
-/// Per-instruction address redirection for `run_to_rts_accesses` (`jennings_core::Remap`).
+/// Per-instruction address redirection for the drivers (`jennings_core::Remap`).
 ///
 /// ``Remap({pc: table}, pointer_opcodes=())``: each ``table`` holds one int32 per address,
 /// -1 accessed as it is, -2 reads 0, else the address the read takes its byte from; a

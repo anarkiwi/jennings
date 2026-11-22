@@ -71,6 +71,7 @@ pub fn access_key(pc: u16, write: bool, addr: u16) -> u64 {
 pub struct Accesses<'a, B: Bus> {
     pub inner: &'a mut B,
     pub log: Vec<u64>,
+    logs: bool,
     remap: Option<&'a Remap>,
     pc: u16,
     table: Option<&'a [i32]>,
@@ -82,10 +83,26 @@ impl<'a, B: Bus> Accesses<'a, B> {
         Accesses {
             inner,
             log: Vec::new(),
+            logs: true,
             remap,
             pc: 0,
             table: None,
             keep: None,
+        }
+    }
+
+    /// `inner` with `remap`'s instructions' accesses redirected and nothing logged.
+    pub fn remapped(inner: &'a mut B, remap: &'a Remap) -> Self {
+        Accesses {
+            logs: false,
+            ..Accesses::new(inner, Some(remap))
+        }
+    }
+
+    #[inline(always)]
+    fn note(&mut self, write: bool, addr: u16) {
+        if self.logs {
+            self.log.push(access_key(self.pc, write, addr));
         }
     }
 
@@ -129,14 +146,14 @@ impl<B: Bus> Bus for Accesses<'_, B> {
 
     #[inline(always)]
     fn load(&mut self, addr: u16) -> u8 {
-        self.log.push(access_key(self.pc, false, addr));
+        self.note(false, addr);
         self.redirected_read(addr)
             .unwrap_or_else(|| self.inner.load(addr))
     }
 
     #[inline(always)]
     fn store(&mut self, addr: u16, v: u8) {
-        self.log.push(access_key(self.pc, true, addr));
+        self.note(true, addr);
         if self.target(addr).is_none() {
             self.inner.store(addr, v)
         }
