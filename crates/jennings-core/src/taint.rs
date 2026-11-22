@@ -1,9 +1,11 @@
 //! Dependence of an entry's state on its state at the call before: each location written by a
 //! call is tainted with the entry locations its value came from, by data
 //! ([`crate::flow_gen`], read off the lifter's P-Code as the core is) and by control (the
-//! conditions of the branches the writing instruction is control dependent on).
+//! conditions of the branches the writing instruction is control dependent on), or in explicit
+//! mode by data alone, value apart from address, constant reads named by where they happen.
 //!
-//! Locations are the 64 KiB of memory and [`REG`] plus a `PcodeVM` register index.
+//! Locations are the 64 KiB of memory, [`REG`] plus a `PcodeVM` register index and, in
+//! explicit mode, [`CONST`] plus the PC of an instruction loading a constant.
 
 use std::collections::{HashMap, HashSet};
 use std::hash::{BuildHasherDefault, Hasher};
@@ -17,7 +19,10 @@ use crate::run::{run_to_rts, AddrSet, Stop};
 
 /// The location of `PcodeVM` register `i` is `REG + i` (A 0, X 1, Y 2, SP 3, C 8 ... N 14).
 pub const REG: u32 = 0x10000;
+/// The location `CONST + pc`: a constant byte an explicit [`Learn`] saw loaded at `pc`.
+pub const CONST: u32 = 0x20000;
 const LOCS: usize = REG as usize + 16;
+const SITE_BITS: u32 = 18;
 const SP: u32 = 1 << 3;
 const FLAGS: u32 = 0x6F00;
 /// Registers that carry state from one call into the next (X, Y and the flags but B).
@@ -44,13 +49,15 @@ pub(crate) enum Kind {
 
 /// An opcode's data flow over symbols: bit `r < 16` register `r`, 16/17 operand bytes 1/2,
 /// `20 + k` the byte of load `k`. `outs` maps a register, `16 + k` store `k`'s byte or 31 a
-/// branch's condition to its inputs; `load_addr`/`store_addr` give each access's address inputs.
+/// branch's condition to its inputs; `load_addr`/`store_addr` give each access's address inputs;
+/// `vals` is `outs` with each load depending only on the bytes it reads, not its address.
 pub(crate) struct Flow {
     pub kind: Kind,
     pub len: u8,
     pub outs: &'static [(u8, u32)],
     pub load_addr: &'static [u32],
     pub store_addr: &'static [u32],
+    pub vals: &'static [(u8, u32)],
 }
 
 #[derive(Default)]
@@ -108,7 +115,7 @@ impl Sets {
             members: vec![Box::from([])],
             index,
             unions: FxMap::default(),
-            single: vec![0; LOCS],
+            single: vec![0; CONST as usize + 0x10000],
         }
     }
 
@@ -191,7 +198,7 @@ pub struct Learn {
     store_sites: FxSet<u64>,
     implicit_seen: FxSet<u64>,
     implicit: Vec<(u32, u16)>,
-    sites: [Vec<u32>; 3],
+    sites: [Vec<u32>; 4],
     edges: Keys,
     rec: Vec<(u8, i32)>,
     pc: u16,
@@ -199,6 +206,7 @@ pub struct Learn {
     prev: Option<u16>,
     exits: AddrSet,
     active: bool,
+    explicit: bool,
 }
 
 /// What [`Learn`] found, each list ascending.
@@ -207,12 +215,14 @@ pub struct Learned {
     /// Locations some call reads before writing (operand bytes read at fetch) and some call
     /// writes; of the registers only [`STATE_REGS`].
     pub persistent: Vec<u32>,
-    /// `loc << 32 | src`: the end-of-call value of `loc` depends on `src` at the call's entry.
+    /// `loc << 32 | src`: the end-of-call value of `loc` depends on `src` at the call's entry
+    /// (or, explicit, on the constant `src` = [`CONST`] + pc loaded); `src` may be `loc`.
     pub deps: Vec<u64>,
     /// `pc << 16 | next` of consecutive instructions within a call.
     pub edges: Vec<u64>,
-    /// `(pc << 2 | kind) << 17 | loc`: `loc` taints the address of a data load (kind 0) or
-    /// store (1) at `pc`, or where control goes from `pc` (2).
+    /// `(pc << 2 | kind) << 18 | loc`: `loc` taints the address of a data load (kind 0) or
+    /// store (1) at `pc`, where control goes from `pc` (2), or the byte a data store at `pc`
+    /// stores (3).
     pub sites: Vec<u64>,
     /// The PCs of the instructions that ended a call.
     pub exits: Vec<u16>,
@@ -222,8 +232,10 @@ pub struct Learned {
 
 impl Learn {
     /// `control[pc]`: the branches `pc` is directly control dependent on; `written`: the
-    /// memory a call may write (the rest is constant, so taints nothing).
-    pub fn new(control: &[(u16, Vec<u16>)], written: AddrSet) -> Self {
+    /// memory a call may write (the rest is constant, so taints nothing). `explicit`: outputs
+    /// take only their data inputs by [`Flow::vals`] (no opcode byte, no control), and a data
+    /// load of a constant at `pc` is tainted with [`CONST`] + `pc`.
+    pub fn new(control: &[(u16, Vec<u16>)], written: AddrSet, explicit: bool) -> Self {
         let mut by_pc: Vec<Vec<u16>> = vec![Vec::new(); 0x10000];
         for (pc, brs) in control {
             by_pc[*pc as usize].extend_from_slice(brs);
@@ -268,7 +280,7 @@ impl Learn {
             store_sites: FxSet::default(),
             implicit_seen: FxSet::default(),
             implicit: Vec::new(),
-            sites: [vec![0; 0x10000], vec![0; 0x10000], vec![0; 0x10000]],
+            sites: std::array::from_fn(|_| vec![0; 0x10000]),
             edges: Keys::new(1 << 16),
             rec: Vec::with_capacity(16),
             pc: 0,
@@ -276,6 +288,7 @@ impl Learn {
             prev: None,
             exits: AddrSet::default(),
             active: false,
+            explicit,
         }
     }
 
@@ -316,8 +329,23 @@ impl Learn {
         }
     }
 
-    /// The union of the taints of `mask`'s symbols.
-    fn gather(&mut self, mask: u32, loads: &[i32]) -> u32 {
+    /// The taint of a load of `c`: [`CONST`] + pc for an explicit data load of a constant.
+    #[inline(always)]
+    fn load_taint(&mut self, c: i32, data: bool) -> u32 {
+        if self.explicit
+            && data
+            && c >= 0
+            && self.stamp[c as usize] != self.call
+            && !self.written.contains(c as u16)
+        {
+            self.sets.single(CONST + self.pc as u32)
+        } else {
+            self.cell(c)
+        }
+    }
+
+    /// The union of the taints of `mask`'s symbols, `loads` the taints of the loads.
+    fn gather(&mut self, mask: u32, loads: &[u32]) -> u32 {
         let (mut s, mut m) = (0, mask);
         while m != 0 {
             let b = m.trailing_zeros();
@@ -326,7 +354,7 @@ impl Learn {
                 0..=15 => self.get(REG + b),
                 O1 => self.get_mem(self.pc.wrapping_add(1)),
                 O2 => self.get_mem(self.pc.wrapping_add(2)),
-                _ => self.cell(loads[(b - LOAD0) as usize]),
+                _ => loads[(b - LOAD0) as usize],
             };
             s = self.sets.union(s, t);
         }
@@ -399,6 +427,11 @@ impl Learn {
             }
         }
         self.rec = rec;
+        let mut lt = [0u32; 8];
+        for (k, t) in lt[..nl].iter_mut().enumerate() {
+            *t = self.load_taint(loads[k], data_loads >> k & 1 != 0);
+        }
+        let loads = lt;
         let mut m = self.reg_reads[op as usize];
         while m != 0 {
             self.touch(REG + m.trailing_zeros(), true);
@@ -412,11 +445,15 @@ impl Learn {
                 ctl = self.sets.union(ctl, self.cond[br]);
             }
         }
-        let base = self.sets.union(code, ctl);
+        let base = if self.explicit {
+            0
+        } else {
+            self.sets.union(code, ctl)
+        };
         let mut out: [(u32, u32); 16] = [(0, 0); 16];
         let mut n = 0;
         let mut ctrl = code;
-        for &(dst, mask) in f.outs {
+        for &(dst, mask) in if self.explicit { f.vals } else { f.outs } {
             let s = self.gather(mask, &loads);
             match dst {
                 PC_OUT => ctrl = self.sets.union(ctrl, s),
@@ -425,9 +462,13 @@ impl Learn {
                     n += 1;
                 }
                 d => {
-                    let c = stores[(d - STORE0) as usize];
+                    let k = (d - STORE0) as usize;
+                    let (c, s) = (stores[k], self.sets.union(s, base));
+                    if data_stores >> k & 1 != 0 {
+                        self.site(3, s);
+                    }
                     if c >= 0 {
-                        out[n] = (c as u32, self.sets.union(s, base));
+                        out[n] = (c as u32, s);
                         n += 1;
                     }
                 }
@@ -502,7 +543,11 @@ impl Learn {
         self.site(2, ctrl);
         self.cond[pc as usize] = self.sets.union(ctrl, ctl);
         self.cstamp[pc as usize] = self.call;
-        let (lo, hi) = (self.cd_off[pc as usize], self.cd_off[pc as usize + 1]);
+        let (lo, hi) = if self.explicit {
+            (0, 0)
+        } else {
+            (self.cd_off[pc as usize], self.cd_off[pc as usize + 1])
+        };
         for &(loc, s) in &out[..n] {
             let l = loc as usize;
             self.touch(loc, false);
@@ -598,14 +643,13 @@ impl Learn {
             deps.extend(
                 self.sets.members[d as usize]
                     .iter()
-                    .filter(|&&s| s as usize != l)
                     .map(|&s| (l as u64) << 32 | s as u64),
             );
         }
         let mut sites = Vec::new();
         for pc in 0..0x10000usize {
-            for kind in 0..3 {
-                let key = ((pc as u64) << 2 | kind as u64) << 17;
+            for kind in 0..4 {
+                let key = ((pc as u64) << 2 | kind as u64) << SITE_BITS;
                 sites.extend(
                     self.sets.members[self.sites[kind][pc] as usize]
                         .iter()
@@ -711,7 +755,7 @@ impl<B: Bus> Bus for TaintBus<'_, '_, B> {
     }
 }
 
-/// [`Learn::run`] from a fresh [`Learn`]: `calls` calls' [`Learned`] and the last stop.
+/// [`Learn::run`] from a fresh [`Learn::new`]: `calls` calls' [`Learned`] and the last stop.
 #[allow(clippy::too_many_arguments)]
 pub fn learn<B: Bus>(
     cpu: &mut Cpu,
@@ -722,9 +766,10 @@ pub fn learn<B: Bus>(
     calls: usize,
     control: &[(u16, Vec<u16>)],
     written: AddrSet,
+    explicit: bool,
     remap: Option<&Remap>,
 ) -> (Learned, Stop) {
-    let mut l = Learn::new(control, written);
+    let mut l = Learn::new(control, written, explicit);
     let stop = l.run(cpu, bus, pc, acc, max_cycles, calls, remap, || false);
     (l.learned(), stop)
 }

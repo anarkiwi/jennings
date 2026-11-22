@@ -3,6 +3,7 @@ that cover everything it can do.
 
 :func:`learn` taints a call's state with the state before it natively, :func:`cycles` measures
 each closure's first repeat on a native :func:`trajectory`, :func:`cover_calls` combines them.
+:func:`explicit` gives the data-only flows, value apart from address, constants by where read.
 """
 
 import math
@@ -14,22 +15,26 @@ from tqdm import tqdm
 
 from jennings.coverage.cfg import control_dependence
 from jennings.dataflow import REGISTERS
-from jennings.devices.mpu6502 import REG, Learner, NativeMPU
+from jennings.devices.mpu6502 import CONST, REG, Learner, NativeMPU
 from jennings.memory import NativeMemory
 
 __all__ = [
     "REG",
+    "CONST",
     "STACK",
     "IO",
     "LOAD",
     "STORE",
     "CONTROL",
+    "VALUE",
     "Components",
     "Cycles",
+    "Flows",
     "location",
     "machine",
     "control",
     "learn",
+    "explicit",
     "closures",
     "trajectory",
     "cycles",
@@ -41,12 +46,16 @@ STACK = range(0x100, 0x200)
 IO = range(0xD000, 0xE000)
 MAX_CYCLES = 1_000_000
 CHUNK = 4096
-LOAD, STORE, CONTROL = "r", "w", "b"
-_KINDS = (LOAD, STORE, CONTROL)
+LOAD, STORE, CONTROL, VALUE = "r", "w", "b", "v"
+_KINDS = (LOAD, STORE, CONTROL, VALUE)
+_BITS = 18
 
 
 def location(loc):
-    """``loc`` as text: ``$hhhh`` for an address, the register name for :data:`REG` + index."""
+    """``loc`` as text: ``$hhhh`` for an address, the register name for :data:`REG` + index,
+    ``#$hhhh`` for :data:`CONST` + pc, a constant loaded at ``pc``."""
+    if loc >= CONST:
+        return "#$%04X" % (loc - CONST)
     return REGISTERS.get(loc - REG, "r%d" % (loc - REG)) if loc >= REG else "$%04X" % loc
 
 
@@ -63,7 +72,8 @@ class Components:
         feeding: the indices of the closures containing a location that taints a site.
         edges: ``(pc, next)`` of consecutive instructions within a call.
         sites: ``(pc, kind)`` to the locations tainting the address of a load (:data:`LOAD`) or
-            store (:data:`STORE`) there, or where control goes from it (:data:`CONTROL`).
+            store (:data:`STORE`) there, where control goes from it (:data:`CONTROL`), or the
+            byte a data store there stores (:data:`VALUE`).
         calls: the calls learned from.
     """
 
@@ -101,6 +111,22 @@ class Cycles:
             return None
         mu = max((c[0] for c in self.closures.values()), default=0)
         return mu, math.lcm(*(c[1] for c in self.closures.values()))
+
+
+@dataclass(frozen=True)
+class Flows:
+    """What :func:`explicit` found over ``calls`` calls, by data alone.
+
+    Attributes:
+        deps: each location written to the entry locations (and :data:`CONST` + pc constants)
+            its end-of-call value depends on by data, itself included.
+        sites: ``(pc, kind)`` as :attr:`Components.sites`, each taint explicit.
+        calls: the calls learned from.
+    """
+
+    deps: dict
+    sites: dict = field(repr=False)
+    calls: int = 0
 
 
 def machine(state):
@@ -164,7 +190,8 @@ def _feeding(cls, tainted):
 
 
 def _tainted(comps):
-    return set().union(*comps.sites.values()) & set(comps.persistent)
+    sites = (v for (_pc, kind), v in comps.sites.items() if kind != VALUE)
+    return set().union(*sites) & set(comps.persistent)
 
 
 def _pairs(edges):
@@ -185,28 +212,37 @@ def control(state, pc, calls, *, acc=0, max_cycles=MAX_CYCLES, remap=None):
     return {p: sorted(b) for p, b in cd.items()}, np.frombuffer(got["written"], np.uint16).tolist()
 
 
-def learn(state, pc, calls, *, acc=0, max_cycles=MAX_CYCLES, remap=None, exclude=(STACK, IO)):
-    """:class:`Components` of ``calls`` calls of ``pc`` with ``A = acc`` from ``state`` (see
-    :func:`machine`), ``remap`` (a :class:`~jennings.devices.mpu6502.Remap`) applied; addresses
-    in ``exclude`` are never persistent."""
-    cd, written = control(state, pc, calls, acc=acc, max_cycles=max_cycles, remap=remap)
-    learner = Learner(cd, written)
+def _learned(state, pc, calls, cd, written, explicit_, acc, max_cycles, remap):
+    """The native ``Learner`` result of ``calls`` calls and its ``(deps, sites)``: ``{loc: set}``
+    self included, ``{(pc, kind): set}``."""
+    learner = Learner(cd, written, explicit_)
     m = machine(state)
-    _drive(lambda n: m.learn(learner, pc, acc, max_cycles, n, remap), calls, "learn")
+    desc = "explicit" if explicit_ else "learn"
+    _drive(lambda n: m.learn(learner, pc, acc, max_cycles, n, remap), calls, desc)
     got = learner.learned()
-    persistent = tuple(
-        loc
-        for loc in np.frombuffer(got["persistent"], np.uint32).tolist()
-        if not _excluded(loc, exclude)
-    )
     d = np.frombuffer(got["deps"], np.uint64)
     deps = {}
     for loc, src in zip((d >> 32).tolist(), (d & 0xFFFFFFFF).tolist()):
         deps.setdefault(loc, set()).add(src)
     s = np.frombuffer(got["sites"], np.uint64)
     sites = {}
-    for key, loc in zip((s >> 17).tolist(), (s & 0x1FFFF).tolist()):
+    for key, loc in zip((s >> _BITS).tolist(), (s & ((1 << _BITS) - 1)).tolist()):
         sites.setdefault((key >> 2, _KINDS[key & 3]), set()).add(loc)
+    return got, deps, {k: frozenset(v) for k, v in sites.items()}
+
+
+def learn(state, pc, calls, *, acc=0, max_cycles=MAX_CYCLES, remap=None, exclude=(STACK, IO)):
+    """:class:`Components` of ``calls`` calls of ``pc`` with ``A = acc`` from ``state`` (see
+    :func:`machine`), ``remap`` (a :class:`~jennings.devices.mpu6502.Remap`) applied; addresses
+    in ``exclude`` are never persistent."""
+    cd, written = control(state, pc, calls, acc=acc, max_cycles=max_cycles, remap=remap)
+    got, deps, sites = _learned(state, pc, calls, cd, written, False, acc, max_cycles, remap)
+    persistent = tuple(
+        loc
+        for loc in np.frombuffer(got["persistent"], np.uint32).tolist()
+        if not _excluded(loc, exclude)
+    )
+    deps = {k: v - {k} for k, v in deps.items() if v - {k}}
     cls, g = closures(deps, persistent)
     comps = Components(
         persistent=persistent,
@@ -215,11 +251,20 @@ def learn(state, pc, calls, *, acc=0, max_cycles=MAX_CYCLES, remap=None, exclude
         feed=frozenset(),
         feeding=(),
         edges=frozenset(_pairs(got["edges"])),
-        sites={k: frozenset(v) for k, v in sites.items()},
+        sites=sites,
         calls=calls,
     )
     tainted = _tainted(comps)
     return replace(comps, feed=_with_ancestors(g, tainted), feeding=_feeding(cls, tainted))
+
+
+def explicit(state, pc, calls, *, acc=0, max_cycles=MAX_CYCLES, remap=None):
+    """:class:`Flows` of ``calls`` calls of ``pc`` (as :func:`learn`): the explicit flows, each
+    load's value apart from its address, no control; a data load of a location no call writes
+    at ``pc`` is the constant :data:`CONST` + ``pc``."""
+    _cd, written = control(state, pc, calls, acc=acc, max_cycles=max_cycles, remap=remap)
+    _got, deps, sites = _learned(state, pc, calls, {}, written, True, acc, max_cycles, remap)
+    return Flows(deps={k: frozenset(v) for k, v in deps.items()}, sites=sites, calls=calls)
 
 
 def trajectory(state, pc, cells, calls, *, acc=0, max_cycles=MAX_CYCLES, remap=None):

@@ -3,260 +3,260 @@
 use crate::taint::{Flow, Kind};
 
 pub(crate) static FLOW: [Flow; 256] = [
-    Flow { kind: Kind::Brk, len: 1, outs: &[], load_addr: &[], store_addr: &[] }, // 00
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x710003), (9, 0x710003), (14, 0x710003)], load_addr: &[0x10002, 0x10002, 0x310002], store_addr: &[] }, // 01
-    Flow { kind: Kind::Jam, len: 1, outs: &[], load_addr: &[], store_addr: &[] }, // 02
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x710003), (8, 0x710002), (9, 0x710003), (14, 0x710003), (16, 0x710002)], load_addr: &[0x10002, 0x10002, 0x310002], store_addr: &[0x310002] }, // 03
-    Flow { kind: Kind::Next, len: 2, outs: &[], load_addr: &[0x10000], store_addr: &[] }, // 04
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x110001), (9, 0x110001), (14, 0x110001)], load_addr: &[0x10000], store_addr: &[] }, // 05
-    Flow { kind: Kind::Next, len: 2, outs: &[(8, 0x110000), (9, 0x110000), (14, 0x110000), (16, 0x110000)], load_addr: &[0x10000], store_addr: &[0x10000] }, // 06
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x110001), (8, 0x110000), (9, 0x110001), (14, 0x110001), (16, 0x110000)], load_addr: &[0x10000], store_addr: &[0x10000] }, // 07
-    Flow { kind: Kind::Next, len: 1, outs: &[(3, 0x8), (16, 0x6f00)], load_addr: &[], store_addr: &[0x8] }, // 08
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x10001), (9, 0x10001), (14, 0x10001)], load_addr: &[], store_addr: &[] }, // 09
-    Flow { kind: Kind::Next, len: 1, outs: &[(0, 0x1), (8, 0x1), (9, 0x1), (14, 0x1)], load_addr: &[], store_addr: &[] }, // 0A
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x10001), (8, 0x10001), (9, 0x10001), (14, 0x10001)], load_addr: &[], store_addr: &[] }, // 0B
-    Flow { kind: Kind::Next, len: 3, outs: &[], load_addr: &[0x30000], store_addr: &[] }, // 0C
-    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130001), (9, 0x130001), (14, 0x130001)], load_addr: &[0x30000], store_addr: &[] }, // 0D
-    Flow { kind: Kind::Next, len: 3, outs: &[(8, 0x130000), (9, 0x130000), (14, 0x130000), (16, 0x130000)], load_addr: &[0x30000], store_addr: &[0x30000] }, // 0E
-    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130001), (8, 0x130000), (9, 0x130001), (14, 0x130001), (16, 0x130000)], load_addr: &[0x30000], store_addr: &[0x30000] }, // 0F
-    Flow { kind: Kind::Branch, len: 2, outs: &[(31, 0x4000)], load_addr: &[], store_addr: &[] }, // 10
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x710005), (9, 0x710005), (14, 0x710005)], load_addr: &[0x10000, 0x10000, 0x310004], store_addr: &[] }, // 11
-    Flow { kind: Kind::Jam, len: 1, outs: &[], load_addr: &[], store_addr: &[] }, // 12
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x710005), (8, 0x710004), (9, 0x710005), (14, 0x710005), (16, 0x710004)], load_addr: &[0x10000, 0x10000, 0x310004], store_addr: &[0x310004] }, // 13
-    Flow { kind: Kind::Next, len: 2, outs: &[], load_addr: &[0x10002], store_addr: &[] }, // 14
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x110003), (9, 0x110003), (14, 0x110003)], load_addr: &[0x10002], store_addr: &[] }, // 15
-    Flow { kind: Kind::Next, len: 2, outs: &[(8, 0x110002), (9, 0x110002), (14, 0x110002), (16, 0x110002)], load_addr: &[0x10002], store_addr: &[0x10002] }, // 16
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x110003), (8, 0x110002), (9, 0x110003), (14, 0x110003), (16, 0x110002)], load_addr: &[0x10002], store_addr: &[0x10002] }, // 17
-    Flow { kind: Kind::Next, len: 1, outs: &[(8, 0x0)], load_addr: &[], store_addr: &[] }, // 18
-    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130005), (9, 0x130005), (14, 0x130005)], load_addr: &[0x30004], store_addr: &[] }, // 19
-    Flow { kind: Kind::Next, len: 1, outs: &[], load_addr: &[], store_addr: &[] }, // 1A
-    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130005), (8, 0x130004), (9, 0x130005), (14, 0x130005), (16, 0x130004)], load_addr: &[0x30004], store_addr: &[0x30004] }, // 1B
-    Flow { kind: Kind::Next, len: 3, outs: &[], load_addr: &[0x30002], store_addr: &[] }, // 1C
-    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130003), (9, 0x130003), (14, 0x130003)], load_addr: &[0x30002], store_addr: &[] }, // 1D
-    Flow { kind: Kind::Next, len: 3, outs: &[(8, 0x130002), (9, 0x130002), (14, 0x130002), (16, 0x130002)], load_addr: &[0x30002], store_addr: &[0x30002] }, // 1E
-    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130003), (8, 0x130002), (9, 0x130003), (14, 0x130003), (16, 0x130002)], load_addr: &[0x30002], store_addr: &[0x30002] }, // 1F
-    Flow { kind: Kind::Jsr, len: 3, outs: &[], load_addr: &[], store_addr: &[] }, // 20
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x710003), (9, 0x710003), (14, 0x710003)], load_addr: &[0x10002, 0x10002, 0x310002], store_addr: &[] }, // 21
-    Flow { kind: Kind::Jam, len: 1, outs: &[], load_addr: &[], store_addr: &[] }, // 22
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x710103), (8, 0x710002), (9, 0x710103), (14, 0x710103), (16, 0x710102)], load_addr: &[0x10002, 0x10002, 0x310002], store_addr: &[0x310002] }, // 23
-    Flow { kind: Kind::Next, len: 2, outs: &[(9, 0x110001), (13, 0x110000), (14, 0x110000)], load_addr: &[0x10000], store_addr: &[] }, // 24
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x110001), (9, 0x110001), (14, 0x110001)], load_addr: &[0x10000], store_addr: &[] }, // 25
-    Flow { kind: Kind::Next, len: 2, outs: &[(8, 0x110000), (9, 0x110100), (14, 0x110100), (16, 0x110100)], load_addr: &[0x10000], store_addr: &[0x10000] }, // 26
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x110101), (8, 0x110000), (9, 0x110101), (14, 0x110101), (16, 0x110100)], load_addr: &[0x10000], store_addr: &[0x10000] }, // 27
-    Flow { kind: Kind::Next, len: 1, outs: &[(3, 0x8), (8, 0x100008), (9, 0x100008), (10, 0x100008), (11, 0x100008), (13, 0x100008), (14, 0x100008)], load_addr: &[0x8], store_addr: &[] }, // 28
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x10001), (9, 0x10001), (14, 0x10001)], load_addr: &[], store_addr: &[] }, // 29
-    Flow { kind: Kind::Next, len: 1, outs: &[(0, 0x101), (8, 0x1), (9, 0x101), (14, 0x101)], load_addr: &[], store_addr: &[] }, // 2A
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x10001), (8, 0x10001), (9, 0x10001), (14, 0x10001)], load_addr: &[], store_addr: &[] }, // 2B
-    Flow { kind: Kind::Next, len: 3, outs: &[(9, 0x130001), (13, 0x130000), (14, 0x130000)], load_addr: &[0x30000], store_addr: &[] }, // 2C
-    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130001), (9, 0x130001), (14, 0x130001)], load_addr: &[0x30000], store_addr: &[] }, // 2D
-    Flow { kind: Kind::Next, len: 3, outs: &[(8, 0x130000), (9, 0x130100), (14, 0x130100), (16, 0x130100)], load_addr: &[0x30000], store_addr: &[0x30000] }, // 2E
-    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130101), (8, 0x130000), (9, 0x130101), (14, 0x130101), (16, 0x130100)], load_addr: &[0x30000], store_addr: &[0x30000] }, // 2F
-    Flow { kind: Kind::Branch, len: 2, outs: &[(31, 0x4000)], load_addr: &[], store_addr: &[] }, // 30
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x710005), (9, 0x710005), (14, 0x710005)], load_addr: &[0x10000, 0x10000, 0x310004], store_addr: &[] }, // 31
-    Flow { kind: Kind::Jam, len: 1, outs: &[], load_addr: &[], store_addr: &[] }, // 32
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x710105), (8, 0x710004), (9, 0x710105), (14, 0x710105), (16, 0x710104)], load_addr: &[0x10000, 0x10000, 0x310004], store_addr: &[0x310004] }, // 33
-    Flow { kind: Kind::Next, len: 2, outs: &[], load_addr: &[0x10002], store_addr: &[] }, // 34
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x110003), (9, 0x110003), (14, 0x110003)], load_addr: &[0x10002], store_addr: &[] }, // 35
-    Flow { kind: Kind::Next, len: 2, outs: &[(8, 0x110002), (9, 0x110102), (14, 0x110102), (16, 0x110102)], load_addr: &[0x10002], store_addr: &[0x10002] }, // 36
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x110103), (8, 0x110002), (9, 0x110103), (14, 0x110103), (16, 0x110102)], load_addr: &[0x10002], store_addr: &[0x10002] }, // 37
-    Flow { kind: Kind::Next, len: 1, outs: &[(8, 0x0)], load_addr: &[], store_addr: &[] }, // 38
-    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130005), (9, 0x130005), (14, 0x130005)], load_addr: &[0x30004], store_addr: &[] }, // 39
-    Flow { kind: Kind::Next, len: 1, outs: &[], load_addr: &[], store_addr: &[] }, // 3A
-    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130105), (8, 0x130004), (9, 0x130105), (14, 0x130105), (16, 0x130104)], load_addr: &[0x30004], store_addr: &[0x30004] }, // 3B
-    Flow { kind: Kind::Next, len: 3, outs: &[], load_addr: &[0x30002], store_addr: &[] }, // 3C
-    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130003), (9, 0x130003), (14, 0x130003)], load_addr: &[0x30002], store_addr: &[] }, // 3D
-    Flow { kind: Kind::Next, len: 3, outs: &[(8, 0x130002), (9, 0x130102), (14, 0x130102), (16, 0x130102)], load_addr: &[0x30002], store_addr: &[0x30002] }, // 3E
-    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130103), (8, 0x130002), (9, 0x130103), (14, 0x130103), (16, 0x130102)], load_addr: &[0x30002], store_addr: &[0x30002] }, // 3F
-    Flow { kind: Kind::Rti, len: 1, outs: &[], load_addr: &[], store_addr: &[] }, // 40
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x710003), (9, 0x710003), (14, 0x710003)], load_addr: &[0x10002, 0x10002, 0x310002], store_addr: &[] }, // 41
-    Flow { kind: Kind::Jam, len: 1, outs: &[], load_addr: &[], store_addr: &[] }, // 42
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x710003), (8, 0x710002), (9, 0x710003), (14, 0x710003), (16, 0x710002)], load_addr: &[0x10002, 0x10002, 0x310002], store_addr: &[0x310002] }, // 43
-    Flow { kind: Kind::Next, len: 2, outs: &[], load_addr: &[0x10000], store_addr: &[] }, // 44
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x110001), (9, 0x110001), (14, 0x110001)], load_addr: &[0x10000], store_addr: &[] }, // 45
-    Flow { kind: Kind::Next, len: 2, outs: &[(8, 0x110000), (9, 0x110000), (14, 0x110000), (16, 0x110000)], load_addr: &[0x10000], store_addr: &[0x10000] }, // 46
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x110001), (8, 0x110000), (9, 0x110001), (14, 0x110001), (16, 0x110000)], load_addr: &[0x10000], store_addr: &[0x10000] }, // 47
-    Flow { kind: Kind::Next, len: 1, outs: &[(3, 0x8), (16, 0x1)], load_addr: &[], store_addr: &[0x8] }, // 48
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x10001), (9, 0x10001), (14, 0x10001)], load_addr: &[], store_addr: &[] }, // 49
-    Flow { kind: Kind::Next, len: 1, outs: &[(0, 0x1), (8, 0x1), (9, 0x1), (14, 0x1)], load_addr: &[], store_addr: &[] }, // 4A
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x10001), (8, 0x10001), (9, 0x10001), (14, 0x10001)], load_addr: &[], store_addr: &[] }, // 4B
-    Flow { kind: Kind::Jmp, len: 3, outs: &[], load_addr: &[], store_addr: &[] }, // 4C
-    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130001), (9, 0x130001), (14, 0x130001)], load_addr: &[0x30000], store_addr: &[] }, // 4D
-    Flow { kind: Kind::Next, len: 3, outs: &[(8, 0x130000), (9, 0x130000), (14, 0x130000), (16, 0x130000)], load_addr: &[0x30000], store_addr: &[0x30000] }, // 4E
-    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130001), (8, 0x130000), (9, 0x130001), (14, 0x130001), (16, 0x130000)], load_addr: &[0x30000], store_addr: &[0x30000] }, // 4F
-    Flow { kind: Kind::Branch, len: 2, outs: &[(31, 0x2000)], load_addr: &[], store_addr: &[] }, // 50
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x710005), (9, 0x710005), (14, 0x710005)], load_addr: &[0x10000, 0x10000, 0x310004], store_addr: &[] }, // 51
-    Flow { kind: Kind::Jam, len: 1, outs: &[], load_addr: &[], store_addr: &[] }, // 52
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x710005), (8, 0x710004), (9, 0x710005), (14, 0x710005), (16, 0x710004)], load_addr: &[0x10000, 0x10000, 0x310004], store_addr: &[0x310004] }, // 53
-    Flow { kind: Kind::Next, len: 2, outs: &[], load_addr: &[0x10002], store_addr: &[] }, // 54
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x110003), (9, 0x110003), (14, 0x110003)], load_addr: &[0x10002], store_addr: &[] }, // 55
-    Flow { kind: Kind::Next, len: 2, outs: &[(8, 0x110002), (9, 0x110002), (14, 0x110002), (16, 0x110002)], load_addr: &[0x10002], store_addr: &[0x10002] }, // 56
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x110003), (8, 0x110002), (9, 0x110003), (14, 0x110003), (16, 0x110002)], load_addr: &[0x10002], store_addr: &[0x10002] }, // 57
-    Flow { kind: Kind::Next, len: 1, outs: &[(10, 0x0)], load_addr: &[], store_addr: &[] }, // 58
-    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130005), (9, 0x130005), (14, 0x130005)], load_addr: &[0x30004], store_addr: &[] }, // 59
-    Flow { kind: Kind::Next, len: 1, outs: &[], load_addr: &[], store_addr: &[] }, // 5A
-    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130005), (8, 0x130004), (9, 0x130005), (14, 0x130005), (16, 0x130004)], load_addr: &[0x30004], store_addr: &[0x30004] }, // 5B
-    Flow { kind: Kind::Next, len: 3, outs: &[], load_addr: &[0x30002], store_addr: &[] }, // 5C
-    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130003), (9, 0x130003), (14, 0x130003)], load_addr: &[0x30002], store_addr: &[] }, // 5D
-    Flow { kind: Kind::Next, len: 3, outs: &[(8, 0x130002), (9, 0x130002), (14, 0x130002), (16, 0x130002)], load_addr: &[0x30002], store_addr: &[0x30002] }, // 5E
-    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130003), (8, 0x130002), (9, 0x130003), (14, 0x130003), (16, 0x130002)], load_addr: &[0x30002], store_addr: &[0x30002] }, // 5F
-    Flow { kind: Kind::Rts, len: 1, outs: &[], load_addr: &[], store_addr: &[] }, // 60
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x710903), (8, 0x710903), (9, 0x710103), (13, 0x710903), (14, 0x710903)], load_addr: &[0x10002, 0x10002, 0x310002], store_addr: &[] }, // 61
-    Flow { kind: Kind::Jam, len: 1, outs: &[], load_addr: &[], store_addr: &[] }, // 62
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x710903), (8, 0x710903), (9, 0x710103), (13, 0x710903), (14, 0x710903), (16, 0x710102)], load_addr: &[0x10002, 0x10002, 0x310002], store_addr: &[0x310002] }, // 63
-    Flow { kind: Kind::Next, len: 2, outs: &[], load_addr: &[0x10000], store_addr: &[] }, // 64
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x110901), (8, 0x110901), (9, 0x110101), (13, 0x110901), (14, 0x110901)], load_addr: &[0x10000], store_addr: &[] }, // 65
-    Flow { kind: Kind::Next, len: 2, outs: &[(8, 0x110000), (9, 0x110100), (14, 0x110100), (16, 0x110100)], load_addr: &[0x10000], store_addr: &[0x10000] }, // 66
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x110901), (8, 0x110901), (9, 0x110101), (13, 0x110901), (14, 0x110901), (16, 0x110100)], load_addr: &[0x10000], store_addr: &[0x10000] }, // 67
-    Flow { kind: Kind::Next, len: 1, outs: &[(0, 0x100008), (3, 0x8), (9, 0x100008), (14, 0x100008)], load_addr: &[0x8], store_addr: &[] }, // 68
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x10901), (8, 0x10901), (9, 0x10101), (13, 0x10901), (14, 0x10901)], load_addr: &[], store_addr: &[] }, // 69
-    Flow { kind: Kind::Next, len: 1, outs: &[(0, 0x101), (8, 0x1), (9, 0x101), (14, 0x101)], load_addr: &[], store_addr: &[] }, // 6A
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x10901), (8, 0x10901), (9, 0x10101), (13, 0x10101), (14, 0x10101)], load_addr: &[], store_addr: &[] }, // 6B
-    Flow { kind: Kind::JmpInd, len: 3, outs: &[], load_addr: &[], store_addr: &[] }, // 6C
-    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130901), (8, 0x130901), (9, 0x130101), (13, 0x130901), (14, 0x130901)], load_addr: &[0x30000], store_addr: &[] }, // 6D
-    Flow { kind: Kind::Next, len: 3, outs: &[(8, 0x130000), (9, 0x130100), (14, 0x130100), (16, 0x130100)], load_addr: &[0x30000], store_addr: &[0x30000] }, // 6E
-    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130901), (8, 0x130901), (9, 0x130101), (13, 0x130901), (14, 0x130901), (16, 0x130100)], load_addr: &[0x30000], store_addr: &[0x30000] }, // 6F
-    Flow { kind: Kind::Branch, len: 2, outs: &[(31, 0x2000)], load_addr: &[], store_addr: &[] }, // 70
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x710905), (8, 0x710905), (9, 0x710105), (13, 0x710905), (14, 0x710905)], load_addr: &[0x10000, 0x10000, 0x310004], store_addr: &[] }, // 71
-    Flow { kind: Kind::Jam, len: 1, outs: &[], load_addr: &[], store_addr: &[] }, // 72
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x710905), (8, 0x710905), (9, 0x710105), (13, 0x710905), (14, 0x710905), (16, 0x710104)], load_addr: &[0x10000, 0x10000, 0x310004], store_addr: &[0x310004] }, // 73
-    Flow { kind: Kind::Next, len: 2, outs: &[], load_addr: &[0x10002], store_addr: &[] }, // 74
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x110903), (8, 0x110903), (9, 0x110103), (13, 0x110903), (14, 0x110903)], load_addr: &[0x10002], store_addr: &[] }, // 75
-    Flow { kind: Kind::Next, len: 2, outs: &[(8, 0x110002), (9, 0x110102), (14, 0x110102), (16, 0x110102)], load_addr: &[0x10002], store_addr: &[0x10002] }, // 76
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x110903), (8, 0x110903), (9, 0x110103), (13, 0x110903), (14, 0x110903), (16, 0x110102)], load_addr: &[0x10002], store_addr: &[0x10002] }, // 77
-    Flow { kind: Kind::Next, len: 1, outs: &[(10, 0x0)], load_addr: &[], store_addr: &[] }, // 78
-    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130905), (8, 0x130905), (9, 0x130105), (13, 0x130905), (14, 0x130905)], load_addr: &[0x30004], store_addr: &[] }, // 79
-    Flow { kind: Kind::Next, len: 1, outs: &[], load_addr: &[], store_addr: &[] }, // 7A
-    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130905), (8, 0x130905), (9, 0x130105), (13, 0x130905), (14, 0x130905), (16, 0x130104)], load_addr: &[0x30004], store_addr: &[0x30004] }, // 7B
-    Flow { kind: Kind::Next, len: 3, outs: &[], load_addr: &[0x30002], store_addr: &[] }, // 7C
-    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130903), (8, 0x130903), (9, 0x130103), (13, 0x130903), (14, 0x130903)], load_addr: &[0x30002], store_addr: &[] }, // 7D
-    Flow { kind: Kind::Next, len: 3, outs: &[(8, 0x130002), (9, 0x130102), (14, 0x130102), (16, 0x130102)], load_addr: &[0x30002], store_addr: &[0x30002] }, // 7E
-    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130903), (8, 0x130903), (9, 0x130103), (13, 0x130903), (14, 0x130903), (16, 0x130102)], load_addr: &[0x30002], store_addr: &[0x30002] }, // 7F
-    Flow { kind: Kind::Next, len: 2, outs: &[], load_addr: &[], store_addr: &[] }, // 80
-    Flow { kind: Kind::Next, len: 2, outs: &[(16, 0x1)], load_addr: &[0x10002, 0x10002], store_addr: &[0x310002] }, // 81
-    Flow { kind: Kind::Next, len: 2, outs: &[], load_addr: &[], store_addr: &[] }, // 82
-    Flow { kind: Kind::Next, len: 2, outs: &[(16, 0x3)], load_addr: &[0x10002, 0x10002], store_addr: &[0x310002] }, // 83
-    Flow { kind: Kind::Next, len: 2, outs: &[(16, 0x4)], load_addr: &[], store_addr: &[0x10000] }, // 84
-    Flow { kind: Kind::Next, len: 2, outs: &[(16, 0x1)], load_addr: &[], store_addr: &[0x10000] }, // 85
-    Flow { kind: Kind::Next, len: 2, outs: &[(16, 0x2)], load_addr: &[], store_addr: &[0x10000] }, // 86
-    Flow { kind: Kind::Next, len: 2, outs: &[(16, 0x3)], load_addr: &[], store_addr: &[0x10000] }, // 87
-    Flow { kind: Kind::Next, len: 1, outs: &[(2, 0x4), (9, 0x4), (14, 0x4)], load_addr: &[], store_addr: &[] }, // 88
-    Flow { kind: Kind::Next, len: 2, outs: &[], load_addr: &[], store_addr: &[] }, // 89
-    Flow { kind: Kind::Next, len: 1, outs: &[(0, 0x2), (9, 0x2), (14, 0x2)], load_addr: &[], store_addr: &[] }, // 8A
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x10003), (9, 0x10003), (14, 0x10003)], load_addr: &[], store_addr: &[] }, // 8B
-    Flow { kind: Kind::Next, len: 3, outs: &[(16, 0x4)], load_addr: &[], store_addr: &[0x30000] }, // 8C
-    Flow { kind: Kind::Next, len: 3, outs: &[(16, 0x1)], load_addr: &[], store_addr: &[0x30000] }, // 8D
-    Flow { kind: Kind::Next, len: 3, outs: &[(16, 0x2)], load_addr: &[], store_addr: &[0x30000] }, // 8E
-    Flow { kind: Kind::Next, len: 3, outs: &[(16, 0x3)], load_addr: &[], store_addr: &[0x30000] }, // 8F
-    Flow { kind: Kind::Branch, len: 2, outs: &[(31, 0x100)], load_addr: &[], store_addr: &[] }, // 90
-    Flow { kind: Kind::Next, len: 2, outs: &[(16, 0x1)], load_addr: &[0x10000, 0x10000], store_addr: &[0x310004] }, // 91
-    Flow { kind: Kind::Jam, len: 1, outs: &[], load_addr: &[], store_addr: &[] }, // 92
-    Flow { kind: Kind::Next, len: 2, outs: &[(16, 0x210003)], load_addr: &[0x10000, 0x10000], store_addr: &[0x310007] }, // 93
-    Flow { kind: Kind::Next, len: 2, outs: &[(16, 0x4)], load_addr: &[], store_addr: &[0x10002] }, // 94
-    Flow { kind: Kind::Next, len: 2, outs: &[(16, 0x1)], load_addr: &[], store_addr: &[0x10002] }, // 95
-    Flow { kind: Kind::Next, len: 2, outs: &[(16, 0x2)], load_addr: &[], store_addr: &[0x10004] }, // 96
-    Flow { kind: Kind::Next, len: 2, outs: &[(16, 0x3)], load_addr: &[], store_addr: &[0x10004] }, // 97
-    Flow { kind: Kind::Next, len: 1, outs: &[(0, 0x4), (9, 0x4), (14, 0x4)], load_addr: &[], store_addr: &[] }, // 98
-    Flow { kind: Kind::Next, len: 3, outs: &[(16, 0x1)], load_addr: &[], store_addr: &[0x30004] }, // 99
-    Flow { kind: Kind::Next, len: 1, outs: &[(3, 0x2)], load_addr: &[], store_addr: &[] }, // 9A
-    Flow { kind: Kind::Next, len: 3, outs: &[(3, 0x3), (16, 0x20003)], load_addr: &[], store_addr: &[0x30007] }, // 9B
-    Flow { kind: Kind::Next, len: 3, outs: &[(16, 0x20004)], load_addr: &[], store_addr: &[0x30006] }, // 9C
-    Flow { kind: Kind::Next, len: 3, outs: &[(16, 0x1)], load_addr: &[], store_addr: &[0x30002] }, // 9D
-    Flow { kind: Kind::Next, len: 3, outs: &[(16, 0x20002)], load_addr: &[], store_addr: &[0x30006] }, // 9E
-    Flow { kind: Kind::Next, len: 3, outs: &[(16, 0x20003)], load_addr: &[], store_addr: &[0x30007] }, // 9F
-    Flow { kind: Kind::Next, len: 2, outs: &[(2, 0x10000), (9, 0x10000), (14, 0x10000)], load_addr: &[], store_addr: &[] }, // A0
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x710002), (9, 0x710002), (14, 0x710002)], load_addr: &[0x10002, 0x10002, 0x310002], store_addr: &[] }, // A1
-    Flow { kind: Kind::Next, len: 2, outs: &[(1, 0x10000), (9, 0x10000), (14, 0x10000)], load_addr: &[], store_addr: &[] }, // A2
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x710002), (1, 0x710002), (9, 0x710002), (14, 0x710002)], load_addr: &[0x10002, 0x10002, 0x310002], store_addr: &[] }, // A3
-    Flow { kind: Kind::Next, len: 2, outs: &[(2, 0x110000), (9, 0x110000), (14, 0x110000)], load_addr: &[0x10000], store_addr: &[] }, // A4
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x110000), (9, 0x110000), (14, 0x110000)], load_addr: &[0x10000], store_addr: &[] }, // A5
-    Flow { kind: Kind::Next, len: 2, outs: &[(1, 0x110000), (9, 0x110000), (14, 0x110000)], load_addr: &[0x10000], store_addr: &[] }, // A6
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x110000), (1, 0x110000), (9, 0x110000), (14, 0x110000)], load_addr: &[0x10000], store_addr: &[] }, // A7
-    Flow { kind: Kind::Next, len: 1, outs: &[(2, 0x1), (9, 0x1), (14, 0x1)], load_addr: &[], store_addr: &[] }, // A8
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x10000), (9, 0x10000), (14, 0x10000)], load_addr: &[], store_addr: &[] }, // A9
-    Flow { kind: Kind::Next, len: 1, outs: &[(1, 0x1), (9, 0x1), (14, 0x1)], load_addr: &[], store_addr: &[] }, // AA
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x10001), (1, 0x10001), (9, 0x10001), (14, 0x10001)], load_addr: &[], store_addr: &[] }, // AB
-    Flow { kind: Kind::Next, len: 3, outs: &[(2, 0x130000), (9, 0x130000), (14, 0x130000)], load_addr: &[0x30000], store_addr: &[] }, // AC
-    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130000), (9, 0x130000), (14, 0x130000)], load_addr: &[0x30000], store_addr: &[] }, // AD
-    Flow { kind: Kind::Next, len: 3, outs: &[(1, 0x130000), (9, 0x130000), (14, 0x130000)], load_addr: &[0x30000], store_addr: &[] }, // AE
-    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130000), (1, 0x130000), (9, 0x130000), (14, 0x130000)], load_addr: &[0x30000], store_addr: &[] }, // AF
-    Flow { kind: Kind::Branch, len: 2, outs: &[(31, 0x100)], load_addr: &[], store_addr: &[] }, // B0
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x710004), (9, 0x710004), (14, 0x710004)], load_addr: &[0x10000, 0x10000, 0x310004], store_addr: &[] }, // B1
-    Flow { kind: Kind::Jam, len: 1, outs: &[], load_addr: &[], store_addr: &[] }, // B2
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x710004), (1, 0x710004), (9, 0x710004), (14, 0x710004)], load_addr: &[0x10000, 0x10000, 0x310004], store_addr: &[] }, // B3
-    Flow { kind: Kind::Next, len: 2, outs: &[(2, 0x110002), (9, 0x110002), (14, 0x110002)], load_addr: &[0x10002], store_addr: &[] }, // B4
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x110002), (9, 0x110002), (14, 0x110002)], load_addr: &[0x10002], store_addr: &[] }, // B5
-    Flow { kind: Kind::Next, len: 2, outs: &[(1, 0x110004), (9, 0x110004), (14, 0x110004)], load_addr: &[0x10004], store_addr: &[] }, // B6
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x110004), (1, 0x110004), (9, 0x110004), (14, 0x110004)], load_addr: &[0x10004], store_addr: &[] }, // B7
-    Flow { kind: Kind::Next, len: 1, outs: &[(13, 0x0)], load_addr: &[], store_addr: &[] }, // B8
-    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130004), (9, 0x130004), (14, 0x130004)], load_addr: &[0x30004], store_addr: &[] }, // B9
-    Flow { kind: Kind::Next, len: 1, outs: &[(1, 0x8), (9, 0x8), (14, 0x8)], load_addr: &[], store_addr: &[] }, // BA
-    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x13000c), (1, 0x13000c), (3, 0x13000c), (9, 0x13000c), (14, 0x13000c)], load_addr: &[0x30004], store_addr: &[] }, // BB
-    Flow { kind: Kind::Next, len: 3, outs: &[(2, 0x130002), (9, 0x130002), (14, 0x130002)], load_addr: &[0x30002], store_addr: &[] }, // BC
-    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130002), (9, 0x130002), (14, 0x130002)], load_addr: &[0x30002], store_addr: &[] }, // BD
-    Flow { kind: Kind::Next, len: 3, outs: &[(1, 0x130004), (9, 0x130004), (14, 0x130004)], load_addr: &[0x30004], store_addr: &[] }, // BE
-    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130004), (1, 0x130004), (9, 0x130004), (14, 0x130004)], load_addr: &[0x30004], store_addr: &[] }, // BF
-    Flow { kind: Kind::Next, len: 2, outs: &[(8, 0x10004), (9, 0x10004), (14, 0x10004)], load_addr: &[], store_addr: &[] }, // C0
-    Flow { kind: Kind::Next, len: 2, outs: &[(8, 0x710003), (9, 0x710003), (14, 0x710003)], load_addr: &[0x10002, 0x10002, 0x310002], store_addr: &[] }, // C1
-    Flow { kind: Kind::Next, len: 2, outs: &[], load_addr: &[], store_addr: &[] }, // C2
-    Flow { kind: Kind::Next, len: 2, outs: &[(8, 0x710003), (9, 0x710003), (14, 0x710003), (16, 0x710002)], load_addr: &[0x10002, 0x10002, 0x310002], store_addr: &[0x310002] }, // C3
-    Flow { kind: Kind::Next, len: 2, outs: &[(8, 0x110004), (9, 0x110004), (14, 0x110004)], load_addr: &[0x10000], store_addr: &[] }, // C4
-    Flow { kind: Kind::Next, len: 2, outs: &[(8, 0x110001), (9, 0x110001), (14, 0x110001)], load_addr: &[0x10000], store_addr: &[] }, // C5
-    Flow { kind: Kind::Next, len: 2, outs: &[(9, 0x110000), (14, 0x110000), (16, 0x110000)], load_addr: &[0x10000], store_addr: &[0x10000] }, // C6
-    Flow { kind: Kind::Next, len: 2, outs: &[(8, 0x110001), (9, 0x110001), (14, 0x110001), (16, 0x110000)], load_addr: &[0x10000], store_addr: &[0x10000] }, // C7
-    Flow { kind: Kind::Next, len: 1, outs: &[(2, 0x4), (9, 0x4), (14, 0x4)], load_addr: &[], store_addr: &[] }, // C8
-    Flow { kind: Kind::Next, len: 2, outs: &[(8, 0x10001), (9, 0x10001), (14, 0x10001)], load_addr: &[], store_addr: &[] }, // C9
-    Flow { kind: Kind::Next, len: 1, outs: &[(1, 0x2), (9, 0x2), (14, 0x2)], load_addr: &[], store_addr: &[] }, // CA
-    Flow { kind: Kind::Next, len: 2, outs: &[(1, 0x10003), (8, 0x10003), (9, 0x10003), (14, 0x10003)], load_addr: &[], store_addr: &[] }, // CB
-    Flow { kind: Kind::Next, len: 3, outs: &[(8, 0x130004), (9, 0x130004), (14, 0x130004)], load_addr: &[0x30000], store_addr: &[] }, // CC
-    Flow { kind: Kind::Next, len: 3, outs: &[(8, 0x130001), (9, 0x130001), (14, 0x130001)], load_addr: &[0x30000], store_addr: &[] }, // CD
-    Flow { kind: Kind::Next, len: 3, outs: &[(9, 0x130000), (14, 0x130000), (16, 0x130000)], load_addr: &[0x30000], store_addr: &[0x30000] }, // CE
-    Flow { kind: Kind::Next, len: 3, outs: &[(8, 0x130001), (9, 0x130001), (14, 0x130001), (16, 0x130000)], load_addr: &[0x30000], store_addr: &[0x30000] }, // CF
-    Flow { kind: Kind::Branch, len: 2, outs: &[(31, 0x200)], load_addr: &[], store_addr: &[] }, // D0
-    Flow { kind: Kind::Next, len: 2, outs: &[(8, 0x710005), (9, 0x710005), (14, 0x710005)], load_addr: &[0x10000, 0x10000, 0x310004], store_addr: &[] }, // D1
-    Flow { kind: Kind::Jam, len: 1, outs: &[], load_addr: &[], store_addr: &[] }, // D2
-    Flow { kind: Kind::Next, len: 2, outs: &[(8, 0x710005), (9, 0x710005), (14, 0x710005), (16, 0x710004)], load_addr: &[0x10000, 0x10000, 0x310004], store_addr: &[0x310004] }, // D3
-    Flow { kind: Kind::Next, len: 2, outs: &[], load_addr: &[0x10002], store_addr: &[] }, // D4
-    Flow { kind: Kind::Next, len: 2, outs: &[(8, 0x110003), (9, 0x110003), (14, 0x110003)], load_addr: &[0x10002], store_addr: &[] }, // D5
-    Flow { kind: Kind::Next, len: 2, outs: &[(9, 0x110002), (14, 0x110002), (16, 0x110002)], load_addr: &[0x10002], store_addr: &[0x10002] }, // D6
-    Flow { kind: Kind::Next, len: 2, outs: &[(8, 0x110003), (9, 0x110003), (14, 0x110003), (16, 0x110002)], load_addr: &[0x10002], store_addr: &[0x10002] }, // D7
-    Flow { kind: Kind::Next, len: 1, outs: &[(11, 0x0)], load_addr: &[], store_addr: &[] }, // D8
-    Flow { kind: Kind::Next, len: 3, outs: &[(8, 0x130005), (9, 0x130005), (14, 0x130005)], load_addr: &[0x30004], store_addr: &[] }, // D9
-    Flow { kind: Kind::Next, len: 1, outs: &[], load_addr: &[], store_addr: &[] }, // DA
-    Flow { kind: Kind::Next, len: 3, outs: &[(8, 0x130005), (9, 0x130005), (14, 0x130005), (16, 0x130004)], load_addr: &[0x30004], store_addr: &[0x30004] }, // DB
-    Flow { kind: Kind::Next, len: 3, outs: &[], load_addr: &[0x30002], store_addr: &[] }, // DC
-    Flow { kind: Kind::Next, len: 3, outs: &[(8, 0x130003), (9, 0x130003), (14, 0x130003)], load_addr: &[0x30002], store_addr: &[] }, // DD
-    Flow { kind: Kind::Next, len: 3, outs: &[(9, 0x130002), (14, 0x130002), (16, 0x130002)], load_addr: &[0x30002], store_addr: &[0x30002] }, // DE
-    Flow { kind: Kind::Next, len: 3, outs: &[(8, 0x130003), (9, 0x130003), (14, 0x130003), (16, 0x130002)], load_addr: &[0x30002], store_addr: &[0x30002] }, // DF
-    Flow { kind: Kind::Next, len: 2, outs: &[(8, 0x10002), (9, 0x10002), (14, 0x10002)], load_addr: &[], store_addr: &[] }, // E0
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x710903), (8, 0x710103), (9, 0x710103), (13, 0x710103), (14, 0x710103)], load_addr: &[0x10002, 0x10002, 0x310002], store_addr: &[] }, // E1
-    Flow { kind: Kind::Next, len: 2, outs: &[], load_addr: &[], store_addr: &[] }, // E2
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x710903), (8, 0x710103), (9, 0x710103), (13, 0x710103), (14, 0x710103), (16, 0x710002)], load_addr: &[0x10002, 0x10002, 0x310002], store_addr: &[0x310002] }, // E3
-    Flow { kind: Kind::Next, len: 2, outs: &[(8, 0x110002), (9, 0x110002), (14, 0x110002)], load_addr: &[0x10000], store_addr: &[] }, // E4
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x110901), (8, 0x110101), (9, 0x110101), (13, 0x110101), (14, 0x110101)], load_addr: &[0x10000], store_addr: &[] }, // E5
-    Flow { kind: Kind::Next, len: 2, outs: &[(9, 0x110000), (14, 0x110000), (16, 0x110000)], load_addr: &[0x10000], store_addr: &[0x10000] }, // E6
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x110901), (8, 0x110101), (9, 0x110101), (13, 0x110101), (14, 0x110101), (16, 0x110000)], load_addr: &[0x10000], store_addr: &[0x10000] }, // E7
-    Flow { kind: Kind::Next, len: 1, outs: &[(1, 0x2), (9, 0x2), (14, 0x2)], load_addr: &[], store_addr: &[] }, // E8
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x10901), (8, 0x10101), (9, 0x10101), (13, 0x10101), (14, 0x10101)], load_addr: &[], store_addr: &[] }, // E9
-    Flow { kind: Kind::Next, len: 1, outs: &[], load_addr: &[], store_addr: &[] }, // EA
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x10901), (8, 0x10101), (9, 0x10101), (13, 0x10101), (14, 0x10101)], load_addr: &[], store_addr: &[] }, // EB
-    Flow { kind: Kind::Next, len: 3, outs: &[(8, 0x130002), (9, 0x130002), (14, 0x130002)], load_addr: &[0x30000], store_addr: &[] }, // EC
-    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130901), (8, 0x130101), (9, 0x130101), (13, 0x130101), (14, 0x130101)], load_addr: &[0x30000], store_addr: &[] }, // ED
-    Flow { kind: Kind::Next, len: 3, outs: &[(9, 0x130000), (14, 0x130000), (16, 0x130000)], load_addr: &[0x30000], store_addr: &[0x30000] }, // EE
-    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130901), (8, 0x130101), (9, 0x130101), (13, 0x130101), (14, 0x130101), (16, 0x130000)], load_addr: &[0x30000], store_addr: &[0x30000] }, // EF
-    Flow { kind: Kind::Branch, len: 2, outs: &[(31, 0x200)], load_addr: &[], store_addr: &[] }, // F0
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x710905), (8, 0x710105), (9, 0x710105), (13, 0x710105), (14, 0x710105)], load_addr: &[0x10000, 0x10000, 0x310004], store_addr: &[] }, // F1
-    Flow { kind: Kind::Jam, len: 1, outs: &[], load_addr: &[], store_addr: &[] }, // F2
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x710905), (8, 0x710105), (9, 0x710105), (13, 0x710105), (14, 0x710105), (16, 0x710004)], load_addr: &[0x10000, 0x10000, 0x310004], store_addr: &[0x310004] }, // F3
-    Flow { kind: Kind::Next, len: 2, outs: &[], load_addr: &[0x10002], store_addr: &[] }, // F4
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x110903), (8, 0x110103), (9, 0x110103), (13, 0x110103), (14, 0x110103)], load_addr: &[0x10002], store_addr: &[] }, // F5
-    Flow { kind: Kind::Next, len: 2, outs: &[(9, 0x110002), (14, 0x110002), (16, 0x110002)], load_addr: &[0x10002], store_addr: &[0x10002] }, // F6
-    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x110903), (8, 0x110103), (9, 0x110103), (13, 0x110103), (14, 0x110103), (16, 0x110002)], load_addr: &[0x10002], store_addr: &[0x10002] }, // F7
-    Flow { kind: Kind::Next, len: 1, outs: &[(11, 0x0)], load_addr: &[], store_addr: &[] }, // F8
-    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130905), (8, 0x130105), (9, 0x130105), (13, 0x130105), (14, 0x130105)], load_addr: &[0x30004], store_addr: &[] }, // F9
-    Flow { kind: Kind::Next, len: 1, outs: &[], load_addr: &[], store_addr: &[] }, // FA
-    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130905), (8, 0x130105), (9, 0x130105), (13, 0x130105), (14, 0x130105), (16, 0x130004)], load_addr: &[0x30004], store_addr: &[0x30004] }, // FB
-    Flow { kind: Kind::Next, len: 3, outs: &[], load_addr: &[0x30002], store_addr: &[] }, // FC
-    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130903), (8, 0x130103), (9, 0x130103), (13, 0x130103), (14, 0x130103)], load_addr: &[0x30002], store_addr: &[] }, // FD
-    Flow { kind: Kind::Next, len: 3, outs: &[(9, 0x130002), (14, 0x130002), (16, 0x130002)], load_addr: &[0x30002], store_addr: &[0x30002] }, // FE
-    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130903), (8, 0x130103), (9, 0x130103), (13, 0x130103), (14, 0x130103), (16, 0x130002)], load_addr: &[0x30002], store_addr: &[0x30002] }, // FF
+    Flow { kind: Kind::Brk, len: 1, outs: &[], load_addr: &[], store_addr: &[], vals: &[] }, // 00
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x710003), (9, 0x710003), (14, 0x710003)], load_addr: &[0x10002, 0x10002, 0x310002], store_addr: &[], vals: &[(0, 0x400001), (9, 0x400001), (14, 0x400001)] }, // 01
+    Flow { kind: Kind::Jam, len: 1, outs: &[], load_addr: &[], store_addr: &[], vals: &[] }, // 02
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x710003), (8, 0x710002), (9, 0x710003), (14, 0x710003), (16, 0x710002)], load_addr: &[0x10002, 0x10002, 0x310002], store_addr: &[0x310002], vals: &[(0, 0x400001), (8, 0x400000), (9, 0x400001), (14, 0x400001), (16, 0x400000)] }, // 03
+    Flow { kind: Kind::Next, len: 2, outs: &[], load_addr: &[0x10000], store_addr: &[], vals: &[] }, // 04
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x110001), (9, 0x110001), (14, 0x110001)], load_addr: &[0x10000], store_addr: &[], vals: &[(0, 0x100001), (9, 0x100001), (14, 0x100001)] }, // 05
+    Flow { kind: Kind::Next, len: 2, outs: &[(8, 0x110000), (9, 0x110000), (14, 0x110000), (16, 0x110000)], load_addr: &[0x10000], store_addr: &[0x10000], vals: &[(8, 0x100000), (9, 0x100000), (14, 0x100000), (16, 0x100000)] }, // 06
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x110001), (8, 0x110000), (9, 0x110001), (14, 0x110001), (16, 0x110000)], load_addr: &[0x10000], store_addr: &[0x10000], vals: &[(0, 0x100001), (8, 0x100000), (9, 0x100001), (14, 0x100001), (16, 0x100000)] }, // 07
+    Flow { kind: Kind::Next, len: 1, outs: &[(3, 0x8), (16, 0x6f00)], load_addr: &[], store_addr: &[0x8], vals: &[(3, 0x8), (16, 0x6f00)] }, // 08
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x10001), (9, 0x10001), (14, 0x10001)], load_addr: &[], store_addr: &[], vals: &[(0, 0x10001), (9, 0x10001), (14, 0x10001)] }, // 09
+    Flow { kind: Kind::Next, len: 1, outs: &[(0, 0x1), (8, 0x1), (9, 0x1), (14, 0x1)], load_addr: &[], store_addr: &[], vals: &[(0, 0x1), (8, 0x1), (9, 0x1), (14, 0x1)] }, // 0A
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x10001), (8, 0x10001), (9, 0x10001), (14, 0x10001)], load_addr: &[], store_addr: &[], vals: &[(0, 0x10001), (8, 0x10001), (9, 0x10001), (14, 0x10001)] }, // 0B
+    Flow { kind: Kind::Next, len: 3, outs: &[], load_addr: &[0x30000], store_addr: &[], vals: &[] }, // 0C
+    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130001), (9, 0x130001), (14, 0x130001)], load_addr: &[0x30000], store_addr: &[], vals: &[(0, 0x100001), (9, 0x100001), (14, 0x100001)] }, // 0D
+    Flow { kind: Kind::Next, len: 3, outs: &[(8, 0x130000), (9, 0x130000), (14, 0x130000), (16, 0x130000)], load_addr: &[0x30000], store_addr: &[0x30000], vals: &[(8, 0x100000), (9, 0x100000), (14, 0x100000), (16, 0x100000)] }, // 0E
+    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130001), (8, 0x130000), (9, 0x130001), (14, 0x130001), (16, 0x130000)], load_addr: &[0x30000], store_addr: &[0x30000], vals: &[(0, 0x100001), (8, 0x100000), (9, 0x100001), (14, 0x100001), (16, 0x100000)] }, // 0F
+    Flow { kind: Kind::Branch, len: 2, outs: &[(31, 0x4000)], load_addr: &[], store_addr: &[], vals: &[(31, 0x4000)] }, // 10
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x710005), (9, 0x710005), (14, 0x710005)], load_addr: &[0x10000, 0x10000, 0x310004], store_addr: &[], vals: &[(0, 0x400001), (9, 0x400001), (14, 0x400001)] }, // 11
+    Flow { kind: Kind::Jam, len: 1, outs: &[], load_addr: &[], store_addr: &[], vals: &[] }, // 12
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x710005), (8, 0x710004), (9, 0x710005), (14, 0x710005), (16, 0x710004)], load_addr: &[0x10000, 0x10000, 0x310004], store_addr: &[0x310004], vals: &[(0, 0x400001), (8, 0x400000), (9, 0x400001), (14, 0x400001), (16, 0x400000)] }, // 13
+    Flow { kind: Kind::Next, len: 2, outs: &[], load_addr: &[0x10002], store_addr: &[], vals: &[] }, // 14
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x110003), (9, 0x110003), (14, 0x110003)], load_addr: &[0x10002], store_addr: &[], vals: &[(0, 0x100001), (9, 0x100001), (14, 0x100001)] }, // 15
+    Flow { kind: Kind::Next, len: 2, outs: &[(8, 0x110002), (9, 0x110002), (14, 0x110002), (16, 0x110002)], load_addr: &[0x10002], store_addr: &[0x10002], vals: &[(8, 0x100000), (9, 0x100000), (14, 0x100000), (16, 0x100000)] }, // 16
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x110003), (8, 0x110002), (9, 0x110003), (14, 0x110003), (16, 0x110002)], load_addr: &[0x10002], store_addr: &[0x10002], vals: &[(0, 0x100001), (8, 0x100000), (9, 0x100001), (14, 0x100001), (16, 0x100000)] }, // 17
+    Flow { kind: Kind::Next, len: 1, outs: &[(8, 0x0)], load_addr: &[], store_addr: &[], vals: &[(8, 0x0)] }, // 18
+    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130005), (9, 0x130005), (14, 0x130005)], load_addr: &[0x30004], store_addr: &[], vals: &[(0, 0x100001), (9, 0x100001), (14, 0x100001)] }, // 19
+    Flow { kind: Kind::Next, len: 1, outs: &[], load_addr: &[], store_addr: &[], vals: &[] }, // 1A
+    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130005), (8, 0x130004), (9, 0x130005), (14, 0x130005), (16, 0x130004)], load_addr: &[0x30004], store_addr: &[0x30004], vals: &[(0, 0x100001), (8, 0x100000), (9, 0x100001), (14, 0x100001), (16, 0x100000)] }, // 1B
+    Flow { kind: Kind::Next, len: 3, outs: &[], load_addr: &[0x30002], store_addr: &[], vals: &[] }, // 1C
+    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130003), (9, 0x130003), (14, 0x130003)], load_addr: &[0x30002], store_addr: &[], vals: &[(0, 0x100001), (9, 0x100001), (14, 0x100001)] }, // 1D
+    Flow { kind: Kind::Next, len: 3, outs: &[(8, 0x130002), (9, 0x130002), (14, 0x130002), (16, 0x130002)], load_addr: &[0x30002], store_addr: &[0x30002], vals: &[(8, 0x100000), (9, 0x100000), (14, 0x100000), (16, 0x100000)] }, // 1E
+    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130003), (8, 0x130002), (9, 0x130003), (14, 0x130003), (16, 0x130002)], load_addr: &[0x30002], store_addr: &[0x30002], vals: &[(0, 0x100001), (8, 0x100000), (9, 0x100001), (14, 0x100001), (16, 0x100000)] }, // 1F
+    Flow { kind: Kind::Jsr, len: 3, outs: &[], load_addr: &[], store_addr: &[], vals: &[] }, // 20
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x710003), (9, 0x710003), (14, 0x710003)], load_addr: &[0x10002, 0x10002, 0x310002], store_addr: &[], vals: &[(0, 0x400001), (9, 0x400001), (14, 0x400001)] }, // 21
+    Flow { kind: Kind::Jam, len: 1, outs: &[], load_addr: &[], store_addr: &[], vals: &[] }, // 22
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x710103), (8, 0x710002), (9, 0x710103), (14, 0x710103), (16, 0x710102)], load_addr: &[0x10002, 0x10002, 0x310002], store_addr: &[0x310002], vals: &[(0, 0x400101), (8, 0x400000), (9, 0x400101), (14, 0x400101), (16, 0x400100)] }, // 23
+    Flow { kind: Kind::Next, len: 2, outs: &[(9, 0x110001), (13, 0x110000), (14, 0x110000)], load_addr: &[0x10000], store_addr: &[], vals: &[(9, 0x100001), (13, 0x100000), (14, 0x100000)] }, // 24
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x110001), (9, 0x110001), (14, 0x110001)], load_addr: &[0x10000], store_addr: &[], vals: &[(0, 0x100001), (9, 0x100001), (14, 0x100001)] }, // 25
+    Flow { kind: Kind::Next, len: 2, outs: &[(8, 0x110000), (9, 0x110100), (14, 0x110100), (16, 0x110100)], load_addr: &[0x10000], store_addr: &[0x10000], vals: &[(8, 0x100000), (9, 0x100100), (14, 0x100100), (16, 0x100100)] }, // 26
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x110101), (8, 0x110000), (9, 0x110101), (14, 0x110101), (16, 0x110100)], load_addr: &[0x10000], store_addr: &[0x10000], vals: &[(0, 0x100101), (8, 0x100000), (9, 0x100101), (14, 0x100101), (16, 0x100100)] }, // 27
+    Flow { kind: Kind::Next, len: 1, outs: &[(3, 0x8), (8, 0x100008), (9, 0x100008), (10, 0x100008), (11, 0x100008), (13, 0x100008), (14, 0x100008)], load_addr: &[0x8], store_addr: &[], vals: &[(3, 0x8), (8, 0x100000), (9, 0x100000), (10, 0x100000), (11, 0x100000), (13, 0x100000), (14, 0x100000)] }, // 28
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x10001), (9, 0x10001), (14, 0x10001)], load_addr: &[], store_addr: &[], vals: &[(0, 0x10001), (9, 0x10001), (14, 0x10001)] }, // 29
+    Flow { kind: Kind::Next, len: 1, outs: &[(0, 0x101), (8, 0x1), (9, 0x101), (14, 0x101)], load_addr: &[], store_addr: &[], vals: &[(0, 0x101), (8, 0x1), (9, 0x101), (14, 0x101)] }, // 2A
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x10001), (8, 0x10001), (9, 0x10001), (14, 0x10001)], load_addr: &[], store_addr: &[], vals: &[(0, 0x10001), (8, 0x10001), (9, 0x10001), (14, 0x10001)] }, // 2B
+    Flow { kind: Kind::Next, len: 3, outs: &[(9, 0x130001), (13, 0x130000), (14, 0x130000)], load_addr: &[0x30000], store_addr: &[], vals: &[(9, 0x100001), (13, 0x100000), (14, 0x100000)] }, // 2C
+    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130001), (9, 0x130001), (14, 0x130001)], load_addr: &[0x30000], store_addr: &[], vals: &[(0, 0x100001), (9, 0x100001), (14, 0x100001)] }, // 2D
+    Flow { kind: Kind::Next, len: 3, outs: &[(8, 0x130000), (9, 0x130100), (14, 0x130100), (16, 0x130100)], load_addr: &[0x30000], store_addr: &[0x30000], vals: &[(8, 0x100000), (9, 0x100100), (14, 0x100100), (16, 0x100100)] }, // 2E
+    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130101), (8, 0x130000), (9, 0x130101), (14, 0x130101), (16, 0x130100)], load_addr: &[0x30000], store_addr: &[0x30000], vals: &[(0, 0x100101), (8, 0x100000), (9, 0x100101), (14, 0x100101), (16, 0x100100)] }, // 2F
+    Flow { kind: Kind::Branch, len: 2, outs: &[(31, 0x4000)], load_addr: &[], store_addr: &[], vals: &[(31, 0x4000)] }, // 30
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x710005), (9, 0x710005), (14, 0x710005)], load_addr: &[0x10000, 0x10000, 0x310004], store_addr: &[], vals: &[(0, 0x400001), (9, 0x400001), (14, 0x400001)] }, // 31
+    Flow { kind: Kind::Jam, len: 1, outs: &[], load_addr: &[], store_addr: &[], vals: &[] }, // 32
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x710105), (8, 0x710004), (9, 0x710105), (14, 0x710105), (16, 0x710104)], load_addr: &[0x10000, 0x10000, 0x310004], store_addr: &[0x310004], vals: &[(0, 0x400101), (8, 0x400000), (9, 0x400101), (14, 0x400101), (16, 0x400100)] }, // 33
+    Flow { kind: Kind::Next, len: 2, outs: &[], load_addr: &[0x10002], store_addr: &[], vals: &[] }, // 34
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x110003), (9, 0x110003), (14, 0x110003)], load_addr: &[0x10002], store_addr: &[], vals: &[(0, 0x100001), (9, 0x100001), (14, 0x100001)] }, // 35
+    Flow { kind: Kind::Next, len: 2, outs: &[(8, 0x110002), (9, 0x110102), (14, 0x110102), (16, 0x110102)], load_addr: &[0x10002], store_addr: &[0x10002], vals: &[(8, 0x100000), (9, 0x100100), (14, 0x100100), (16, 0x100100)] }, // 36
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x110103), (8, 0x110002), (9, 0x110103), (14, 0x110103), (16, 0x110102)], load_addr: &[0x10002], store_addr: &[0x10002], vals: &[(0, 0x100101), (8, 0x100000), (9, 0x100101), (14, 0x100101), (16, 0x100100)] }, // 37
+    Flow { kind: Kind::Next, len: 1, outs: &[(8, 0x0)], load_addr: &[], store_addr: &[], vals: &[(8, 0x0)] }, // 38
+    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130005), (9, 0x130005), (14, 0x130005)], load_addr: &[0x30004], store_addr: &[], vals: &[(0, 0x100001), (9, 0x100001), (14, 0x100001)] }, // 39
+    Flow { kind: Kind::Next, len: 1, outs: &[], load_addr: &[], store_addr: &[], vals: &[] }, // 3A
+    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130105), (8, 0x130004), (9, 0x130105), (14, 0x130105), (16, 0x130104)], load_addr: &[0x30004], store_addr: &[0x30004], vals: &[(0, 0x100101), (8, 0x100000), (9, 0x100101), (14, 0x100101), (16, 0x100100)] }, // 3B
+    Flow { kind: Kind::Next, len: 3, outs: &[], load_addr: &[0x30002], store_addr: &[], vals: &[] }, // 3C
+    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130003), (9, 0x130003), (14, 0x130003)], load_addr: &[0x30002], store_addr: &[], vals: &[(0, 0x100001), (9, 0x100001), (14, 0x100001)] }, // 3D
+    Flow { kind: Kind::Next, len: 3, outs: &[(8, 0x130002), (9, 0x130102), (14, 0x130102), (16, 0x130102)], load_addr: &[0x30002], store_addr: &[0x30002], vals: &[(8, 0x100000), (9, 0x100100), (14, 0x100100), (16, 0x100100)] }, // 3E
+    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130103), (8, 0x130002), (9, 0x130103), (14, 0x130103), (16, 0x130102)], load_addr: &[0x30002], store_addr: &[0x30002], vals: &[(0, 0x100101), (8, 0x100000), (9, 0x100101), (14, 0x100101), (16, 0x100100)] }, // 3F
+    Flow { kind: Kind::Rti, len: 1, outs: &[], load_addr: &[], store_addr: &[], vals: &[] }, // 40
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x710003), (9, 0x710003), (14, 0x710003)], load_addr: &[0x10002, 0x10002, 0x310002], store_addr: &[], vals: &[(0, 0x400001), (9, 0x400001), (14, 0x400001)] }, // 41
+    Flow { kind: Kind::Jam, len: 1, outs: &[], load_addr: &[], store_addr: &[], vals: &[] }, // 42
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x710003), (8, 0x710002), (9, 0x710003), (14, 0x710003), (16, 0x710002)], load_addr: &[0x10002, 0x10002, 0x310002], store_addr: &[0x310002], vals: &[(0, 0x400001), (8, 0x400000), (9, 0x400001), (14, 0x400001), (16, 0x400000)] }, // 43
+    Flow { kind: Kind::Next, len: 2, outs: &[], load_addr: &[0x10000], store_addr: &[], vals: &[] }, // 44
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x110001), (9, 0x110001), (14, 0x110001)], load_addr: &[0x10000], store_addr: &[], vals: &[(0, 0x100001), (9, 0x100001), (14, 0x100001)] }, // 45
+    Flow { kind: Kind::Next, len: 2, outs: &[(8, 0x110000), (9, 0x110000), (14, 0x110000), (16, 0x110000)], load_addr: &[0x10000], store_addr: &[0x10000], vals: &[(8, 0x100000), (9, 0x100000), (14, 0x100000), (16, 0x100000)] }, // 46
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x110001), (8, 0x110000), (9, 0x110001), (14, 0x110001), (16, 0x110000)], load_addr: &[0x10000], store_addr: &[0x10000], vals: &[(0, 0x100001), (8, 0x100000), (9, 0x100001), (14, 0x100001), (16, 0x100000)] }, // 47
+    Flow { kind: Kind::Next, len: 1, outs: &[(3, 0x8), (16, 0x1)], load_addr: &[], store_addr: &[0x8], vals: &[(3, 0x8), (16, 0x1)] }, // 48
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x10001), (9, 0x10001), (14, 0x10001)], load_addr: &[], store_addr: &[], vals: &[(0, 0x10001), (9, 0x10001), (14, 0x10001)] }, // 49
+    Flow { kind: Kind::Next, len: 1, outs: &[(0, 0x1), (8, 0x1), (9, 0x1), (14, 0x1)], load_addr: &[], store_addr: &[], vals: &[(0, 0x1), (8, 0x1), (9, 0x1), (14, 0x1)] }, // 4A
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x10001), (8, 0x10001), (9, 0x10001), (14, 0x10001)], load_addr: &[], store_addr: &[], vals: &[(0, 0x10001), (8, 0x10001), (9, 0x10001), (14, 0x10001)] }, // 4B
+    Flow { kind: Kind::Jmp, len: 3, outs: &[], load_addr: &[], store_addr: &[], vals: &[] }, // 4C
+    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130001), (9, 0x130001), (14, 0x130001)], load_addr: &[0x30000], store_addr: &[], vals: &[(0, 0x100001), (9, 0x100001), (14, 0x100001)] }, // 4D
+    Flow { kind: Kind::Next, len: 3, outs: &[(8, 0x130000), (9, 0x130000), (14, 0x130000), (16, 0x130000)], load_addr: &[0x30000], store_addr: &[0x30000], vals: &[(8, 0x100000), (9, 0x100000), (14, 0x100000), (16, 0x100000)] }, // 4E
+    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130001), (8, 0x130000), (9, 0x130001), (14, 0x130001), (16, 0x130000)], load_addr: &[0x30000], store_addr: &[0x30000], vals: &[(0, 0x100001), (8, 0x100000), (9, 0x100001), (14, 0x100001), (16, 0x100000)] }, // 4F
+    Flow { kind: Kind::Branch, len: 2, outs: &[(31, 0x2000)], load_addr: &[], store_addr: &[], vals: &[(31, 0x2000)] }, // 50
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x710005), (9, 0x710005), (14, 0x710005)], load_addr: &[0x10000, 0x10000, 0x310004], store_addr: &[], vals: &[(0, 0x400001), (9, 0x400001), (14, 0x400001)] }, // 51
+    Flow { kind: Kind::Jam, len: 1, outs: &[], load_addr: &[], store_addr: &[], vals: &[] }, // 52
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x710005), (8, 0x710004), (9, 0x710005), (14, 0x710005), (16, 0x710004)], load_addr: &[0x10000, 0x10000, 0x310004], store_addr: &[0x310004], vals: &[(0, 0x400001), (8, 0x400000), (9, 0x400001), (14, 0x400001), (16, 0x400000)] }, // 53
+    Flow { kind: Kind::Next, len: 2, outs: &[], load_addr: &[0x10002], store_addr: &[], vals: &[] }, // 54
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x110003), (9, 0x110003), (14, 0x110003)], load_addr: &[0x10002], store_addr: &[], vals: &[(0, 0x100001), (9, 0x100001), (14, 0x100001)] }, // 55
+    Flow { kind: Kind::Next, len: 2, outs: &[(8, 0x110002), (9, 0x110002), (14, 0x110002), (16, 0x110002)], load_addr: &[0x10002], store_addr: &[0x10002], vals: &[(8, 0x100000), (9, 0x100000), (14, 0x100000), (16, 0x100000)] }, // 56
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x110003), (8, 0x110002), (9, 0x110003), (14, 0x110003), (16, 0x110002)], load_addr: &[0x10002], store_addr: &[0x10002], vals: &[(0, 0x100001), (8, 0x100000), (9, 0x100001), (14, 0x100001), (16, 0x100000)] }, // 57
+    Flow { kind: Kind::Next, len: 1, outs: &[(10, 0x0)], load_addr: &[], store_addr: &[], vals: &[(10, 0x0)] }, // 58
+    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130005), (9, 0x130005), (14, 0x130005)], load_addr: &[0x30004], store_addr: &[], vals: &[(0, 0x100001), (9, 0x100001), (14, 0x100001)] }, // 59
+    Flow { kind: Kind::Next, len: 1, outs: &[], load_addr: &[], store_addr: &[], vals: &[] }, // 5A
+    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130005), (8, 0x130004), (9, 0x130005), (14, 0x130005), (16, 0x130004)], load_addr: &[0x30004], store_addr: &[0x30004], vals: &[(0, 0x100001), (8, 0x100000), (9, 0x100001), (14, 0x100001), (16, 0x100000)] }, // 5B
+    Flow { kind: Kind::Next, len: 3, outs: &[], load_addr: &[0x30002], store_addr: &[], vals: &[] }, // 5C
+    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130003), (9, 0x130003), (14, 0x130003)], load_addr: &[0x30002], store_addr: &[], vals: &[(0, 0x100001), (9, 0x100001), (14, 0x100001)] }, // 5D
+    Flow { kind: Kind::Next, len: 3, outs: &[(8, 0x130002), (9, 0x130002), (14, 0x130002), (16, 0x130002)], load_addr: &[0x30002], store_addr: &[0x30002], vals: &[(8, 0x100000), (9, 0x100000), (14, 0x100000), (16, 0x100000)] }, // 5E
+    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130003), (8, 0x130002), (9, 0x130003), (14, 0x130003), (16, 0x130002)], load_addr: &[0x30002], store_addr: &[0x30002], vals: &[(0, 0x100001), (8, 0x100000), (9, 0x100001), (14, 0x100001), (16, 0x100000)] }, // 5F
+    Flow { kind: Kind::Rts, len: 1, outs: &[], load_addr: &[], store_addr: &[], vals: &[] }, // 60
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x710903), (8, 0x710903), (9, 0x710103), (13, 0x710903), (14, 0x710903)], load_addr: &[0x10002, 0x10002, 0x310002], store_addr: &[], vals: &[(0, 0x400901), (8, 0x400901), (9, 0x400101), (13, 0x400901), (14, 0x400901)] }, // 61
+    Flow { kind: Kind::Jam, len: 1, outs: &[], load_addr: &[], store_addr: &[], vals: &[] }, // 62
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x710903), (8, 0x710903), (9, 0x710103), (13, 0x710903), (14, 0x710903), (16, 0x710102)], load_addr: &[0x10002, 0x10002, 0x310002], store_addr: &[0x310002], vals: &[(0, 0x400901), (8, 0x400901), (9, 0x400101), (13, 0x400901), (14, 0x400901), (16, 0x400100)] }, // 63
+    Flow { kind: Kind::Next, len: 2, outs: &[], load_addr: &[0x10000], store_addr: &[], vals: &[] }, // 64
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x110901), (8, 0x110901), (9, 0x110101), (13, 0x110901), (14, 0x110901)], load_addr: &[0x10000], store_addr: &[], vals: &[(0, 0x100901), (8, 0x100901), (9, 0x100101), (13, 0x100901), (14, 0x100901)] }, // 65
+    Flow { kind: Kind::Next, len: 2, outs: &[(8, 0x110000), (9, 0x110100), (14, 0x110100), (16, 0x110100)], load_addr: &[0x10000], store_addr: &[0x10000], vals: &[(8, 0x100000), (9, 0x100100), (14, 0x100100), (16, 0x100100)] }, // 66
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x110901), (8, 0x110901), (9, 0x110101), (13, 0x110901), (14, 0x110901), (16, 0x110100)], load_addr: &[0x10000], store_addr: &[0x10000], vals: &[(0, 0x100901), (8, 0x100901), (9, 0x100101), (13, 0x100901), (14, 0x100901), (16, 0x100100)] }, // 67
+    Flow { kind: Kind::Next, len: 1, outs: &[(0, 0x100008), (3, 0x8), (9, 0x100008), (14, 0x100008)], load_addr: &[0x8], store_addr: &[], vals: &[(0, 0x100000), (3, 0x8), (9, 0x100000), (14, 0x100000)] }, // 68
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x10901), (8, 0x10901), (9, 0x10101), (13, 0x10901), (14, 0x10901)], load_addr: &[], store_addr: &[], vals: &[(0, 0x10901), (8, 0x10901), (9, 0x10101), (13, 0x10901), (14, 0x10901)] }, // 69
+    Flow { kind: Kind::Next, len: 1, outs: &[(0, 0x101), (8, 0x1), (9, 0x101), (14, 0x101)], load_addr: &[], store_addr: &[], vals: &[(0, 0x101), (8, 0x1), (9, 0x101), (14, 0x101)] }, // 6A
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x10901), (8, 0x10901), (9, 0x10101), (13, 0x10101), (14, 0x10101)], load_addr: &[], store_addr: &[], vals: &[(0, 0x10901), (8, 0x10901), (9, 0x10101), (13, 0x10101), (14, 0x10101)] }, // 6B
+    Flow { kind: Kind::JmpInd, len: 3, outs: &[], load_addr: &[], store_addr: &[], vals: &[] }, // 6C
+    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130901), (8, 0x130901), (9, 0x130101), (13, 0x130901), (14, 0x130901)], load_addr: &[0x30000], store_addr: &[], vals: &[(0, 0x100901), (8, 0x100901), (9, 0x100101), (13, 0x100901), (14, 0x100901)] }, // 6D
+    Flow { kind: Kind::Next, len: 3, outs: &[(8, 0x130000), (9, 0x130100), (14, 0x130100), (16, 0x130100)], load_addr: &[0x30000], store_addr: &[0x30000], vals: &[(8, 0x100000), (9, 0x100100), (14, 0x100100), (16, 0x100100)] }, // 6E
+    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130901), (8, 0x130901), (9, 0x130101), (13, 0x130901), (14, 0x130901), (16, 0x130100)], load_addr: &[0x30000], store_addr: &[0x30000], vals: &[(0, 0x100901), (8, 0x100901), (9, 0x100101), (13, 0x100901), (14, 0x100901), (16, 0x100100)] }, // 6F
+    Flow { kind: Kind::Branch, len: 2, outs: &[(31, 0x2000)], load_addr: &[], store_addr: &[], vals: &[(31, 0x2000)] }, // 70
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x710905), (8, 0x710905), (9, 0x710105), (13, 0x710905), (14, 0x710905)], load_addr: &[0x10000, 0x10000, 0x310004], store_addr: &[], vals: &[(0, 0x400901), (8, 0x400901), (9, 0x400101), (13, 0x400901), (14, 0x400901)] }, // 71
+    Flow { kind: Kind::Jam, len: 1, outs: &[], load_addr: &[], store_addr: &[], vals: &[] }, // 72
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x710905), (8, 0x710905), (9, 0x710105), (13, 0x710905), (14, 0x710905), (16, 0x710104)], load_addr: &[0x10000, 0x10000, 0x310004], store_addr: &[0x310004], vals: &[(0, 0x400901), (8, 0x400901), (9, 0x400101), (13, 0x400901), (14, 0x400901), (16, 0x400100)] }, // 73
+    Flow { kind: Kind::Next, len: 2, outs: &[], load_addr: &[0x10002], store_addr: &[], vals: &[] }, // 74
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x110903), (8, 0x110903), (9, 0x110103), (13, 0x110903), (14, 0x110903)], load_addr: &[0x10002], store_addr: &[], vals: &[(0, 0x100901), (8, 0x100901), (9, 0x100101), (13, 0x100901), (14, 0x100901)] }, // 75
+    Flow { kind: Kind::Next, len: 2, outs: &[(8, 0x110002), (9, 0x110102), (14, 0x110102), (16, 0x110102)], load_addr: &[0x10002], store_addr: &[0x10002], vals: &[(8, 0x100000), (9, 0x100100), (14, 0x100100), (16, 0x100100)] }, // 76
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x110903), (8, 0x110903), (9, 0x110103), (13, 0x110903), (14, 0x110903), (16, 0x110102)], load_addr: &[0x10002], store_addr: &[0x10002], vals: &[(0, 0x100901), (8, 0x100901), (9, 0x100101), (13, 0x100901), (14, 0x100901), (16, 0x100100)] }, // 77
+    Flow { kind: Kind::Next, len: 1, outs: &[(10, 0x0)], load_addr: &[], store_addr: &[], vals: &[(10, 0x0)] }, // 78
+    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130905), (8, 0x130905), (9, 0x130105), (13, 0x130905), (14, 0x130905)], load_addr: &[0x30004], store_addr: &[], vals: &[(0, 0x100901), (8, 0x100901), (9, 0x100101), (13, 0x100901), (14, 0x100901)] }, // 79
+    Flow { kind: Kind::Next, len: 1, outs: &[], load_addr: &[], store_addr: &[], vals: &[] }, // 7A
+    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130905), (8, 0x130905), (9, 0x130105), (13, 0x130905), (14, 0x130905), (16, 0x130104)], load_addr: &[0x30004], store_addr: &[0x30004], vals: &[(0, 0x100901), (8, 0x100901), (9, 0x100101), (13, 0x100901), (14, 0x100901), (16, 0x100100)] }, // 7B
+    Flow { kind: Kind::Next, len: 3, outs: &[], load_addr: &[0x30002], store_addr: &[], vals: &[] }, // 7C
+    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130903), (8, 0x130903), (9, 0x130103), (13, 0x130903), (14, 0x130903)], load_addr: &[0x30002], store_addr: &[], vals: &[(0, 0x100901), (8, 0x100901), (9, 0x100101), (13, 0x100901), (14, 0x100901)] }, // 7D
+    Flow { kind: Kind::Next, len: 3, outs: &[(8, 0x130002), (9, 0x130102), (14, 0x130102), (16, 0x130102)], load_addr: &[0x30002], store_addr: &[0x30002], vals: &[(8, 0x100000), (9, 0x100100), (14, 0x100100), (16, 0x100100)] }, // 7E
+    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130903), (8, 0x130903), (9, 0x130103), (13, 0x130903), (14, 0x130903), (16, 0x130102)], load_addr: &[0x30002], store_addr: &[0x30002], vals: &[(0, 0x100901), (8, 0x100901), (9, 0x100101), (13, 0x100901), (14, 0x100901), (16, 0x100100)] }, // 7F
+    Flow { kind: Kind::Next, len: 2, outs: &[], load_addr: &[], store_addr: &[], vals: &[] }, // 80
+    Flow { kind: Kind::Next, len: 2, outs: &[(16, 0x1)], load_addr: &[0x10002, 0x10002], store_addr: &[0x310002], vals: &[(16, 0x1)] }, // 81
+    Flow { kind: Kind::Next, len: 2, outs: &[], load_addr: &[], store_addr: &[], vals: &[] }, // 82
+    Flow { kind: Kind::Next, len: 2, outs: &[(16, 0x3)], load_addr: &[0x10002, 0x10002], store_addr: &[0x310002], vals: &[(16, 0x3)] }, // 83
+    Flow { kind: Kind::Next, len: 2, outs: &[(16, 0x4)], load_addr: &[], store_addr: &[0x10000], vals: &[(16, 0x4)] }, // 84
+    Flow { kind: Kind::Next, len: 2, outs: &[(16, 0x1)], load_addr: &[], store_addr: &[0x10000], vals: &[(16, 0x1)] }, // 85
+    Flow { kind: Kind::Next, len: 2, outs: &[(16, 0x2)], load_addr: &[], store_addr: &[0x10000], vals: &[(16, 0x2)] }, // 86
+    Flow { kind: Kind::Next, len: 2, outs: &[(16, 0x3)], load_addr: &[], store_addr: &[0x10000], vals: &[(16, 0x3)] }, // 87
+    Flow { kind: Kind::Next, len: 1, outs: &[(2, 0x4), (9, 0x4), (14, 0x4)], load_addr: &[], store_addr: &[], vals: &[(2, 0x4), (9, 0x4), (14, 0x4)] }, // 88
+    Flow { kind: Kind::Next, len: 2, outs: &[], load_addr: &[], store_addr: &[], vals: &[] }, // 89
+    Flow { kind: Kind::Next, len: 1, outs: &[(0, 0x2), (9, 0x2), (14, 0x2)], load_addr: &[], store_addr: &[], vals: &[(0, 0x2), (9, 0x2), (14, 0x2)] }, // 8A
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x10003), (9, 0x10003), (14, 0x10003)], load_addr: &[], store_addr: &[], vals: &[(0, 0x10003), (9, 0x10003), (14, 0x10003)] }, // 8B
+    Flow { kind: Kind::Next, len: 3, outs: &[(16, 0x4)], load_addr: &[], store_addr: &[0x30000], vals: &[(16, 0x4)] }, // 8C
+    Flow { kind: Kind::Next, len: 3, outs: &[(16, 0x1)], load_addr: &[], store_addr: &[0x30000], vals: &[(16, 0x1)] }, // 8D
+    Flow { kind: Kind::Next, len: 3, outs: &[(16, 0x2)], load_addr: &[], store_addr: &[0x30000], vals: &[(16, 0x2)] }, // 8E
+    Flow { kind: Kind::Next, len: 3, outs: &[(16, 0x3)], load_addr: &[], store_addr: &[0x30000], vals: &[(16, 0x3)] }, // 8F
+    Flow { kind: Kind::Branch, len: 2, outs: &[(31, 0x100)], load_addr: &[], store_addr: &[], vals: &[(31, 0x100)] }, // 90
+    Flow { kind: Kind::Next, len: 2, outs: &[(16, 0x1)], load_addr: &[0x10000, 0x10000], store_addr: &[0x310004], vals: &[(16, 0x1)] }, // 91
+    Flow { kind: Kind::Jam, len: 1, outs: &[], load_addr: &[], store_addr: &[], vals: &[] }, // 92
+    Flow { kind: Kind::Next, len: 2, outs: &[(16, 0x210003)], load_addr: &[0x10000, 0x10000], store_addr: &[0x310007], vals: &[(16, 0x200003)] }, // 93
+    Flow { kind: Kind::Next, len: 2, outs: &[(16, 0x4)], load_addr: &[], store_addr: &[0x10002], vals: &[(16, 0x4)] }, // 94
+    Flow { kind: Kind::Next, len: 2, outs: &[(16, 0x1)], load_addr: &[], store_addr: &[0x10002], vals: &[(16, 0x1)] }, // 95
+    Flow { kind: Kind::Next, len: 2, outs: &[(16, 0x2)], load_addr: &[], store_addr: &[0x10004], vals: &[(16, 0x2)] }, // 96
+    Flow { kind: Kind::Next, len: 2, outs: &[(16, 0x3)], load_addr: &[], store_addr: &[0x10004], vals: &[(16, 0x3)] }, // 97
+    Flow { kind: Kind::Next, len: 1, outs: &[(0, 0x4), (9, 0x4), (14, 0x4)], load_addr: &[], store_addr: &[], vals: &[(0, 0x4), (9, 0x4), (14, 0x4)] }, // 98
+    Flow { kind: Kind::Next, len: 3, outs: &[(16, 0x1)], load_addr: &[], store_addr: &[0x30004], vals: &[(16, 0x1)] }, // 99
+    Flow { kind: Kind::Next, len: 1, outs: &[(3, 0x2)], load_addr: &[], store_addr: &[], vals: &[(3, 0x2)] }, // 9A
+    Flow { kind: Kind::Next, len: 3, outs: &[(3, 0x3), (16, 0x20003)], load_addr: &[], store_addr: &[0x30007], vals: &[(3, 0x3), (16, 0x20003)] }, // 9B
+    Flow { kind: Kind::Next, len: 3, outs: &[(16, 0x20004)], load_addr: &[], store_addr: &[0x30006], vals: &[(16, 0x20004)] }, // 9C
+    Flow { kind: Kind::Next, len: 3, outs: &[(16, 0x1)], load_addr: &[], store_addr: &[0x30002], vals: &[(16, 0x1)] }, // 9D
+    Flow { kind: Kind::Next, len: 3, outs: &[(16, 0x20002)], load_addr: &[], store_addr: &[0x30006], vals: &[(16, 0x20002)] }, // 9E
+    Flow { kind: Kind::Next, len: 3, outs: &[(16, 0x20003)], load_addr: &[], store_addr: &[0x30007], vals: &[(16, 0x20003)] }, // 9F
+    Flow { kind: Kind::Next, len: 2, outs: &[(2, 0x10000), (9, 0x10000), (14, 0x10000)], load_addr: &[], store_addr: &[], vals: &[(2, 0x10000), (9, 0x10000), (14, 0x10000)] }, // A0
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x710002), (9, 0x710002), (14, 0x710002)], load_addr: &[0x10002, 0x10002, 0x310002], store_addr: &[], vals: &[(0, 0x400000), (9, 0x400000), (14, 0x400000)] }, // A1
+    Flow { kind: Kind::Next, len: 2, outs: &[(1, 0x10000), (9, 0x10000), (14, 0x10000)], load_addr: &[], store_addr: &[], vals: &[(1, 0x10000), (9, 0x10000), (14, 0x10000)] }, // A2
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x710002), (1, 0x710002), (9, 0x710002), (14, 0x710002)], load_addr: &[0x10002, 0x10002, 0x310002], store_addr: &[], vals: &[(0, 0x400000), (1, 0x400000), (9, 0x400000), (14, 0x400000)] }, // A3
+    Flow { kind: Kind::Next, len: 2, outs: &[(2, 0x110000), (9, 0x110000), (14, 0x110000)], load_addr: &[0x10000], store_addr: &[], vals: &[(2, 0x100000), (9, 0x100000), (14, 0x100000)] }, // A4
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x110000), (9, 0x110000), (14, 0x110000)], load_addr: &[0x10000], store_addr: &[], vals: &[(0, 0x100000), (9, 0x100000), (14, 0x100000)] }, // A5
+    Flow { kind: Kind::Next, len: 2, outs: &[(1, 0x110000), (9, 0x110000), (14, 0x110000)], load_addr: &[0x10000], store_addr: &[], vals: &[(1, 0x100000), (9, 0x100000), (14, 0x100000)] }, // A6
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x110000), (1, 0x110000), (9, 0x110000), (14, 0x110000)], load_addr: &[0x10000], store_addr: &[], vals: &[(0, 0x100000), (1, 0x100000), (9, 0x100000), (14, 0x100000)] }, // A7
+    Flow { kind: Kind::Next, len: 1, outs: &[(2, 0x1), (9, 0x1), (14, 0x1)], load_addr: &[], store_addr: &[], vals: &[(2, 0x1), (9, 0x1), (14, 0x1)] }, // A8
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x10000), (9, 0x10000), (14, 0x10000)], load_addr: &[], store_addr: &[], vals: &[(0, 0x10000), (9, 0x10000), (14, 0x10000)] }, // A9
+    Flow { kind: Kind::Next, len: 1, outs: &[(1, 0x1), (9, 0x1), (14, 0x1)], load_addr: &[], store_addr: &[], vals: &[(1, 0x1), (9, 0x1), (14, 0x1)] }, // AA
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x10001), (1, 0x10001), (9, 0x10001), (14, 0x10001)], load_addr: &[], store_addr: &[], vals: &[(0, 0x10001), (1, 0x10001), (9, 0x10001), (14, 0x10001)] }, // AB
+    Flow { kind: Kind::Next, len: 3, outs: &[(2, 0x130000), (9, 0x130000), (14, 0x130000)], load_addr: &[0x30000], store_addr: &[], vals: &[(2, 0x100000), (9, 0x100000), (14, 0x100000)] }, // AC
+    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130000), (9, 0x130000), (14, 0x130000)], load_addr: &[0x30000], store_addr: &[], vals: &[(0, 0x100000), (9, 0x100000), (14, 0x100000)] }, // AD
+    Flow { kind: Kind::Next, len: 3, outs: &[(1, 0x130000), (9, 0x130000), (14, 0x130000)], load_addr: &[0x30000], store_addr: &[], vals: &[(1, 0x100000), (9, 0x100000), (14, 0x100000)] }, // AE
+    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130000), (1, 0x130000), (9, 0x130000), (14, 0x130000)], load_addr: &[0x30000], store_addr: &[], vals: &[(0, 0x100000), (1, 0x100000), (9, 0x100000), (14, 0x100000)] }, // AF
+    Flow { kind: Kind::Branch, len: 2, outs: &[(31, 0x100)], load_addr: &[], store_addr: &[], vals: &[(31, 0x100)] }, // B0
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x710004), (9, 0x710004), (14, 0x710004)], load_addr: &[0x10000, 0x10000, 0x310004], store_addr: &[], vals: &[(0, 0x400000), (9, 0x400000), (14, 0x400000)] }, // B1
+    Flow { kind: Kind::Jam, len: 1, outs: &[], load_addr: &[], store_addr: &[], vals: &[] }, // B2
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x710004), (1, 0x710004), (9, 0x710004), (14, 0x710004)], load_addr: &[0x10000, 0x10000, 0x310004], store_addr: &[], vals: &[(0, 0x400000), (1, 0x400000), (9, 0x400000), (14, 0x400000)] }, // B3
+    Flow { kind: Kind::Next, len: 2, outs: &[(2, 0x110002), (9, 0x110002), (14, 0x110002)], load_addr: &[0x10002], store_addr: &[], vals: &[(2, 0x100000), (9, 0x100000), (14, 0x100000)] }, // B4
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x110002), (9, 0x110002), (14, 0x110002)], load_addr: &[0x10002], store_addr: &[], vals: &[(0, 0x100000), (9, 0x100000), (14, 0x100000)] }, // B5
+    Flow { kind: Kind::Next, len: 2, outs: &[(1, 0x110004), (9, 0x110004), (14, 0x110004)], load_addr: &[0x10004], store_addr: &[], vals: &[(1, 0x100000), (9, 0x100000), (14, 0x100000)] }, // B6
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x110004), (1, 0x110004), (9, 0x110004), (14, 0x110004)], load_addr: &[0x10004], store_addr: &[], vals: &[(0, 0x100000), (1, 0x100000), (9, 0x100000), (14, 0x100000)] }, // B7
+    Flow { kind: Kind::Next, len: 1, outs: &[(13, 0x0)], load_addr: &[], store_addr: &[], vals: &[(13, 0x0)] }, // B8
+    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130004), (9, 0x130004), (14, 0x130004)], load_addr: &[0x30004], store_addr: &[], vals: &[(0, 0x100000), (9, 0x100000), (14, 0x100000)] }, // B9
+    Flow { kind: Kind::Next, len: 1, outs: &[(1, 0x8), (9, 0x8), (14, 0x8)], load_addr: &[], store_addr: &[], vals: &[(1, 0x8), (9, 0x8), (14, 0x8)] }, // BA
+    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x13000c), (1, 0x13000c), (3, 0x13000c), (9, 0x13000c), (14, 0x13000c)], load_addr: &[0x30004], store_addr: &[], vals: &[(0, 0x100008), (1, 0x100008), (3, 0x100008), (9, 0x100008), (14, 0x100008)] }, // BB
+    Flow { kind: Kind::Next, len: 3, outs: &[(2, 0x130002), (9, 0x130002), (14, 0x130002)], load_addr: &[0x30002], store_addr: &[], vals: &[(2, 0x100000), (9, 0x100000), (14, 0x100000)] }, // BC
+    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130002), (9, 0x130002), (14, 0x130002)], load_addr: &[0x30002], store_addr: &[], vals: &[(0, 0x100000), (9, 0x100000), (14, 0x100000)] }, // BD
+    Flow { kind: Kind::Next, len: 3, outs: &[(1, 0x130004), (9, 0x130004), (14, 0x130004)], load_addr: &[0x30004], store_addr: &[], vals: &[(1, 0x100000), (9, 0x100000), (14, 0x100000)] }, // BE
+    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130004), (1, 0x130004), (9, 0x130004), (14, 0x130004)], load_addr: &[0x30004], store_addr: &[], vals: &[(0, 0x100000), (1, 0x100000), (9, 0x100000), (14, 0x100000)] }, // BF
+    Flow { kind: Kind::Next, len: 2, outs: &[(8, 0x10004), (9, 0x10004), (14, 0x10004)], load_addr: &[], store_addr: &[], vals: &[(8, 0x10004), (9, 0x10004), (14, 0x10004)] }, // C0
+    Flow { kind: Kind::Next, len: 2, outs: &[(8, 0x710003), (9, 0x710003), (14, 0x710003)], load_addr: &[0x10002, 0x10002, 0x310002], store_addr: &[], vals: &[(8, 0x400001), (9, 0x400001), (14, 0x400001)] }, // C1
+    Flow { kind: Kind::Next, len: 2, outs: &[], load_addr: &[], store_addr: &[], vals: &[] }, // C2
+    Flow { kind: Kind::Next, len: 2, outs: &[(8, 0x710003), (9, 0x710003), (14, 0x710003), (16, 0x710002)], load_addr: &[0x10002, 0x10002, 0x310002], store_addr: &[0x310002], vals: &[(8, 0x400001), (9, 0x400001), (14, 0x400001), (16, 0x400000)] }, // C3
+    Flow { kind: Kind::Next, len: 2, outs: &[(8, 0x110004), (9, 0x110004), (14, 0x110004)], load_addr: &[0x10000], store_addr: &[], vals: &[(8, 0x100004), (9, 0x100004), (14, 0x100004)] }, // C4
+    Flow { kind: Kind::Next, len: 2, outs: &[(8, 0x110001), (9, 0x110001), (14, 0x110001)], load_addr: &[0x10000], store_addr: &[], vals: &[(8, 0x100001), (9, 0x100001), (14, 0x100001)] }, // C5
+    Flow { kind: Kind::Next, len: 2, outs: &[(9, 0x110000), (14, 0x110000), (16, 0x110000)], load_addr: &[0x10000], store_addr: &[0x10000], vals: &[(9, 0x100000), (14, 0x100000), (16, 0x100000)] }, // C6
+    Flow { kind: Kind::Next, len: 2, outs: &[(8, 0x110001), (9, 0x110001), (14, 0x110001), (16, 0x110000)], load_addr: &[0x10000], store_addr: &[0x10000], vals: &[(8, 0x100001), (9, 0x100001), (14, 0x100001), (16, 0x100000)] }, // C7
+    Flow { kind: Kind::Next, len: 1, outs: &[(2, 0x4), (9, 0x4), (14, 0x4)], load_addr: &[], store_addr: &[], vals: &[(2, 0x4), (9, 0x4), (14, 0x4)] }, // C8
+    Flow { kind: Kind::Next, len: 2, outs: &[(8, 0x10001), (9, 0x10001), (14, 0x10001)], load_addr: &[], store_addr: &[], vals: &[(8, 0x10001), (9, 0x10001), (14, 0x10001)] }, // C9
+    Flow { kind: Kind::Next, len: 1, outs: &[(1, 0x2), (9, 0x2), (14, 0x2)], load_addr: &[], store_addr: &[], vals: &[(1, 0x2), (9, 0x2), (14, 0x2)] }, // CA
+    Flow { kind: Kind::Next, len: 2, outs: &[(1, 0x10003), (8, 0x10003), (9, 0x10003), (14, 0x10003)], load_addr: &[], store_addr: &[], vals: &[(1, 0x10003), (8, 0x10003), (9, 0x10003), (14, 0x10003)] }, // CB
+    Flow { kind: Kind::Next, len: 3, outs: &[(8, 0x130004), (9, 0x130004), (14, 0x130004)], load_addr: &[0x30000], store_addr: &[], vals: &[(8, 0x100004), (9, 0x100004), (14, 0x100004)] }, // CC
+    Flow { kind: Kind::Next, len: 3, outs: &[(8, 0x130001), (9, 0x130001), (14, 0x130001)], load_addr: &[0x30000], store_addr: &[], vals: &[(8, 0x100001), (9, 0x100001), (14, 0x100001)] }, // CD
+    Flow { kind: Kind::Next, len: 3, outs: &[(9, 0x130000), (14, 0x130000), (16, 0x130000)], load_addr: &[0x30000], store_addr: &[0x30000], vals: &[(9, 0x100000), (14, 0x100000), (16, 0x100000)] }, // CE
+    Flow { kind: Kind::Next, len: 3, outs: &[(8, 0x130001), (9, 0x130001), (14, 0x130001), (16, 0x130000)], load_addr: &[0x30000], store_addr: &[0x30000], vals: &[(8, 0x100001), (9, 0x100001), (14, 0x100001), (16, 0x100000)] }, // CF
+    Flow { kind: Kind::Branch, len: 2, outs: &[(31, 0x200)], load_addr: &[], store_addr: &[], vals: &[(31, 0x200)] }, // D0
+    Flow { kind: Kind::Next, len: 2, outs: &[(8, 0x710005), (9, 0x710005), (14, 0x710005)], load_addr: &[0x10000, 0x10000, 0x310004], store_addr: &[], vals: &[(8, 0x400001), (9, 0x400001), (14, 0x400001)] }, // D1
+    Flow { kind: Kind::Jam, len: 1, outs: &[], load_addr: &[], store_addr: &[], vals: &[] }, // D2
+    Flow { kind: Kind::Next, len: 2, outs: &[(8, 0x710005), (9, 0x710005), (14, 0x710005), (16, 0x710004)], load_addr: &[0x10000, 0x10000, 0x310004], store_addr: &[0x310004], vals: &[(8, 0x400001), (9, 0x400001), (14, 0x400001), (16, 0x400000)] }, // D3
+    Flow { kind: Kind::Next, len: 2, outs: &[], load_addr: &[0x10002], store_addr: &[], vals: &[] }, // D4
+    Flow { kind: Kind::Next, len: 2, outs: &[(8, 0x110003), (9, 0x110003), (14, 0x110003)], load_addr: &[0x10002], store_addr: &[], vals: &[(8, 0x100001), (9, 0x100001), (14, 0x100001)] }, // D5
+    Flow { kind: Kind::Next, len: 2, outs: &[(9, 0x110002), (14, 0x110002), (16, 0x110002)], load_addr: &[0x10002], store_addr: &[0x10002], vals: &[(9, 0x100000), (14, 0x100000), (16, 0x100000)] }, // D6
+    Flow { kind: Kind::Next, len: 2, outs: &[(8, 0x110003), (9, 0x110003), (14, 0x110003), (16, 0x110002)], load_addr: &[0x10002], store_addr: &[0x10002], vals: &[(8, 0x100001), (9, 0x100001), (14, 0x100001), (16, 0x100000)] }, // D7
+    Flow { kind: Kind::Next, len: 1, outs: &[(11, 0x0)], load_addr: &[], store_addr: &[], vals: &[(11, 0x0)] }, // D8
+    Flow { kind: Kind::Next, len: 3, outs: &[(8, 0x130005), (9, 0x130005), (14, 0x130005)], load_addr: &[0x30004], store_addr: &[], vals: &[(8, 0x100001), (9, 0x100001), (14, 0x100001)] }, // D9
+    Flow { kind: Kind::Next, len: 1, outs: &[], load_addr: &[], store_addr: &[], vals: &[] }, // DA
+    Flow { kind: Kind::Next, len: 3, outs: &[(8, 0x130005), (9, 0x130005), (14, 0x130005), (16, 0x130004)], load_addr: &[0x30004], store_addr: &[0x30004], vals: &[(8, 0x100001), (9, 0x100001), (14, 0x100001), (16, 0x100000)] }, // DB
+    Flow { kind: Kind::Next, len: 3, outs: &[], load_addr: &[0x30002], store_addr: &[], vals: &[] }, // DC
+    Flow { kind: Kind::Next, len: 3, outs: &[(8, 0x130003), (9, 0x130003), (14, 0x130003)], load_addr: &[0x30002], store_addr: &[], vals: &[(8, 0x100001), (9, 0x100001), (14, 0x100001)] }, // DD
+    Flow { kind: Kind::Next, len: 3, outs: &[(9, 0x130002), (14, 0x130002), (16, 0x130002)], load_addr: &[0x30002], store_addr: &[0x30002], vals: &[(9, 0x100000), (14, 0x100000), (16, 0x100000)] }, // DE
+    Flow { kind: Kind::Next, len: 3, outs: &[(8, 0x130003), (9, 0x130003), (14, 0x130003), (16, 0x130002)], load_addr: &[0x30002], store_addr: &[0x30002], vals: &[(8, 0x100001), (9, 0x100001), (14, 0x100001), (16, 0x100000)] }, // DF
+    Flow { kind: Kind::Next, len: 2, outs: &[(8, 0x10002), (9, 0x10002), (14, 0x10002)], load_addr: &[], store_addr: &[], vals: &[(8, 0x10002), (9, 0x10002), (14, 0x10002)] }, // E0
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x710903), (8, 0x710103), (9, 0x710103), (13, 0x710103), (14, 0x710103)], load_addr: &[0x10002, 0x10002, 0x310002], store_addr: &[], vals: &[(0, 0x400901), (8, 0x400101), (9, 0x400101), (13, 0x400101), (14, 0x400101)] }, // E1
+    Flow { kind: Kind::Next, len: 2, outs: &[], load_addr: &[], store_addr: &[], vals: &[] }, // E2
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x710903), (8, 0x710103), (9, 0x710103), (13, 0x710103), (14, 0x710103), (16, 0x710002)], load_addr: &[0x10002, 0x10002, 0x310002], store_addr: &[0x310002], vals: &[(0, 0x400901), (8, 0x400101), (9, 0x400101), (13, 0x400101), (14, 0x400101), (16, 0x400000)] }, // E3
+    Flow { kind: Kind::Next, len: 2, outs: &[(8, 0x110002), (9, 0x110002), (14, 0x110002)], load_addr: &[0x10000], store_addr: &[], vals: &[(8, 0x100002), (9, 0x100002), (14, 0x100002)] }, // E4
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x110901), (8, 0x110101), (9, 0x110101), (13, 0x110101), (14, 0x110101)], load_addr: &[0x10000], store_addr: &[], vals: &[(0, 0x100901), (8, 0x100101), (9, 0x100101), (13, 0x100101), (14, 0x100101)] }, // E5
+    Flow { kind: Kind::Next, len: 2, outs: &[(9, 0x110000), (14, 0x110000), (16, 0x110000)], load_addr: &[0x10000], store_addr: &[0x10000], vals: &[(9, 0x100000), (14, 0x100000), (16, 0x100000)] }, // E6
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x110901), (8, 0x110101), (9, 0x110101), (13, 0x110101), (14, 0x110101), (16, 0x110000)], load_addr: &[0x10000], store_addr: &[0x10000], vals: &[(0, 0x100901), (8, 0x100101), (9, 0x100101), (13, 0x100101), (14, 0x100101), (16, 0x100000)] }, // E7
+    Flow { kind: Kind::Next, len: 1, outs: &[(1, 0x2), (9, 0x2), (14, 0x2)], load_addr: &[], store_addr: &[], vals: &[(1, 0x2), (9, 0x2), (14, 0x2)] }, // E8
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x10901), (8, 0x10101), (9, 0x10101), (13, 0x10101), (14, 0x10101)], load_addr: &[], store_addr: &[], vals: &[(0, 0x10901), (8, 0x10101), (9, 0x10101), (13, 0x10101), (14, 0x10101)] }, // E9
+    Flow { kind: Kind::Next, len: 1, outs: &[], load_addr: &[], store_addr: &[], vals: &[] }, // EA
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x10901), (8, 0x10101), (9, 0x10101), (13, 0x10101), (14, 0x10101)], load_addr: &[], store_addr: &[], vals: &[(0, 0x10901), (8, 0x10101), (9, 0x10101), (13, 0x10101), (14, 0x10101)] }, // EB
+    Flow { kind: Kind::Next, len: 3, outs: &[(8, 0x130002), (9, 0x130002), (14, 0x130002)], load_addr: &[0x30000], store_addr: &[], vals: &[(8, 0x100002), (9, 0x100002), (14, 0x100002)] }, // EC
+    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130901), (8, 0x130101), (9, 0x130101), (13, 0x130101), (14, 0x130101)], load_addr: &[0x30000], store_addr: &[], vals: &[(0, 0x100901), (8, 0x100101), (9, 0x100101), (13, 0x100101), (14, 0x100101)] }, // ED
+    Flow { kind: Kind::Next, len: 3, outs: &[(9, 0x130000), (14, 0x130000), (16, 0x130000)], load_addr: &[0x30000], store_addr: &[0x30000], vals: &[(9, 0x100000), (14, 0x100000), (16, 0x100000)] }, // EE
+    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130901), (8, 0x130101), (9, 0x130101), (13, 0x130101), (14, 0x130101), (16, 0x130000)], load_addr: &[0x30000], store_addr: &[0x30000], vals: &[(0, 0x100901), (8, 0x100101), (9, 0x100101), (13, 0x100101), (14, 0x100101), (16, 0x100000)] }, // EF
+    Flow { kind: Kind::Branch, len: 2, outs: &[(31, 0x200)], load_addr: &[], store_addr: &[], vals: &[(31, 0x200)] }, // F0
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x710905), (8, 0x710105), (9, 0x710105), (13, 0x710105), (14, 0x710105)], load_addr: &[0x10000, 0x10000, 0x310004], store_addr: &[], vals: &[(0, 0x400901), (8, 0x400101), (9, 0x400101), (13, 0x400101), (14, 0x400101)] }, // F1
+    Flow { kind: Kind::Jam, len: 1, outs: &[], load_addr: &[], store_addr: &[], vals: &[] }, // F2
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x710905), (8, 0x710105), (9, 0x710105), (13, 0x710105), (14, 0x710105), (16, 0x710004)], load_addr: &[0x10000, 0x10000, 0x310004], store_addr: &[0x310004], vals: &[(0, 0x400901), (8, 0x400101), (9, 0x400101), (13, 0x400101), (14, 0x400101), (16, 0x400000)] }, // F3
+    Flow { kind: Kind::Next, len: 2, outs: &[], load_addr: &[0x10002], store_addr: &[], vals: &[] }, // F4
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x110903), (8, 0x110103), (9, 0x110103), (13, 0x110103), (14, 0x110103)], load_addr: &[0x10002], store_addr: &[], vals: &[(0, 0x100901), (8, 0x100101), (9, 0x100101), (13, 0x100101), (14, 0x100101)] }, // F5
+    Flow { kind: Kind::Next, len: 2, outs: &[(9, 0x110002), (14, 0x110002), (16, 0x110002)], load_addr: &[0x10002], store_addr: &[0x10002], vals: &[(9, 0x100000), (14, 0x100000), (16, 0x100000)] }, // F6
+    Flow { kind: Kind::Next, len: 2, outs: &[(0, 0x110903), (8, 0x110103), (9, 0x110103), (13, 0x110103), (14, 0x110103), (16, 0x110002)], load_addr: &[0x10002], store_addr: &[0x10002], vals: &[(0, 0x100901), (8, 0x100101), (9, 0x100101), (13, 0x100101), (14, 0x100101), (16, 0x100000)] }, // F7
+    Flow { kind: Kind::Next, len: 1, outs: &[(11, 0x0)], load_addr: &[], store_addr: &[], vals: &[(11, 0x0)] }, // F8
+    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130905), (8, 0x130105), (9, 0x130105), (13, 0x130105), (14, 0x130105)], load_addr: &[0x30004], store_addr: &[], vals: &[(0, 0x100901), (8, 0x100101), (9, 0x100101), (13, 0x100101), (14, 0x100101)] }, // F9
+    Flow { kind: Kind::Next, len: 1, outs: &[], load_addr: &[], store_addr: &[], vals: &[] }, // FA
+    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130905), (8, 0x130105), (9, 0x130105), (13, 0x130105), (14, 0x130105), (16, 0x130004)], load_addr: &[0x30004], store_addr: &[0x30004], vals: &[(0, 0x100901), (8, 0x100101), (9, 0x100101), (13, 0x100101), (14, 0x100101), (16, 0x100000)] }, // FB
+    Flow { kind: Kind::Next, len: 3, outs: &[], load_addr: &[0x30002], store_addr: &[], vals: &[] }, // FC
+    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130903), (8, 0x130103), (9, 0x130103), (13, 0x130103), (14, 0x130103)], load_addr: &[0x30002], store_addr: &[], vals: &[(0, 0x100901), (8, 0x100101), (9, 0x100101), (13, 0x100101), (14, 0x100101)] }, // FD
+    Flow { kind: Kind::Next, len: 3, outs: &[(9, 0x130002), (14, 0x130002), (16, 0x130002)], load_addr: &[0x30002], store_addr: &[0x30002], vals: &[(9, 0x100000), (14, 0x100000), (16, 0x100000)] }, // FE
+    Flow { kind: Kind::Next, len: 3, outs: &[(0, 0x130903), (8, 0x130103), (9, 0x130103), (13, 0x130103), (14, 0x130103), (16, 0x130002)], load_addr: &[0x30002], store_addr: &[0x30002], vals: &[(0, 0x100901), (8, 0x100101), (9, 0x100101), (13, 0x100101), (14, 0x100101), (16, 0x100000)] }, // FF
 ];

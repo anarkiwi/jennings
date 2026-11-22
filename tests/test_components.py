@@ -382,6 +382,87 @@ def test_a_learner_runs_in_chunks_and_long_runs_show_progress(monkeypatch):
     assert m.learn(learner, PLAY, 0, 1000, 3) == "sp" and learner.calls == 3
 
 
+def test_a_counter_depends_on_itself_explicitly_but_components_drop_it():
+    ram, s = image("""
+    inc c
+    rts
+c   !byte 0
+""")
+    c = s["c"]
+    flows = C.explicit(ram, PLAY, 4)
+    assert flows.deps[c] == frozenset({c}) and flows.calls == 4
+    assert c not in C.learn(ram, PLAY, 4).deps
+
+
+INDEXED = """
+    ldx pos
+ld  lda table,x
+st  sta $d400
+    inx
+    txa
+    and #3
+    sta pos
+    rts
+pos   !byte 0
+table !byte 1, 2, 3, 4
+"""
+
+
+def test_a_table_read_is_a_constant_by_value_and_its_index_by_address():
+    ram, s = image(INDEXED)
+    pos, ld, st = s["pos"], s["ld"], s["st"]
+    flows = C.explicit(ram, PLAY, 8)
+    assert flows.sites[(st, C.VALUE)] == frozenset({C.CONST + ld})
+    assert flows.sites[(ld, C.LOAD)] == frozenset({pos})
+    assert flows.deps[0xD400] == frozenset({C.CONST + ld})
+    assert flows.deps[pos] == frozenset({pos})
+    assert C.location(C.CONST + ld) == "#$%04X" % ld
+    comps = C.learn(ram, PLAY, 8)
+    assert comps.sites[(st, C.VALUE)] == frozenset({pos})
+    assert comps.feed == frozenset({pos})
+
+
+FLAGGED = """
+    lda flag
+br  beq +
+    lda #1
+    sta out
++   lda flag
+    eor #1
+    sta flag
+    rts
+flag !byte 0
+out  !byte 0
+"""
+
+
+def test_a_store_under_a_branch_is_control_not_an_explicit_flow():
+    ram, s = image(FLAGGED)
+    flag, out, br = s["flag"], s["out"], s["br"]
+    assert flag in C.learn(ram, PLAY, 4).deps[out]
+    flows = C.explicit(ram, PLAY, 4)
+    assert flag not in flows.deps.get(out, ())
+    assert flows.sites[(br, C.CONTROL)] == frozenset({flag})
+
+
+def test_explicit_flows_follow_a_remap_and_zero_reads_are_empty():
+    ram, s = image("""
+ld  lda $0400
+    sta $0401
+st  inc $0402
+    inc $0403
+    rts
+""")
+    table = np.full(0x10000, -1, np.int32)
+    table[0x0400] = 0x0403
+    zero = np.full(0x10000, -1, np.int32)
+    zero[0x0402] = -2
+    flows = C.explicit(ram, PLAY, 4, remap=Remap({s["ld"]: table, s["st"]: zero}))
+    assert flows.deps[0x0401] == frozenset({0x0403})
+    assert flows.deps[0x0403] == frozenset({0x0403})
+    assert (s["st"], C.VALUE) not in flows.sites
+
+
 def test_closures_are_sink_sccs_with_their_ancestors():
     deps = {1: {2}, 2: {1, 3}, 3: {3}, 4: {3}, 5: set()}
     cls, g = C.closures(deps, [1, 2, 3, 4, 5])
@@ -519,9 +600,10 @@ def _loc(x):
     return NAME[x] if isinstance(x, str) else x
 
 
-def reference(ram, calls, control, written):
+def reference(ram, calls, control, written, explicit=False):
     """``(persistent, deps, edges, sites)`` of ``calls`` calls of ``PLAY``, by
-    :func:`jennings.dataflow.flow` on each executed instruction."""
+    :func:`jennings.dataflow.flow` on each executed instruction; ``explicit`` as an explicit
+    ``Learner``."""
     m = C.machine(ram)
     mem = m.memory
     loads, stores = [], []
@@ -563,6 +645,12 @@ def reference(ram, calls, control, written):
             assert not m.jammed
             addrs = []
             got = flow(_Code(code, pc), pc, loads, stores, {1: pc + 1, 2: pc + 2}, addrs)
+            vals = (
+                flow(_Code(code, pc), pc, loads, stores, {1: pc + 1, 2: pc + 2}, addressed=False)
+                if explicit
+                else got
+            )
+            data = set() if op in (0x28, 0x68) else set(loads)
             reads = other["stack"] if kind in ("rts", "rti") else other["ptr"]
             reads = reads if kind in ("rts", "rti", "jmpind", "brk") else []
             writes = other["stack"] if kind in ("jsr", "brk") else []
@@ -578,18 +666,25 @@ def reference(ram, calls, control, written):
             for r in regs:
                 touch(r, True)
 
+            def t(loc, pc=pc, data=data):
+                if explicit and loc in data and loc not in written:
+                    return {C.CONST + pc}
+                return get(loc)
+
             def u(ins):
-                return set().union(*(get(_loc(x)) for x in ins))
+                return set().union(*(t(_loc(x)) for x in ins))
 
             code_t = get(pc)
             ctl = set().union(*(cond.get(b, set()) for b in control.get(pc, ())))
-            base = code_t | ctl
+            base = set() if explicit else code_t | ctl
             ctrl, out = set(code_t), []
-            for dst, ins in got.items():
+            for dst, ins in vals.items():
                 if dst == "PC":
                     ctrl |= u(ins)
                 else:
                     out.append((_loc(dst), u(ins) | base))
+                    if isinstance(dst, int) and op not in (0x08, 0x48):
+                        sites[(pc, C.VALUE)] |= out[-1][1]
             if op not in (0x08, 0x28, 0x48, 0x68):
                 for store, _a, ins in addrs:
                     if u(ins):
@@ -615,7 +710,7 @@ def reference(ram, calls, control, written):
                 touch(loc, False)
                 wrote.add(loc)
                 taint[loc] = s
-                if control.get(pc) and (loc, pc) not in store_sites:
+                if not explicit and control.get(pc) and (loc, pc) not in store_sites:
                     store_sites.add((loc, pc))
                     implicit |= {(loc, b) for b in control[pc]}
         for loc, s in taint.items():
@@ -626,14 +721,15 @@ def reference(ram, calls, control, written):
     persistent = sorted(loc for loc in first & wrote if loc < REG or loc in STATE)
     return (
         persistent,
-        {k: v - {k} for k, v in deps.items() if v - {k}},
+        {k: v for k, v in deps.items() if v},
         edges,
         {k: v for k, v in sites.items() if v},
     )
 
 
+@pytest.mark.parametrize("explicit", [False, True])
 @pytest.mark.parametrize("seed", range(24))
-def test_native_taint_matches_the_flow_reference(seed):
+def test_native_taint_matches_the_flow_reference(seed, explicit):
     rng = random.Random(seed)
     src = _Gen(rng).program()
     ram = bytearray(0x10000)
@@ -643,7 +739,7 @@ def test_native_taint_matches_the_flow_reference(seed):
     ram[0xFFFE], ram[0xFFFF] = syms["irq"] & 0xFF, syms["irq"] >> 8
     calls = 10
     cd, written = C.control(ram, PLAY, calls)
-    learner = Learner(cd, written)
+    learner = Learner(cd, written, explicit)
     assert C.machine(ram).learn(learner, PLAY, 0, C.MAX_CYCLES, calls) == "sp"
     got = learner.learned()
     d = np.frombuffer(got["deps"], np.uint64)
@@ -652,11 +748,11 @@ def test_native_taint_matches_the_flow_reference(seed):
         got_deps[loc].add(src_)
     s = np.frombuffer(got["sites"], np.uint64)
     got_sites = defaultdict(set)
-    for key, loc in zip((s >> 17).tolist(), (s & 0x1FFFF).tolist()):
-        got_sites[(key >> 2, "rwb"[key & 3])].add(loc)
+    for key, loc in zip((s >> 18).tolist(), (s & 0x3FFFF).tolist()):
+        got_sites[(key >> 2, "rwbv"[key & 3])].add(loc)
     e = np.frombuffer(got["edges"], np.uint64)
     written = set(written)
-    want = reference(ram, calls, cd, written)
+    want = reference(ram, calls, cd, written, explicit)
     assert np.frombuffer(got["persistent"], np.uint32).tolist() == want[0]
     assert dict(got_deps) == want[1]
     assert set(zip((e >> 16).tolist(), (e & 0xFFFF).tolist())) == want[2]

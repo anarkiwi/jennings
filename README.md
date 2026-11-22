@@ -53,7 +53,8 @@ model for tests of other 6502 implementations.
 
 `jennings.dataflow.flow` reads each instruction's output-to-input dependencies
 (registers, flags, memory bytes, a branch's condition) off the same lifted pcode the
-MPU executes, given the addresses an observed run accessed.
+MPU executes, given the addresses an observed run accessed; `addressed=False` gives the
+explicit flow, a load's value apart from its address.
 
 `jennings.coverage` records 6502 code coverage (executed bytes, branch directions, data
 accesses, dynamic edges), reports it through coverage.py on listings that can follow computed

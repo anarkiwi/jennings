@@ -13,12 +13,13 @@ from jennings.opcodes import CYCLES, EXTRA, OPCODES, ILLEGAL_OPCODES, MODE_TOKEN
 
 if NATIVE:
     # pylint: disable-next=import-error,no-name-in-module
-    from jennings._core import REG, Core, Learner, Remap
+    from jennings._core import CONST, REG, Core, Learner, Remap
 else:  # pragma: no cover - sdist install without the native core
     Core = Learner = Remap = None
     REG = 0x10000
+    CONST = 0x20000
 
-__all__ = ["MPU", "NativeMPU", "Remap", "Learner", "REG", "ILLEGAL_OPCODES"]
+__all__ = ["MPU", "NativeMPU", "Remap", "Learner", "REG", "CONST", "ILLEGAL_OPCODES"]
 
 # PcodeVM.reg indices: 0-3 A/X/Y/SP; flags C/Z/I/D/B/V/N at 8-14.
 _A, _X, _Y, _SP = 0, 1, 2, 3

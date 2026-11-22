@@ -2,8 +2,8 @@ use std::cell::RefCell;
 
 use jennings_core::{
     access_key, cells_digest, learn, orbit, run_to_rts, run_until, trajectory, Access, Accesses,
-    AddrSet, Bus, Cpu, End, FlatMemory, Hooks, NoHooks, Periodic, Remap, Stop, Until, AS_IS, REG,
-    ZERO,
+    AddrSet, Bus, Cpu, End, FlatMemory, Hooks, NoHooks, Periodic, Remap, Stop, Until, AS_IS, CONST,
+    REG, ZERO,
 };
 
 fn ram(prog: &[(u16, &[u8])]) -> Box<[u8; 0x10000]> {
@@ -619,14 +619,22 @@ fn learn_taints_the_counter_and_its_branch() {
         6,
         &control,
         written,
+        false,
         None,
     );
     assert_eq!(stop, Stop::Sp);
     assert_eq!(l.persistent, [0x10]);
     let dep = |loc: u32, src: u32| (loc as u64) << 32 | src as u64;
     assert!(l.deps.contains(&dep(REG, 0x10)) && l.deps.contains(&dep(REG + 9, 0x10)));
-    assert!(!l.deps.iter().any(|&d| d >> 32 == 0x10));
-    assert!(l.sites.contains(&((0x1006u64 << 2 | 2) << 17 | 0x10)));
+    let own: Vec<u64> = l
+        .deps
+        .iter()
+        .copied()
+        .filter(|&d| d >> 32 == 0x10)
+        .collect();
+    assert_eq!(own, [dep(0x10, 0x10)]);
+    assert!(l.sites.contains(&((0x1006u64 << 2 | 2) << 18 | 0x10)));
+    assert!(l.sites.contains(&((0x100Au64 << 2 | 3) << 18 | 0x10)));
     assert_eq!(l.edges.len(), 7);
     assert_eq!((l.exits, l.written), (vec![0x100C], vec![0x10]));
 }
@@ -643,9 +651,42 @@ fn learn_stops_at_a_call_that_does_not_return() {
         3,
         &[],
         AddrSet::default(),
+        false,
         None,
     );
     assert_eq!(stop, Stop::Cycles);
+}
+
+#[test]
+fn explicit_learn_names_constant_loads_and_drops_control() {
+    // LDX $10; LDA $1100,X; STA $D400; INX; STX $10; RTS
+    let mut m = ram(&[(
+        0x1000,
+        &[
+            0xA6, 0x10, 0xBD, 0x00, 0x11, 0x8D, 0x00, 0xD4, 0xE8, 0x86, 0x10, 0x60,
+        ],
+    )]);
+    let written: AddrSet = [0x10, 0xD400].into_iter().collect();
+    let (l, stop) = learn(
+        &mut Cpu::new(),
+        &mut *m,
+        0x1000,
+        0,
+        1000,
+        3,
+        &[],
+        written,
+        true,
+        None,
+    );
+    assert_eq!(stop, Stop::Sp);
+    let site = |pc: u64, kind: u64, loc: u32| (pc << 2 | kind) << 18 | loc as u64;
+    let dep = |loc: u32, src: u32| (loc as u64) << 32 | src as u64;
+    assert!(l.sites.contains(&site(0x1005, 3, CONST + 0x1002)));
+    assert!(l.sites.contains(&site(0x1002, 0, 0x10)));
+    assert!(l.deps.contains(&dep(0xD400, CONST + 0x1002)));
+    assert!(!l.deps.contains(&dep(0xD400, 0x10)));
+    assert!(l.deps.contains(&dep(0x10, 0x10)));
 }
 
 #[test]
