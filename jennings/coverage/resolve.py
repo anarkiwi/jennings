@@ -11,7 +11,7 @@ from jennings.coverage.vsa import TOP8, TOP16, bits, from_bool, is_single, step,
 from jennings.coverage.vsa import word, writes
 from jennings.isa import is_read, is_rmw, is_store, mode
 
-__all__ = ["DEPTH", "Tables"]
+__all__ = ["DEPTH", "Tables", "split_table"]
 
 DEPTH, PATHS, SPLITS = 16, 32, 1024
 _FLAGS = (8, 9, 10, 11, 13, 14)
@@ -98,6 +98,17 @@ class _View:
             return
         for a in bits(addrs).tolist():
             self.ov[a] = self.byte(a) | vals
+
+
+def split_table(m, lo, hi, n, stride=1, high=None):
+    """``(words, cells)`` of a hand-written split table in ``m``: int64 [n] words, word ``k``
+    the low byte at ``lo + stride * k`` and the high byte at ``hi + stride * k`` (wrapping at
+    ``$FFFF``), or the byte ``high`` for every word when given (``hi`` unused); ``cells`` the
+    addresses of the table's bytes."""
+    m, k = np.asarray(m), stride * np.arange(n)
+    cells = [(lo + k) & 0xFFFF] + ([] if high is not None else [(hi + k) & 0xFFFF])
+    his = np.full(n, high) if high is not None else m[cells[1]]
+    return m[cells[0]].astype(np.int64) | his.astype(np.int64) << 8, np.concatenate(cells)
 
 
 def _base(op, pc, view):

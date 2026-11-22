@@ -448,15 +448,20 @@ class NativeMPU(MPU):
         pcs, cycles, cols = self._core.run_to_rts_traced(pc, acc, max_cycles, regs)
         return Trace(pcs, cycles, cols)
 
-    def run_to_rts_accesses(self, pc, acc, max_cycles, remap=None):
+    # pylint: disable-next=too-many-arguments,too-many-positional-arguments
+    def run_to_rts_accesses(self, pc, acc, max_cycles, remap=None, bases=False):
         """:meth:`run_to_rts_traced`, also returning its data accesses in order.
 
         Returns ``(Trace, accesses)``: ``accesses`` a read-only uint64 :class:`memoryview`,
         one ``pc << 17 | write << 16 | addr`` per data load or store (``pc`` the
-        instruction's start). A :class:`Remap` redirects its instructions' accesses.
+        instruction's start). A :class:`Remap` redirects its instructions' accesses. With
+        ``bases``, ``(Trace, accesses, bases)``: per access a uint16 base address, the operand
+        of an indexed absolute or zero-page mode, the pointer word of ``(zp),Y`` (its pointer
+        bytes based on themselves), else the address accessed (see ``docs/native.md``).
         """
-        pcs, cycles, log = self._core.run_to_rts_accesses(pc, acc, max_cycles, remap)
-        return Trace(pcs, cycles, None), memoryview(log).cast("Q")
+        pcs, cycles, log, based = self._core.run_to_rts_accesses(pc, acc, max_cycles, remap, bases)
+        out = Trace(pcs, cycles, None), memoryview(log).cast("Q")
+        return out + (memoryview(based).cast("H"),) if bases else out
 
     # pylint: disable-next=too-many-arguments,too-many-positional-arguments
     def orbit(self, pc, acc, max_cycles, limit, keep=None, volatile=None, remap=None, cells=None):

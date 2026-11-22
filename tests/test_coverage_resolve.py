@@ -7,7 +7,7 @@ from jennings.assembler import Assembler
 from jennings.coverage import CoverageMPU
 from jennings.coverage.elf import load_elf
 from jennings.coverage.listing import Listing
-from jennings.coverage.resolve import _View
+from jennings.coverage.resolve import _View, split_table
 from jennings.coverage.vsa import TOP8, bits, from_values
 from jennings.devices.mpu6502 import MPU
 
@@ -23,9 +23,11 @@ def _prog(text):
     return mem, labels, (ORG, ORG + len(code) - 1)
 
 
-def _listing(text, resolve=True, cov=None, extra=()):
+def _listing(text, resolve=True, cov=None, extra=(), tables=lambda _: ()):
     mem, labels, span = _prog(text)
-    lst = Listing.disassemble(mem, [ORG, *extra], cov, ranges=[span], resolve=resolve)
+    lst = Listing.disassemble(
+        mem, [ORG, *extra], cov, ranges=[span], resolve=resolve, tables=tables(labels)
+    )
     return lst, labels
 
 
@@ -50,6 +52,35 @@ def test_jmp_indirect_through_split_table_bounded_by_compare():
     plain, _ = _listing(text, resolve=False)
     assert plain.line(labels["h0"]) is None and not plain.resolved.size
     assert ".byte" in plain.source.splitlines()[plain.line(labels["out"])]
+
+
+def test_split_table_words_cells_and_wrap():
+    m = np.zeros(0x10000, np.uint8)
+    m[[0xFFFF, 0x0001, 0x0003]] = [0x10, 0x11, 0x12]
+    m[[0x2000, 0x2002, 0x2004]] = [0xA0, 0xA1, 0xA2]
+    words, cells = split_table(m, 0xFFFF, 0x2000, 3, 2)
+    assert words.tolist() == [0xA010, 0xA111, 0xA212]
+    assert sorted(cells.tolist()) == [1, 3, 0x2000, 0x2002, 0x2004, 0xFFFF]
+    words, cells = split_table(m, 0xFFFF, None, 2, 2, high=0x40)
+    assert words.tolist() == [0x4010, 0x4011] and sorted(cells.tolist()) == [1, 0xFFFF]
+
+
+def test_hand_written_tables_decode_what_the_resolver_cannot():
+    """A dispatch through an unknown zero-page pointer resolves nothing alone; the table
+    given by hand roots its handlers and stays data."""
+    text = (
+        "LDY $10; LDA ($12),Y; STA $20; INY; LDA ($12),Y; STA $21; JMP ($20);"
+        f"{HANDLERS}; tbl: .word h0, h1, h2"
+    )
+    plain, labels = _listing(text)
+    assert plain.line(labels["h1"]) is None
+    for table in (
+        lambda lab: [(lab["tbl"], lab["tbl"] + 1, 3, 2)],
+        lambda lab: [(lab["tbl"], None, 3, 2, lab["h0"] >> 8)],
+    ):
+        lst, labels = _listing(text, tables=table)
+        assert all(lst.line(labels[h]) is not None for h in ("h0", "h1", "h2"))
+        assert lst.line(labels["tbl"]) is None and ".byte" in lst.source
 
 
 def test_rts_dispatch_through_word_table_to_image_end():

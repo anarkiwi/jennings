@@ -182,6 +182,19 @@ def test_sha_crossing_a_page_needs_a():
     assert isa.addresses(m, 0x1000, 0xFF, 0x20, 0xFF, a=0x02)["data"] == [0x0210]
 
 
+def _bases(img, pc, addrs):
+    """The base of each access ``addrs`` of the instruction at ``pc`` by its mode in
+    ``OPCODES``: the operand of an indexed absolute or zero-page mode, the pointer word of
+    ``(zp),Y`` after its two pointer loads, else the address."""
+    md = OPCODES[int(img[pc])][1]
+    b1, b2 = int(img[(pc + 1) & 0xFFFF]), int(img[(pc + 2) & 0xFFFF])
+    if md == "indy":
+        word = int(img[b1]) | int(img[(b1 + 1) & 0xFF]) << 8
+        return addrs[:2] + [word] * (len(addrs) - 2)
+    fixed = {"absx": b1 | b2 << 8, "absy": b1 | b2 << 8, "zpx": b1, "zpy": b1}.get(md)
+    return [a if fixed is None else fixed for a in addrs]
+
+
 @pytest.mark.skipif(not NATIVE, reason="native core not built")
 def test_addresses_are_the_native_cores_accesses():
     """Every opcode from random states, page and zero-page edges included: the addresses
@@ -214,10 +227,11 @@ def test_addresses_are_the_native_cores_accesses():
                 mpu.a, mpu.x, mpu.y, mpu.p = a, x, y, 0x24
                 if logged:
                     mpu.sp = (sp + 2) & 0xFF
-                    _, log = mpu.run_to_rts_accesses(pc, a, 0)
+                    _, log, bases = mpu.run_to_rts_accesses(pc, a, 0, bases=True)
                     got = {k & 0xFFFF for k in log}
                     zp = want["ptr"] if OPCODES[op][1] in ("indx", "indy") else []
                     assert got == set(want["data"] + zp), (hex(op), hex(pc))
+                    assert list(bases) == _bases(img, pc, [k & 0xFFFF for k in log]), hex(op)
                 else:
                     mpu.pc, mpu.sp = pc, sp
                     seen.clear()

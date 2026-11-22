@@ -1045,8 +1045,10 @@ impl Core {
 
     /// As `run_to_rts_traced`, also returning every data access as a little-endian uint64
     /// `pc << 17 | write << 16 | addr` (`pc` the instruction's start), `remap`'s
-    /// instructions' accesses redirected.
-    #[pyo3(signature = (pc, acc, max_cycles, remap=None))]
+    /// instructions' accesses redirected; with `bases` also each access's base
+    /// (`jennings_core::Base`) as a little-endian uint16, else None.
+    #[pyo3(signature = (pc, acc, max_cycles, remap=None, bases=false))]
+    #[allow(clippy::type_complexity)]
     fn run_to_rts_accesses<'py>(
         &self,
         py: Python<'py>,
@@ -1054,15 +1056,21 @@ impl Core {
         acc: i64,
         max_cycles: u64,
         remap: Option<&Bound<'py, PyRemap>>,
+        bases: bool,
     ) -> PyResult<(
         Bound<'py, PyBytes>,
         Bound<'py, PyBytes>,
         Bound<'py, PyBytes>,
+        Option<Bound<'py, PyBytes>>,
     )> {
         let mut tr = Trace::new(false);
         let rm = remap.map(|r| &r.get().0);
-        let log = self.drive(py, true, |cpu, bus, stop| {
-            let mut acc_bus = Accesses::new(bus, rm);
+        let (log, based) = self.drive(py, true, |cpu, bus, stop| {
+            let mut acc_bus = if bases {
+                Accesses::with_bases(bus, rm)
+            } else {
+                Accesses::new(bus, rm)
+            };
             run_to_rts(
                 cpu,
                 &mut acc_bus,
@@ -1073,11 +1081,17 @@ impl Core {
                 Some(&mut tr),
                 || stop.load(Ordering::Relaxed) && stop.swap(false, Ordering::Relaxed),
             );
-            acc_bus.log
+            (acc_bus.log, acc_bus.bases)
         })?;
         let (pcs, cycles, _) = columns(py, tr);
         let bytes: Vec<u8> = log.iter().flat_map(|v| v.to_le_bytes()).collect();
-        Ok((pcs, cycles, PyBytes::new(py, &bytes)))
+        let based: Vec<u8> = based.iter().flat_map(|v| v.to_le_bytes()).collect();
+        Ok((
+            pcs,
+            cycles,
+            PyBytes::new(py, &bytes),
+            bases.then(|| PyBytes::new(py, &based)),
+        ))
     }
 
     /// Calls of `pc` with `acc` (each as `run_to_rts`) repeated until the state a call starts
