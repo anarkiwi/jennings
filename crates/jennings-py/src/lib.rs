@@ -1305,6 +1305,19 @@ impl Core {
         Ok(reason(r))
     }
 
+    /// Set the registers and memory to the state the first call of `census` class `class`
+    /// started from.
+    fn restore(&self, py: Python<'_>, census: &Bound<'_, PyCensus>, class: usize) -> PyResult<()> {
+        let c = census.borrow();
+        if class >= c.0.classes() {
+            return Err(PyValueError::new_err("the census has no such class"));
+        }
+        let cen: &Census = &c.0;
+        self.drive(py, false, |cpu, bus, _| {
+            cen.restore(class, cpu, |a, v| bus.poke(a, v))
+        })
+    }
+
     /// `pysidtracker.emu.run_to_rts_until`: as `run_to_rts`, True on entering `pcs`.
     #[pyo3(signature = (pc, acc, pcs, max_cycles, remap=None))]
     fn run_to_rts_until<'py>(
@@ -1474,22 +1487,41 @@ impl PyCensus {
         self.0.classes()
     }
 
+    /// The class of call `call`, None past the calls run.
+    fn class_of(&self, call: usize) -> Option<u32> {
+        self.0.class(call)
+    }
+
+    /// The first call of class `class`, None past the classes seen.
+    fn first(&self, class: usize) -> Option<usize> {
+        self.0.first(class)
+    }
+
+    /// The census of the first `calls` calls (`jennings_core::Census::prefix`): None unless
+    /// they end the census or precede a class's first call.
+    fn prefix(&self, calls: usize) -> Option<PyCensus> {
+        self.0.prefix(calls).map(PyCensus)
+    }
+
     /// One byte per call per cell, cell after cell: the cells at each call's entry.
     fn columns<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
         PyBytes::new(py, &self.0.columns.concat())
     }
 
-    /// ``{"edges", "exits", "written"}``, each ``(items, calls)`` as little-endian arrays in
-    /// order of first sight: uint64 ``pc << 16 | next``, uint16 PCs ending a call and uint16
-    /// addresses written, each with the uint32 call it was first seen in.
+    /// ``{"edges", "accesses", "exits", "written"}``, each ``(items, calls)`` as little-endian
+    /// arrays in order of first sight: uint64 ``pc << 16 | next``, uint64 ``pc << 19 | kind <<
+    /// 16 | address`` (an access's kind as `Core.learn` notes it, its address before any
+    /// remap), uint16 PCs ending a call and uint16 addresses written, each with the uint32
+    /// call it was first seen in.
     fn firsts<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         let d = PyDict::new(py);
         let at =
             |v: &mut dyn Iterator<Item = u32>| v.flat_map(u32::to_le_bytes).collect::<Vec<u8>>();
-        let e = &self.0.edges;
-        let keys: Vec<u8> = e.iter().flat_map(|x| x.0.to_le_bytes()).collect();
-        let calls = at(&mut e.iter().map(|x| x.1));
-        d.set_item("edges", (PyBytes::new(py, &keys), PyBytes::new(py, &calls)))?;
+        for (name, e) in [("edges", &self.0.edges), ("accesses", &self.0.accesses)] {
+            let keys: Vec<u8> = e.iter().flat_map(|x| x.0.to_le_bytes()).collect();
+            let calls = at(&mut e.iter().map(|x| x.1));
+            d.set_item(name, (PyBytes::new(py, &keys), PyBytes::new(py, &calls)))?;
+        }
         for (name, v) in [("exits", &self.0.exits), ("written", &self.0.written)] {
             let items: Vec<u8> = v.iter().flat_map(|x| x.0.to_le_bytes()).collect();
             let calls = at(&mut v.iter().map(|x| x.1));

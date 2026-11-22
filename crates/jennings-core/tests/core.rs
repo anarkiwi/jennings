@@ -772,6 +772,59 @@ fn census_classes_calls_and_restores_their_entry_state() {
 }
 
 #[test]
+fn a_census_prefix_is_the_census_of_its_calls() {
+    let peek = |b: &mut [u8; 0x10000], a: u16| b[a as usize];
+    let run = |calls| {
+        let (mut m, mut c) = (counter(), Cpu::new());
+        let mut census = Census::new(vec![0x10]);
+        census.run(&mut c, &mut *m, 0x1000, 0, 1000, calls, None, peek, || {
+            false
+        });
+        census
+    };
+    let full = run(6);
+    let data = |c: &Census| {
+        let kind = |a: &(u64, u32)| a.0 >> 16 & 7;
+        let data = c.accesses.iter().filter(|a| matches!(kind(a), 0 | 2));
+        data.copied().collect::<Vec<_>>()
+    };
+    let load = |pc: u64| (pc << 19 | 0x10, 0);
+    let store = |pc: u64, call| (pc << 19 | 2 << 16 | 0x10, call);
+    assert_eq!(
+        data(&full),
+        [
+            load(0x1000),
+            store(0x1000, 0),
+            load(0x1002),
+            store(0x100A, 2)
+        ],
+        "each in the call it is first seen in"
+    );
+    assert!(full.prefix(1).is_none(), "call 1 starts no class");
+    for k in [2, 6] {
+        let (p, fresh) = (full.prefix(k).unwrap(), run(k));
+        assert_eq!((p.calls(), p.classes()), (fresh.calls(), fresh.classes()));
+        assert_eq!(
+            (&p.columns, &p.edges, &p.accesses, &p.written, &p.exits),
+            (
+                &fresh.columns,
+                &fresh.edges,
+                &fresh.accesses,
+                &fresh.written,
+                &fresh.exits
+            )
+        );
+    }
+    let mut p = full.prefix(2).unwrap();
+    let (mut m, mut c) = (counter(), Cpu::new());
+    full.restore(full.class(2).unwrap() as usize, &mut c, |a, v| {
+        m[a as usize] = v
+    });
+    p.run(&mut c, &mut *m, 0x1000, 0, 1000, 4, None, peek, || false);
+    assert_eq!((p.calls(), p.columns.clone()), (6, full.columns.clone()));
+}
+
+#[test]
 fn periods_find_first_repeats_and_where_they_break() {
     let a = [0u8, 1, 2, 0, 1, 2, 0, 1, 2, 0];
     let b = [5u8, 6, 7, 5, 6, 7, 5, 6, 9, 5];

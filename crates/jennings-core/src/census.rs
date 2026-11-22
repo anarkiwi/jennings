@@ -11,11 +11,14 @@ use crate::flow_gen::FLOW;
 use crate::orbit::Keys;
 use crate::run::{AddrSet, Stop};
 use crate::taint::{
-    ended, observed_call, value, FxMap, Observer, LOAD, PC_OUT, READ, STACK_LOAD, STACK_STORE,
-    STORE, STORE0, WRITE,
+    ended, observed_call, value, FxMap, FxSet, Observer, LOAD, PC_OUT, READ, STACK_LOAD,
+    STACK_STORE, STORE, STORE0, WRITE,
 };
 
 const INSTR: u32 = 1 << 31;
+/// The kind of the event after an access that reached a location other than its address: the
+/// address itself.
+const ADDR: u32 = 7;
 const CONSTANT: u32 = 0xFFFFF;
 const NONE: u32 = u32::MAX;
 
@@ -34,6 +37,10 @@ pub struct Census {
     edge_seen: Keys,
     exit_seen: AddrSet,
     wrote_seen: AddrSet,
+    access_seen: FxSet<u64>,
+    /// `(pc << 19 | kind << 16 | address, call)`: the accesses of each instruction, by kind
+    /// (as [`Observer::note`] names it) and the address it named, each first seen in `call`.
+    pub accesses: Vec<(u64, u32)>,
     /// `(pc << 16 | next, call)`: consecutive instructions within a call, each first seen in
     /// `call`.
     pub edges: Vec<(u64, u32)>,
@@ -57,8 +64,11 @@ impl Observer for Census {
     }
 
     #[inline(always)]
-    fn note(&mut self, kind: u8, _addr: u16, c: i32) {
+    fn note(&mut self, kind: u8, addr: u16, c: i32) {
         self.cur.push((kind as u32) << 20 | (c + 2) as u32);
+        if c != addr as i32 {
+            self.cur.push(ADDR << 20 | addr as u32);
+        }
     }
 
     #[inline(always)]
@@ -95,6 +105,8 @@ impl Census {
             edge_seen: Keys::new(1 << 16),
             exit_seen: AddrSet::default(),
             wrote_seen: AddrSet::default(),
+            access_seen: FxSet::default(),
+            accesses: Vec::new(),
             edges: Vec::new(),
             exits: Vec::new(),
             written: Vec::new(),
@@ -183,7 +195,8 @@ impl Census {
     /// [`crate::Learn`] learns calls equal so alike.
     pub(crate) fn canonical(&self, class: u32, constant: impl Fn(u16) -> bool, out: &mut Vec<u32>) {
         out.clear();
-        out.extend(self.classes.events(class).iter().map(|&e| {
+        let events = self.classes.events(class).iter();
+        out.extend(events.filter(|&&e| e >> 20 != ADDR).map(|&e| {
             let (kind, c) = (e >> 20 & 7, (e & 0xFFFFF) as i32 - 2);
             let read = e & INSTR == 0 && matches!(kind as u8, LOAD | STACK_LOAD | READ);
             match read && c >= 0 && !self.wrote_seen.contains(c as u16) && constant(c as u16) {
@@ -241,6 +254,17 @@ impl Census {
             while i < cur.len() && cur[i] & INSTR == 0 {
                 let (kind, c) = ((cur[i] >> 20) as u8, (cur[i] & 0xFFFFF) as i32 - 2);
                 i += 1;
+                if kind as u32 == ADDR {
+                    continue;
+                }
+                let addr = match cur.get(i) {
+                    Some(&n) if n >> 20 == ADDR => n as u16,
+                    _ => c as u16,
+                };
+                let key = (pc as u64) << 19 | (kind as u64) << 16 | addr as u64;
+                if self.access_seen.insert(key) {
+                    self.accesses.push((key, k));
+                }
                 if matches!(kind, STORE | STACK_STORE | WRITE) && c >= 0 {
                     self.dirty(c as u16);
                 }
@@ -275,6 +299,51 @@ impl Census {
         self.dirty(0x100 | sp as u16);
         self.dirty(0x100 | sp.wrapping_sub(1) as u16);
         self.cur = cur;
+    }
+
+    /// The first call of class `class`.
+    pub fn first(&self, class: usize) -> Option<usize> {
+        self.first.get(class).map(|&k| k as usize)
+    }
+
+    /// The census of the first `calls` calls, which end the census or precede a class's first
+    /// call (None otherwise): run on from the state that call starts from ([`Census::restore`]),
+    /// it is the census of calls that agree with these up to there.
+    pub fn prefix(&self, calls: usize) -> Option<Census> {
+        let classes = match self.class.get(calls) {
+            None if calls == self.calls() => self.classes(),
+            Some(&c) if self.first[c as usize] as usize == calls => c as usize,
+            _ => return None,
+        };
+        let dirty = match classes < self.classes() {
+            true => self.snap_at[classes + 1] - self.snap_at[classes],
+            false => self.dirty.len(),
+        };
+        let before = |v: &[(u64, u32)]| v.partition_point(|x| (x.1 as usize) < calls);
+        let mut out = Census::new(self.cells.clone());
+        out.init.clone_from(&self.init);
+        out.class = self.class[..calls].to_vec();
+        for c in 0..classes {
+            out.classes.intern(self.classes.events(c as u32));
+        }
+        out.first = self.first[..classes].to_vec();
+        out.regs = self.regs[..classes].to_vec();
+        out.snap = self.snap[..self.snap_at[classes]].to_vec();
+        out.snap_at = self.snap_at[..=classes].to_vec();
+        for &a in &self.dirty[..dirty] {
+            out.dirty(a);
+        }
+        out.edges = self.edges[..before(&self.edges)].to_vec();
+        out.accesses = self.accesses[..before(&self.accesses)].to_vec();
+        let k = |v: &[(u16, u32)]| v.partition_point(|x| (x.1 as usize) < calls);
+        out.exits = self.exits[..k(&self.exits)].to_vec();
+        out.written = self.written[..k(&self.written)].to_vec();
+        out.edges.iter().for_each(|e| out.edge_seen.insert(e.0));
+        out.access_seen.extend(out.accesses.iter().map(|e| e.0));
+        out.exits.iter().for_each(|e| out.exit_seen.insert(e.0));
+        out.written.iter().for_each(|e| out.wrote_seen.insert(e.0));
+        out.columns = self.columns.iter().map(|c| c[..calls].to_vec()).collect();
+        Some(out)
     }
 
     /// Set `cpu` and, through `poke`, the memory to the state class `class`'s first call
