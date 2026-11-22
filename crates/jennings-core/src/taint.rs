@@ -197,6 +197,7 @@ pub struct Learn {
     pc: u16,
     op: u8,
     prev: Option<u16>,
+    exits: AddrSet,
     active: bool,
 }
 
@@ -213,6 +214,10 @@ pub struct Learned {
     /// `(pc << 2 | kind) << 17 | loc`: `loc` taints the address of a data load (kind 0) or
     /// store (1) at `pc`, or where control goes from `pc` (2).
     pub sites: Vec<u64>,
+    /// The PCs of the instructions that ended a call.
+    pub exits: Vec<u16>,
+    /// The memory some call wrote.
+    pub written: Vec<u16>,
 }
 
 impl Learn {
@@ -269,6 +274,7 @@ impl Learn {
             pc: 0,
             op: 0,
             prev: None,
+            exits: AddrSet::default(),
             active: false,
         }
     }
@@ -540,7 +546,9 @@ impl Learn {
             }
         }
         self.dirty.clear();
-        self.prev = None;
+        if let Some(p) = self.prev.take() {
+            self.exits.insert(p);
+        }
         self.call += 1;
     }
 
@@ -610,6 +618,12 @@ impl Learn {
             deps,
             edges: self.edges.clone().sorted(),
             sites,
+            exits: (0..=0xFFFFu16)
+                .filter(|&a| self.exits.contains(a))
+                .collect(),
+            written: (0..=0xFFFFu16)
+                .filter(|&a| self.wrote[a as usize])
+                .collect(),
         }
     }
 }

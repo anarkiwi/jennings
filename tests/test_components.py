@@ -10,7 +10,7 @@ import pytest
 from deity_informant.lifter import template
 from jennings.acme import assemble
 from jennings.coverage import components as C
-from jennings.coverage.cfg import LEN, control_dependence
+from jennings.coverage.cfg import LEN
 from jennings.dataflow import REGISTERS, flow
 from jennings.devices.mpu6502 import REG, Learner, Remap
 from jennings.isa import addresses
@@ -93,6 +93,32 @@ def test_a_counter_gating_another_is_a_control_dependence():
     cyc = C.cycles(ram, PLAY, comps, 2000)
     assert cyc.closures == {0: (0, 1024)}
     assert comps.feed == frozenset({a}) and C.cover_calls(ram, PLAY, comps, 2000)[0] == 4
+
+
+SHARED = """
+    jsr sub
+    lda a
+br  bne +
+ib  inc b
++   inc a
+    lda a
+    and #3
+    sta a
+    jmp done
+sub lda #0
+done rts
+a !byte 0
+b !byte 0
+"""
+
+
+def test_a_final_rts_shared_with_a_subroutine_still_exits_the_call():
+    ram, s = image(SHARED)
+    comps = C.learn(ram, PLAY, 20)
+    assert s["a"] in comps.deps[s["b"]]
+    assert comps.closures == (frozenset({s["a"], s["b"]}),)
+    cd, _ = C.control(ram, PLAY, 4)
+    assert cd[s["ib"]] == [s["br"]]
 
 
 SMC = """
@@ -309,7 +335,7 @@ def test_a_call_that_never_returns_or_bad_state_raises():
     ram, _ = image("loop jmp loop\n")
     with pytest.raises(RuntimeError, match="'cycles'"):
         C.learn(ram, PLAY, 1, max_cycles=1000)
-    with pytest.raises(RuntimeError, match="jammed"):
+    with pytest.raises(RuntimeError, match="'jam'"):
         C.learn(image("!byte $02\n")[0], PLAY, 1)
     with pytest.raises(ValueError):
         C.machine(b"\0" * 10)
@@ -586,25 +612,32 @@ def test_native_taint_matches_the_flow_reference(seed):
     ram, syms = image(src, ram)
     ram[0xFFFE], ram[0xFFFF] = syms["irq"] & 0xFF, syms["irq"] >> 8
     calls = 10
-    _end, _st, acc, ek = C.machine(ram).orbit(PLAY, 0, C.MAX_CYCLES, calls)
-    keys = np.asarray(acc, np.uint64)
-    written = set(np.unique(keys[(keys >> 16) & 1 == 1] & 0xFFFF).tolist())
-    ek = np.asarray(ek, np.uint64)
-    cd = control_dependence(list(zip((ek >> 16).tolist(), (ek & 0xFFFF).tolist())))
-    learner = Learner({p: sorted(b) for p, b in cd.items()}, sorted(written))
+    cd, written = C.control(ram, PLAY, calls)
+    learner = Learner(cd, written)
     assert C.machine(ram).learn(learner, PLAY, 0, C.MAX_CYCLES, calls) == "sp"
-    pers, dep, edg, sit = learner.learned()
-    d = np.frombuffer(dep, np.uint64)
+    got = learner.learned()
+    d = np.frombuffer(got["deps"], np.uint64)
     got_deps = defaultdict(set)
     for loc, src_ in zip((d >> 32).tolist(), (d & 0xFFFFFFFF).tolist()):
         got_deps[loc].add(src_)
-    s = np.frombuffer(sit, np.uint64)
+    s = np.frombuffer(got["sites"], np.uint64)
     got_sites = defaultdict(set)
     for key, loc in zip((s >> 17).tolist(), (s & 0x1FFFF).tolist()):
         got_sites[(key >> 2, "rwb"[key & 3])].add(loc)
-    e = np.frombuffer(edg, np.uint64)
+    e = np.frombuffer(got["edges"], np.uint64)
+    written = set(written)
     want = reference(ram, calls, cd, written)
-    assert np.frombuffer(pers, np.uint32).tolist() == want[0]
+    assert np.frombuffer(got["persistent"], np.uint32).tolist() == want[0]
     assert dict(got_deps) == want[1]
     assert set(zip((e >> 16).tolist(), (e & 0xFFFF).tolist())) == want[2]
     assert dict(got_sites) == want[3]
+
+
+def test_first_repeats_are_found_on_growing_prefixes():
+    rng = np.random.default_rng(1)
+    for mu, lam, n in ((0, 1, 10), (3, 7, 50), (5000, 30000, 80000), (2, 9000, 9001)):
+        states = rng.permutation(1 << 20)[: mu + lam].astype(np.uint32)
+        seq = np.concatenate([states[:mu], np.resize(states[mu:], n - mu)])
+        sub = np.ascontiguousarray(seq.view(np.uint8).reshape(-1, 4))
+        want = None if n < mu + lam + 1 else (mu, lam)
+        assert C._first_repeat(sub, start=16) == want

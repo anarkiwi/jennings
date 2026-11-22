@@ -28,6 +28,7 @@ __all__ = [
     "Cycles",
     "location",
     "machine",
+    "control",
     "learn",
     "closures",
     "trajectory",
@@ -166,36 +167,46 @@ def _tainted(comps):
     return set().union(*comps.sites.values()) & set(comps.persistent)
 
 
+def _pairs(edges):
+    e = np.frombuffer(edges, np.uint64)
+    return list(zip((e >> 16).tolist(), (e & 0xFFFF).tolist()))
+
+
+def control(state, pc, calls, *, acc=0, max_cycles=MAX_CYCLES, remap=None):
+    """``(control, written)`` of ``calls`` calls of ``pc`` from ``state``: ``{pc: branches}`` it
+    is directly control dependent on (:func:`~jennings.coverage.cfg.control_dependence`, each
+    call's last instruction leading to the exit), and the memory the calls write."""
+    learner = Learner({}, [])
+    m = machine(state)
+    _drive(lambda n: m.learn(learner, pc, acc, max_cycles, n, remap), calls, "edges")
+    got = learner.learned()
+    exits = np.frombuffer(got["exits"], np.uint16).tolist()
+    cd = control_dependence(_pairs(got["edges"]) + [(x, -1) for x in exits])
+    return {p: sorted(b) for p, b in cd.items()}, np.frombuffer(got["written"], np.uint16).tolist()
+
+
 def learn(state, pc, calls, *, acc=0, max_cycles=MAX_CYCLES, remap=None, exclude=(STACK, IO)):
     """:class:`Components` of ``calls`` calls of ``pc`` with ``A = acc`` from ``state`` (see
     :func:`machine`), ``remap`` (a :class:`~jennings.devices.mpu6502.Remap`) applied; addresses
     in ``exclude`` are never persistent."""
-    m = machine(state)
-    end, _states, acc_log, edge_keys = m.orbit(pc, acc, max_cycles, calls, remap=remap)
-    if end == "jam":
-        raise RuntimeError("a call jammed")
-    keys = np.asarray(acc_log, np.uint64)
-    written = np.unique(keys[(keys >> 16) & 1 == 1] & 0xFFFF).tolist()
-    ek = np.asarray(edge_keys, np.uint64)
-    pairs = list(zip((ek >> 16).tolist(), (ek & 0xFFFF).tolist()))
-    exits = {b for _a, b in pairs} - {a for a, _b in pairs}
-    cd = control_dependence(pairs) if exits else {}
-    learner = Learner({p: sorted(b) for p, b in cd.items()}, written)
+    cd, written = control(state, pc, calls, acc=acc, max_cycles=max_cycles, remap=remap)
+    learner = Learner(cd, written)
     m = machine(state)
     _drive(lambda n: m.learn(learner, pc, acc, max_cycles, n, remap), calls, "learn")
-    pers, dep, edg, sit = learner.learned()
+    got = learner.learned()
     persistent = tuple(
-        loc for loc in np.frombuffer(pers, np.uint32).tolist() if not _excluded(loc, exclude)
+        loc
+        for loc in np.frombuffer(got["persistent"], np.uint32).tolist()
+        if not _excluded(loc, exclude)
     )
-    d = np.frombuffer(dep, np.uint64)
+    d = np.frombuffer(got["deps"], np.uint64)
     deps = {}
     for loc, src in zip((d >> 32).tolist(), (d & 0xFFFFFFFF).tolist()):
         deps.setdefault(loc, set()).add(src)
-    s = np.frombuffer(sit, np.uint64)
+    s = np.frombuffer(got["sites"], np.uint64)
     sites = {}
     for key, loc in zip((s >> 17).tolist(), (s & 0x1FFFF).tolist()):
         sites.setdefault((key >> 2, _KINDS[key & 3]), set()).add(loc)
-    e = np.frombuffer(edg, np.uint64)
     cls, g = closures(deps, persistent)
     comps = Components(
         persistent=persistent,
@@ -203,7 +214,7 @@ def learn(state, pc, calls, *, acc=0, max_cycles=MAX_CYCLES, remap=None, exclude
         closures=cls,
         feed=frozenset(),
         feeding=(),
-        edges=frozenset(zip((e >> 16).tolist(), (e & 0xFFFF).tolist())),
+        edges=frozenset(_pairs(got["edges"])),
         sites={k: frozenset(v) for k, v in sites.items()},
         calls=calls,
     )
@@ -226,42 +237,48 @@ def trajectory(state, pc, cells, calls, *, acc=0, max_cycles=MAX_CYCLES, remap=N
     return np.concatenate(rows)
 
 
-def _ids(rows, cols):
-    """Per row, the index of the first row equal to it on ``cols``."""
-    if not cols:
-        return np.zeros(len(rows), np.int64)
-    sub = np.ascontiguousarray(rows[:, cols])
+def _first(sub):
+    """Per row of ``sub``, the index of the first row equal to it."""
     v = sub.view(np.dtype((np.void, sub.shape[1]))).ravel()
     _, first, inv = np.unique(v, return_index=True, return_inverse=True)
     return first[inv.ravel()]
 
 
-def _cycle(f):
-    """``(preperiod, period)`` of the first repeat in the first-index array ``f``, or None."""
-    t = np.flatnonzero(f < np.arange(len(f)))
-    return None if t.size == 0 else (int(f[t[0]]), int(t[0] - f[t[0]]))
-
-
-def _conflict(rows, f, cols):
-    """``(t1, t2, columns)`` of the first entries equal on ``cols`` with unequal successors."""
-    n = len(f) - 1
-    bad = np.flatnonzero(f[f[:n] + 1] != f[1 : n + 1]) if n > 0 else np.empty(0, np.int64)
-    if bad.size == 0:
-        return None
-    t1, t2 = int(f[bad[0]]), int(bad[0])
-    return t1, t2, set(np.flatnonzero(rows[t1] != rows[t2]).tolist()) - set(cols)
+def _first_repeat(sub, start=4096):
+    """``(preperiod, period)`` of the first row of ``sub`` equal to an earlier one, or None;
+    searched on prefixes growing fourfold, so it costs the repeat's position, not ``sub``'s."""
+    n = start
+    while True:
+        m = min(n, len(sub))
+        f = _first(sub[:m])
+        t = np.flatnonzero(f < np.arange(m))
+        if t.size:
+            return int(f[t[0]]), int(t[0] - f[t[0]])
+        if m == len(sub):
+            return None
+        n *= 4
 
 
 def _measure(rows, comps):
+    """:class:`Cycles` of ``comps`` on ``rows``: a projection repeating first at
+    ``(mu, lam)`` is autonomous on ``rows`` iff it has period ``lam`` from ``mu`` on."""
     col = {c: i for i, c in enumerate(comps.persistent)}
     out, conflicts = {}, {}
     for key, cells in [*enumerate(comps.closures), ("feed", comps.feed)]:
         cols = sorted(col[c] for c in cells)
-        f = _ids(rows, cols)
-        bad = _conflict(rows, f, cols)
-        if bad is not None:
-            conflicts[key] = (bad[0], bad[1], frozenset(comps.persistent[i] for i in bad[2]))
-        out[key] = _cycle(f) if cols else (0, 1)
+        if not cols:
+            out[key] = (0, 1)
+            continue
+        sub = np.ascontiguousarray(rows[:, cols])
+        out[key] = cyc = _first_repeat(sub)
+        if cyc is None:
+            continue
+        mu, lam = cyc
+        bad = np.flatnonzero((sub[mu + lam :] != sub[mu : len(sub) - lam]).any(axis=1))
+        if bad.size:
+            t1 = mu + int(bad[0]) - 1
+            diff = set(np.flatnonzero(rows[t1] != rows[t1 + lam]).tolist()) - set(cols)
+            conflicts[key] = (t1, t1 + lam, frozenset(comps.persistent[i] for i in diff))
     feed = out.pop("feed")
     return Cycles(closures=out, feed=feed, conflicts=conflicts, calls=len(rows) - 1)
 

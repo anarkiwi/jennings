@@ -132,8 +132,9 @@ costs its instructions and accesses whatever the orbit's length. `cells`, locati
 `[calls, len(cells)]`, the locations at each call's entry. `learn(learner, pc, acc,
 max_cycles, calls, remap=None)` adds calls to a `Learner(control, written)` (`control`
 `{pc: branches}` it is directly control dependent on, `written` the memory a call may
-write); `learner.learned()` returns its persistent locations, dependences, edges and site
-taints as little-endian arrays. Both stop early at a call that does not return (`stop`
+write); `learner.learned()` returns a dict of little-endian arrays: its persistent
+locations, dependences, edges, site taints, the PCs that ended a call (`exits`) and the
+memory written. Both stop early at a call that does not return (`stop`
 other than `"sp"`). See [coverage.md](coverage.md#components-and-cover-calls).
 
 A driver claims its core and memory for the running thread. Other threads touching

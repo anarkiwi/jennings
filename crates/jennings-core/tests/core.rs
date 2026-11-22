@@ -628,6 +628,7 @@ fn learn_taints_the_counter_and_its_branch() {
     assert!(!l.deps.iter().any(|&d| d >> 32 == 0x10));
     assert!(l.sites.contains(&((0x1006u64 << 2 | 2) << 17 | 0x10)));
     assert_eq!(l.edges.len(), 7);
+    assert_eq!((l.exits, l.written), (vec![0x100C], vec![0x10]));
 }
 
 #[test]

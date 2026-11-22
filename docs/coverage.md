@@ -493,9 +493,10 @@ Each function runs from a flat copy of the state (`machine`: RAM, plus the regis
 MPU), calling `pc` as `run_to_rts` does (`acc`, `max_cycles`, `remap` as there); a call
 that does not return raises.
 
-**learn** first runs the calls natively for their edges (`NativeMPU.orbit`), takes
-`cfg.control_dependence` of them, then runs them again on a `Learner`, which taints every
-location (64 KiB of memory and the registers, `REG + index`) with the entry locations its
+**learn** first runs the calls natively for their edges, the instructions that ended them and
+the memory they write (`control`), takes `cfg.control_dependence` of the edges with each call's
+last instruction leading to the exit, then runs the calls again on a `Learner`, which taints
+every location (64 KiB of memory and the registers, `REG + index`) with the entry locations its
 value came from:
 
 - data, per instruction, from `tools/gen_flow.py`'s table: `dataflow.flow` read once per

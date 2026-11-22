@@ -18,7 +18,7 @@ use pyo3::buffer::PyBuffer;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::ffi;
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyRange, PyRangeMethods, PySlice};
+use pyo3::types::{PyBytes, PyDict, PyRange, PyRangeMethods, PySlice};
 use pyo3::{PyTraverseError, PyVisit};
 
 const PAL: (u32, u32) = (63, 312);
@@ -1309,30 +1309,25 @@ impl PyLearner {
         self.0.calls()
     }
 
-    /// ``(persistent, deps, edges, sites)`` as little-endian bytes: uint32 locations read
-    /// before written by some call and written by some; uint64 ``loc << 32 | src``, the
-    /// end-of-call ``loc`` depending on entry ``src``; uint64 ``pc << 16 | next``; uint64
-    /// ``(pc << 2 | kind) << 17 | loc``, ``loc`` tainting a load's (0) or store's (1) address
-    /// or where control goes (2) at ``pc``.
-    #[allow(clippy::type_complexity)]
-    fn learned<'py>(
-        &self,
-        py: Python<'py>,
-    ) -> (
-        Bound<'py, PyBytes>,
-        Bound<'py, PyBytes>,
-        Bound<'py, PyBytes>,
-        Bound<'py, PyBytes>,
-    ) {
+    /// ``{"persistent", "deps", "edges", "sites", "exits", "written"}`` as little-endian
+    /// arrays: uint32 locations read before written by some call and written by some; uint64
+    /// ``loc << 32 | src``, the end-of-call ``loc`` depending on entry ``src``; uint64
+    /// ``pc << 16 | next``; uint64 ``(pc << 2 | kind) << 17 | loc``, ``loc`` tainting a
+    /// load's (0) or store's (1) address or where control goes (2) at ``pc``; uint16 PCs that
+    /// ended a call; uint16 addresses some call wrote.
+    fn learned<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         let l = self.0.learned();
-        let p: Vec<u8> = l.persistent.iter().flat_map(|v| v.to_le_bytes()).collect();
-        let le = |v: &[u64]| v.iter().flat_map(|k| k.to_le_bytes()).collect::<Vec<u8>>();
-        (
-            PyBytes::new(py, &p),
-            PyBytes::new(py, &le(&l.deps)),
-            PyBytes::new(py, &le(&l.edges)),
-            PyBytes::new(py, &le(&l.sites)),
-        )
+        let d = PyDict::new(py);
+        let le32: Vec<u8> = l.persistent.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let le64 = |v: &[u64]| v.iter().flat_map(|k| k.to_le_bytes()).collect::<Vec<u8>>();
+        let le16 = |v: &[u16]| v.iter().flat_map(|k| k.to_le_bytes()).collect::<Vec<u8>>();
+        d.set_item("persistent", PyBytes::new(py, &le32))?;
+        d.set_item("deps", PyBytes::new(py, &le64(&l.deps)))?;
+        d.set_item("edges", PyBytes::new(py, &le64(&l.edges)))?;
+        d.set_item("sites", PyBytes::new(py, &le64(&l.sites)))?;
+        d.set_item("exits", PyBytes::new(py, &le16(&l.exits)))?;
+        d.set_item("written", PyBytes::new(py, &le16(&l.written)))?;
+        Ok(d)
     }
 }
 
