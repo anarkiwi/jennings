@@ -168,9 +168,15 @@ stop early at a call that does not return (`stop` other than `"sp"`).
 `census(census, pc, acc, max_cycles, calls, remap=None)` adds calls to a `Census(cells)`:
 `census.calls` and `census.classes` count them and their classes, `census.columns()` holds
 each cell's value at each call's entry (one byte per call, cell after cell) and
-`census.firsts()` gives `{"edges", "exits", "written"}` as `(items, calls)`, little-endian
-uint64 / uint16 / uint16 items in order of first sight with the uint32 call each was first
-seen in, so any prefix of the calls has its own sets. Given to `learn` as `census`, the
+`census.firsts()` gives `{"edges", "accesses", "exits", "written"}` as `(items, calls)`,
+little-endian uint64 / uint64 / uint16 / uint16 items in order of first sight with the uint32
+call each was first seen in, so any prefix of the calls has its own sets. An access is
+`pc << 19 | kind << 16 | address`, its kind's number in `components.ACCESSES` and its address
+the one the instruction named, before any remap. `census.prefix(calls)` is the census of the
+first `calls` calls where they end it or precede a class's first call (`census.first(class)`,
+`census.class_of(call)`), and `Core.restore(census, class)` sets the state that class's first
+call started from: run on from there, under another remap that agrees on every access before
+it, the prefix is that remap's census. Given to `learn` as `census`, the
 census must cover the learner's calls from the state this core held at its first: each class's
 first call is restored from its snapshot and tainted, the rest only add the implicit flows
 learned since their class last ran ([coverage.md](coverage.md#learning-once-per-class)).

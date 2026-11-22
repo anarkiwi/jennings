@@ -595,7 +595,10 @@ period: the state the addresses and control of a call are a function of has then
 value it ever takes, so every reachable access and edge has been seen. The taints vouch only
 for the paths learning saw, so while that bound exceeds the calls learned from, it learns
 again over the bound and repeats. One census of the `limit + 1` calls gives the trajectory
-and every relearning; a relearning takes the last learner on where the calls between saw no
+and every relearning (a `Calls`, given as `ran`, is that census run on as far as it needs:
+`Calls.repeat` runs one on, doubling, to a cell set's first repeat, `Calls.seen` gives what a
+prefix of its calls first saw, the accesses and edges among it, and `Calls.fork` takes its
+first calls on under another remap); a relearning takes the last learner on where the calls between saw no
 new edge, exit or written address (so its control dependence and written memory are those of
 the longer run), and starts a learner afresh where they did. None means the feed set does not repeat within `limit`. A feed set's period can exceed the calls after which coverage
 stops growing when a branch condition reads a long-period component whose both outcomes come

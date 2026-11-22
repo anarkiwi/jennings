@@ -517,6 +517,11 @@ class NativeMPU(MPU):
         :class:`Census`; ``"sp"`` unless the last call ended otherwise."""
         return self._core.census(census, pc, acc, max_cycles, calls, remap)
 
+    def restore(self, census, cls):
+        """Set the registers and memory to the state the first call of class ``cls`` of a
+        :class:`Census` run from this core's memory started from."""
+        self._core.restore(census, cls)
+
     def run_to_rts_until(self, pc, acc, pcs, max_cycles, remap=None):
         """``pysidtracker.emu.run_to_rts_until`` on the native core; a :class:`Remap`
         redirects its instructions' accesses."""

@@ -965,3 +965,88 @@ def test_a_projection_s_first_repeat_and_the_break_of_its_period():
         periods_of(rows, [[3]])
     with pytest.raises(ValueError):
         periods_of(rows[:, ::2], [[0]])
+
+
+def _data(calls, n):
+    """The orbit-style keys ``pc << 17 | write << 16 | address`` of the loads and stores a
+    :class:`~jennings.coverage.components.Calls` first sees in its first ``n`` calls."""
+    keys = calls.seen("accesses", n)[0].astype(np.int64)
+    kind = (keys >> 16) & 7
+    load, store = C.ACCESSES.index("load"), C.ACCESSES.index("store")
+    keys = keys[(kind == load) | (kind == store)]
+    return set(((keys >> 19) << 17 | ((keys >> 16) & 7 == store) << 16 | keys & 0xFFFF).tolist())
+
+
+@pytest.mark.parametrize("src", ["LATE", "COMBO", "TABLE"])
+def test_calls_see_the_accesses_and_edges_an_orbit_does(src):
+    ram, _ = image(globals()[src])
+    calls = C.Calls(ram, PLAY).run(300)
+    for n in (1, 120, 300):
+        acc, edges = seen(ram, n)
+        assert _data(calls, n) == acc
+        assert set(calls.seen("edges", n)[0].tolist()) == edges
+
+
+def test_calls_name_a_redirected_access_by_its_address():
+    ram, s = image("""
+ld  lda $0400
+    sta $0401
+    rts
+""")
+    table = np.full(0x10000, -1, np.int32)
+    table[0x0400], table[0x0401] = 0x0403, -2
+    remap = Remap({s["ld"]: table, s["ld"] + 3: table})
+    calls = C.Calls(ram, PLAY, remap=remap).run(2)
+    m = C.machine(ram)
+    _end, _states, acc, _edges = m.orbit(PLAY, 0, C.MAX_CYCLES, 2, remap=remap)
+    assert (
+        _data(calls, 2)
+        == set(acc.tolist())
+        == {
+            s["ld"] << 17 | 0x0400,
+            (s["ld"] + 3) << 17 | 1 << 16 | 0x0401,
+        }
+    )
+
+
+def test_calls_repeat_where_their_cells_do():
+    ram, s = image(LATE)
+    calls = C.Calls(ram, PLAY, [s["m"], s["k"]])
+    assert calls.repeat([s["m"]], 1000, 8) == 256 and calls.calls <= 512
+    assert calls.repeat([], 1000) == 1
+    assert C.Calls(ram, PLAY, [s["m"]]).repeat([s["m"]], 100) is None
+    jam = C.Calls(image("!byte $02\n")[0], PLAY, [0x10])
+    assert jam.repeat([0x10], 100) is None and jam.failed is not None
+    with pytest.raises(RuntimeError):
+        jam.run(5)
+
+
+def test_forked_calls_are_the_calls_run_anew():
+    ram, s = image(LATE)
+    cells = [s["m"], s["k"]]
+    calls = C.Calls(ram, PLAY, cells).run(600)
+    cen = calls.census
+    k = cen.first(cen.class_of(200))
+    again = next(n for n in range(k, 600) if cen.first(cen.class_of(n)) != n)
+    with pytest.raises(ValueError):
+        calls.fork(again, None)
+    for at in (k, calls.calls):
+        fork = calls.fork(at, None).run(700)
+        fresh = C.Calls(ram, PLAY, cells).run(700)
+        assert fork.rows().tolist() == fresh.rows().tolist()
+        for name in ("edges", "accesses", "written", "exits"):
+            got, want = fork.seen(name, 700), fresh.seen(name, 700)
+            assert got[0].tolist() == want[0].tolist() and got[1].tolist() == want[1].tolist()
+    table = np.full(0x10000, -1, np.int32)
+    table[s["tab"] + 2] = -2
+    pc = next(a for a in range(PLAY, s["m"]) if ram[a] == 0xBD)
+    remap = Remap({pc: table})
+    fork = calls.fork(k, remap).run(700)
+    fresh = C.Calls(ram, PLAY, cells, remap=remap).run(700)
+    assert fork.rows().tolist() == fresh.rows().tolist()
+    assert fork.census.classes == fresh.census.classes
+    assert _data(fork, 700) == _data(fresh, 700)
+    comps = C.learn(ram, PLAY, 300)
+    ran = C.Calls(ram, PLAY, comps.persistent)
+    assert C.cover_calls(ram, PLAY, comps, 600, ran=ran) == C.cover_calls(ram, PLAY, comps, 600)
+    assert ran.calls == 601

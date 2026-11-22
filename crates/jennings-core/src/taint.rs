@@ -98,7 +98,7 @@ impl Hasher for Fx {
 }
 
 pub(crate) type FxMap<K, V> = HashMap<K, V, BuildHasherDefault<Fx>>;
-type FxSet<K> = HashSet<K, BuildHasherDefault<Fx>>;
+pub(crate) type FxSet<K> = HashSet<K, BuildHasherDefault<Fx>>;
 
 /// Interned sorted location sets; id 0 is the empty set and unions are memoised.
 struct Sets {

@@ -28,6 +28,7 @@ __all__ = [
     "STORE",
     "CONTROL",
     "VALUE",
+    "ACCESSES",
     "Components",
     "Cycles",
     "Flows",
@@ -35,6 +36,7 @@ __all__ = [
     "machine",
     "control",
     "census",
+    "Calls",
     "learn",
     "explicit",
     "closures",
@@ -49,6 +51,8 @@ IO = range(0xD000, 0xE000)
 MAX_CYCLES = 1_000_000
 CHUNK = 4096
 LOAD, STORE, CONTROL, VALUE = "r", "w", "b", "v"
+#: A census access's kind, by its number in ``pc << 19 | kind << 16 | address``.
+ACCESSES = ("load", "stack load", "store", "stack store", "read", "write")
 _KINDS = (LOAD, STORE, CONTROL, VALUE)
 _BITS = 18
 _PER = ("stored", "addressed", "gated")
@@ -213,10 +217,93 @@ def _pairs(edges):
 def census(state, pc, calls, cells=(), *, acc=0, max_cycles=MAX_CYCLES, remap=None):
     """A :class:`~jennings.devices.mpu6502.Census` of ``calls`` calls of ``pc`` with ``A = acc``
     from ``state`` (see :func:`machine`), ``remap`` applied, ``cells`` recorded at each entry."""
-    cen = Census(list(cells))
-    m = machine(state)
-    _drive(lambda n: m.census(cen, pc, acc, max_cycles, n, remap), calls, "census")
-    return cen
+    return Calls(state, pc, cells, acc=acc, max_cycles=max_cycles, remap=remap).run(calls).census
+
+
+class Calls:
+    """The calls of ``pc`` with ``A = acc`` from ``state`` (see :func:`machine`), ``remap``
+    applied: a :func:`census` recording ``cells`` that runs on as more calls are asked for."""
+
+    # pylint: disable-next=too-many-arguments
+    def __init__(self, state, pc, cells=(), *, acc=0, max_cycles=MAX_CYCLES, remap=None):
+        self.state, self.pc, self.cells = state, pc, tuple(cells)
+        self.kw = {"acc": acc, "max_cycles": max_cycles, "remap": remap}
+        self.census, self.machine = Census(list(self.cells)), machine(state)
+        self.failed = None
+
+    @property
+    def calls(self):
+        """The calls run."""
+        return self.census.calls
+
+    def run(self, calls):
+        """These calls run on to ``calls``; raises (as :func:`census`) where a call fails, the
+        census then holding it as its last, and on any call asked for after it."""
+        if self.failed is not None and calls > self.calls:
+            raise self.failed
+        m, kw = self.machine, self.kw
+        try:
+            _drive(
+                lambda n: m.census(
+                    self.census, self.pc, kw["acc"], kw["max_cycles"], n, kw["remap"]
+                ),
+                calls - self.calls,
+                "census",
+            )
+        except RuntimeError as e:
+            self.failed = e
+            raise
+        return self
+
+    def rows(self, calls=None):
+        """uint8 ``[calls, len(cells)]``: the cells at the entry of each of the first ``calls``
+        calls run (all where None), by column."""
+        return _rows(self.census, self.cells)[:calls]
+
+    def repeat(self, cells, limit, start=1):
+        """The calls before the first entry at which the ``cells`` (of these calls' cells)
+        repeat an earlier entry (its preperiod plus period; 1 for no cells), running on from
+        ``start`` calls, doubling, to the ``limit + 1`` that show a repeat within ``limit``;
+        None where none does. A call that fails stops the run there (:attr:`failed`)."""
+        col = {c: i for i, c in enumerate(self.cells)}
+        cols = sorted(col[c] for c in cells)
+        n = min(max(start, 1), limit + 1)
+        while True:
+            try:
+                self.run(max(n, self.calls))
+            except RuntimeError:
+                pass
+            first = periods_of(self.rows(), [cols])[0][0] if cols else (0, 1)
+            if first is not None and sum(first) < self.calls:
+                return sum(first)
+            if self.failed is not None or self.calls > limit:
+                return None
+            n = min(2 * self.calls, limit + 1)
+
+    def seen(self, name, calls):
+        """``(items, at)``: the items of :meth:`~jennings.devices.mpu6502.Census.firsts`
+        ``name`` first seen in the first ``calls`` calls, in order of first sight, and the call
+        each was first seen in."""
+        items, at = self.census.firsts()[name]
+        at = np.frombuffer(at, np.uint32)
+        n = int(np.searchsorted(at, calls))
+        dtype = np.uint64 if name in ("edges", "accesses") else np.uint16
+        return np.frombuffer(items, dtype)[:n], at[:n]
+
+    def fork(self, calls, remap):
+        """These calls' first ``calls``, run on under ``remap``: ``calls`` ends them or is a
+        class's first (:meth:`~jennings.devices.mpu6502.Census.prefix`), and the calls before
+        it access no location ``remap`` redirects otherwise than these calls' remap does."""
+        cen = self.census.prefix(calls)
+        if cen is None:
+            raise ValueError("call %d is no class's first" % calls)
+        out = Calls(self.state, self.pc, self.cells, **{**self.kw, "remap": remap})
+        out.census = cen
+        if calls < self.calls:
+            out.machine.restore(self.census, self.census.class_of(calls))
+        else:
+            out.machine, out.failed = machine(self.machine), self.failed
+        return out
 
 
 def _rows(cen, cells):
@@ -432,8 +519,18 @@ def _autonomous(rows, comps):
         comps = wider
 
 
+# pylint: disable-next=too-many-arguments,too-many-locals
 def cover_calls(
-    state, pc, comps, limit, *, acc=0, max_cycles=MAX_CYCLES, remap=None, exclude=(STACK, IO)
+    state,
+    pc,
+    comps,
+    limit,
+    *,
+    acc=0,
+    max_cycles=MAX_CYCLES,
+    remap=None,
+    exclude=(STACK, IO),
+    ran=None,
 ):
     """``(calls, comps)``: the calls from ``state`` after which every data access and control
     edge has been seen (the feed set's preperiod plus period; None if it does not repeat within
@@ -441,10 +538,13 @@ def cover_calls(
 
     One :func:`census` of the ``limit + 1`` calls gives the trajectory and every relearning:
     each a learner over its calls' classes, taken on from the last where no new edge, exit or
-    written address comes between."""
+    written address comes between. Given ``ran``, :class:`Calls` of these with
+    ``comps.persistent`` its cells, that census is theirs, run on as far as it needs."""
     kw = {"acc": acc, "max_cycles": max_cycles, "remap": remap}
-    cen = census(state, pc, limit + 1, comps.persistent, **kw)
-    rows, cells, run = _rows(cen, comps.persistent), comps.persistent, None
+    if ran is None:
+        ran = Calls(state, pc, comps.persistent, **kw)
+    cen = ran.run(max(ran.calls, limit + 1)).census
+    rows, cells, run = ran.rows(limit + 1), comps.persistent, None
     while True:
         if cells != comps.persistent:
             rows, cells = trajectory(state, pc, comps.persistent, limit, **kw), comps.persistent
