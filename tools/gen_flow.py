@@ -101,15 +101,13 @@ def _words(v):
 def generate() -> str:
     out = [HEADER]
     for op in range(256):
-        kind, n, nl, ns, outs, la, sa = opcode_flow(op)
+        kind, n, _nl, _ns, outs, la, sa = opcode_flow(op)
         out.append(
-            "    Flow { kind: Kind::%s, len: %d, loads: %d, stores: %d, outs: &[%s], load_addr: %s, "
-            "store_addr: %s }, // %02X\n"
+            "    Flow { kind: Kind::%s, len: %d, outs: &[%s], load_addr: %s, store_addr: %s }, "
+            "// %02X\n"
             % (
                 kind,
                 n,
-                nl,
-                ns,
                 ", ".join("(%d, 0x%x)" % o for o in outs),
                 _words(la),
                 _words(sa),

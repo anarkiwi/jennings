@@ -48,8 +48,6 @@ pub(crate) enum Kind {
 pub(crate) struct Flow {
     pub kind: Kind,
     pub len: u8,
-    pub loads: u8,
-    pub stores: u8,
     pub outs: &'static [(u8, u32)],
     pub load_addr: &'static [u32],
     pub store_addr: &'static [u32],
@@ -429,15 +427,15 @@ impl Learn {
                 }
             }
         }
-        for k in 0..f.loads as usize {
+        for (k, &mask) in f.load_addr.iter().enumerate() {
             if data_loads >> k & 1 != 0 {
-                let s = self.gather(f.load_addr[k], &loads);
+                let s = self.gather(mask, &loads);
                 self.site(0, s);
             }
         }
-        for k in 0..f.stores as usize {
+        for (k, &mask) in f.store_addr.iter().enumerate() {
             if data_stores >> k & 1 != 0 {
-                let s = self.gather(f.store_addr[k], &loads);
+                let s = self.gather(mask, &loads);
                 self.site(1, s);
             }
         }
