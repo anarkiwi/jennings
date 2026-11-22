@@ -186,6 +186,17 @@ impl<'a, B: Bus> Accesses<'a, B> {
             s => self.inner.read(s as u16),
         })
     }
+
+    /// A data `LOAD` of `addr` as the current instruction takes it: a redirected one is a
+    /// load of its source, so an observer of `inner` sees the byte actually read.
+    #[inline(always)]
+    fn redirected_load(&mut self, addr: u16) -> u8 {
+        match self.target(addr) {
+            None => self.inner.load(addr),
+            Some(ZERO) => 0,
+            Some(s) => self.inner.load(s as u16),
+        }
+    }
 }
 
 impl<B: Bus> Bus for Accesses<'_, B> {
@@ -218,9 +229,7 @@ impl<B: Bus> Bus for Accesses<'_, B> {
     #[inline(always)]
     fn load(&mut self, addr: u16) -> u8 {
         self.note(false, addr);
-        let v = self
-            .redirected_read(addr)
-            .unwrap_or_else(|| self.inner.load(addr));
+        let v = self.redirected_load(addr);
         if self.based && self.base == Base::IndY && self.loads < 2 {
             self.pointer[self.loads as usize] = v;
             self.loads += 1;

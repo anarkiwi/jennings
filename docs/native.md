@@ -112,7 +112,9 @@ the instructions at its PCs: a table holds one int32 per address, -1 accessed as
 reads 0, else the address the read takes its byte from; a redirected write stores nothing.
 The page-zero pointer bytes of an opcode in `pointer_opcodes` (operand + X and operand + X + 1
 for `(zp,X)`, operand and operand + 1 for `(zp),Y`, wrapping in page zero) are accessed as
-they are. The log keeps the address the instruction named. `run_to_rts`,
+they are. The log keeps the address the instruction named; a data-access observer sees a
+redirected read as a load of the address it takes its byte from, and nothing of one that
+reads 0. `run_to_rts`,
 `run_to_rts_until` and `run_until` take the same `remap=None`, applied without a log
 (`Accesses::remapped` in jennings-core). With `bases=True` it returns `(Trace, accesses,
 bases)`, `bases` a uint16 memoryview in step with `accesses`: each access's address before
