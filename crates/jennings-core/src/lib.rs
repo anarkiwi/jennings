@@ -21,7 +21,7 @@ pub mod period;
 pub mod run;
 pub mod taint;
 
-pub use access::{access_key, base_of, Accesses, Base, Remap, AS_IS, ZERO};
+pub use access::{access_key, base_of, Accesses, Base, Redirect, Remap, AS_IS, ZERO};
 pub use bus::Bus;
 pub use census::Census;
 pub use cpu::Cpu;

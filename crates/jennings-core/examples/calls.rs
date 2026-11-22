@@ -5,7 +5,7 @@
 
 use std::time::Instant;
 
-use jennings_core::{run_to_rts, AddrSet, Census, Cpu, Learn};
+use jennings_core::{orbit, run_to_rts, AddrSet, Census, Cpu, Learn};
 
 fn image(path: &str) -> Box<[u8; 0x10000]> {
     let data = std::fs::read(path).expect("read IMAGE");
@@ -102,4 +102,19 @@ fn main() {
         || false,
     );
     println!("learn:  {:.0} calls/s ({stop:?})", rate(t0));
+    let (mut ram, mut cpu) = (image(&args[1]), Cpu::new());
+    let t0 = Instant::now();
+    let o = orbit(
+        &mut cpu,
+        &mut *ram,
+        pc,
+        0,
+        1_000_000,
+        calls,
+        None,
+        &AddrSet::default(),
+        |c, _| c.cycles as u128,
+        || false,
+    );
+    println!("orbit:  {:.0} calls/s ({} states)", rate(t0), o.states);
 }

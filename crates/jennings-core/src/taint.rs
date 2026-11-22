@@ -818,8 +818,9 @@ impl Learn {
 pub(crate) trait Observer {
     /// Whether an instruction has started (accesses before the first are not noted).
     fn active(&self) -> bool;
-    /// An access of `kind` reaching `c`: an address, [`crate::ZERO`] or [`SUPPRESSED`].
-    fn note(&mut self, kind: u8, c: i32);
+    /// An access of `kind` of `addr` reaching `c`: an address, [`crate::ZERO`] or
+    /// [`SUPPRESSED`].
+    fn note(&mut self, kind: u8, addr: u16, c: i32);
     /// The instruction at `pc` with opcode `op` starts.
     fn start(&mut self, pc: u16, op: u8);
     /// Whether [`Observer::wrote`] is told of each write that reaches memory.
@@ -836,7 +837,7 @@ impl Observer for Learn {
     }
 
     #[inline(always)]
-    fn note(&mut self, kind: u8, c: i32) {
+    fn note(&mut self, kind: u8, _addr: u16, c: i32) {
         self.rec.push((kind, c));
     }
 
@@ -859,7 +860,7 @@ impl<B: Bus, O: Observer> Observed<'_, '_, B, O> {
     fn note_read(&mut self, kind: u8, addr: u16) {
         if self.eng.active() {
             let c = self.inner.target(addr).unwrap_or(addr as i32);
-            self.eng.note(kind, c);
+            self.eng.note(kind, addr, c);
         }
     }
 
@@ -872,7 +873,7 @@ impl<B: Bus, O: Observer> Observed<'_, '_, B, O> {
         }
         if self.eng.active() {
             self.eng
-                .note(kind, if reaches { addr as i32 } else { SUPPRESSED });
+                .note(kind, addr, if reaches { addr as i32 } else { SUPPRESSED });
         }
     }
 }

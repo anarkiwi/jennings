@@ -57,7 +57,7 @@ impl Observer for Census {
     }
 
     #[inline(always)]
-    fn note(&mut self, kind: u8, c: i32) {
+    fn note(&mut self, kind: u8, _addr: u16, c: i32) {
         self.cur.push((kind as u32) << 20 | (c + 2) as u32);
     }
 

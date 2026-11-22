@@ -444,13 +444,15 @@ fn remapped_redirects_without_logging() {
         m[0x2005] = 1;
         m[0x2006] = 2;
         let mut c = Cpu::new();
-        let mut bus = if remapped {
-            Accesses::remapped(&mut *m, &r)
+        let n = if remapped {
+            let mut bus = Accesses::remapped(&mut *m, &r);
+            run_to_rts(&mut c, &mut bus, 0x1000, 0, None, 100, None, || false);
+            0
         } else {
-            Accesses::new(&mut *m, Some(&r))
+            let mut bus = Accesses::new(&mut *m, Some(&r));
+            run_to_rts(&mut c, &mut bus, 0x1000, 0, None, 100, None, || false);
+            bus.log.len()
         };
-        run_to_rts(&mut c, &mut bus, 0x1000, 0, None, 100, None, || false);
-        let n = bus.log.len();
         (c.a, m[0x2007], n)
     };
     assert_eq!(run(false), (2, 0, 2));
