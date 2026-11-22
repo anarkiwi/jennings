@@ -4,9 +4,8 @@ states (numpy), and which pairs of them never belong in a minimal sequence."""
 from dataclasses import dataclass
 
 import numpy as np
-from deity_informant import CYCLETIME
 
-from jennings.opcodes import ILLEGAL_OPCODES, MODE_LEN, OPCODES
+from jennings.opcodes import CYCLES, ILLEGAL_OPCODES, MODE_LEN, OPCODES
 
 REGS = ("A", "X", "Y", "C", "Z", "N", "V")
 IMPLIED = "TAX TAY TXA TYA INX INY DEX DEY CLC SEC".split()
@@ -162,7 +161,7 @@ class Alphabet:
         if ins.form in ("tabx", "taby"):
             table, offset = ins.operand
             extra = int((self.tables[table][0] + offset) % 256 != 0)
-        return CYCLETIME[self.opcode(ins)] + extra
+        return CYCLES[self.opcode(ins)] + extra
 
     def code(self, ins: Instruction) -> tuple:
         """``(op, kind, a, b)``: the op id, operand kind and its two fields."""

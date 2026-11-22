@@ -45,6 +45,12 @@ jennings[cuda]`), and a z3 proof of the result. See [docs/superopt.md](docs/supe
 `jennings.acme` assembles ACME 0.97 sources (the 6502/6510 subset) byte-identically to
 `acme`, with its `-o`/`-l`/`!to` command line as `jennings-acme`. See [docs/acme.md](docs/acme.md).
 
+`jennings.isa` classifies opcodes, lists the addresses an instruction touches
+(`addresses(mem, pc, x, y, sp)`: data, pointer and stack bytes with the NMOS wraps) and
+computes NMOS ADC/SBC including decimal mode; `jennings.opcodes` holds the opcode, cycle
+(`CYCLES`) and penalty (`EXTRA`) tables; `jennings.testing` is the decimal-mode reference
+model for tests of other 6502 implementations.
+
 `jennings.dataflow.flow` reads each instruction's output-to-input dependencies
 (registers, flags, memory bytes, a branch's condition) off the same lifted pcode the
 MPU executes, given the addresses an observed run accessed.

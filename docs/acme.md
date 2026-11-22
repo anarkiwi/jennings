@@ -7,7 +7,7 @@ list as `acme`, byte for byte. It needs no subprocess and no ACME install.
 ## Use
 
 ```python
-from jennings.acme import Acme, assemble
+from jennings.acme import Acme, assemble, read_symbol_list
 
 data, symbols = assemble(open("tune.asm").read())   # output file bytes, {name: value}
 
@@ -16,6 +16,7 @@ acme.output()        # file bytes in the selected format
 acme.image()         # (start address, bytes) without a format header
 acme.symbol_list()   # the -l / --symbollist text
 acme.outname         # -o, else the !to file name, else None
+read_symbol_list(acme.symbol_list())   # {name: value} of a symbol list: defined symbols, sizes dropped
 ```
 
 `Acme(sources, cpu="6502", fmt=None, outname=None)` takes `[(name, text)]` sources,

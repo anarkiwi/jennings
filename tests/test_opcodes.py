@@ -23,3 +23,15 @@ def test_deity_agrees_with_jennings_table():
 
     assert dict(deity_informant.OPS) == dict(OPCODES)
     assert set(deity_informant.ILLEGAL_OPCODES) == set(ILLEGAL_OPCODES)
+
+
+def test_cycle_tables_are_deitys():
+    from deity_informant.lifter import CYCLETIME, EXTRACYCLES
+
+    from jennings.opcodes import CYCLES, EXTRA
+
+    assert CYCLES == tuple(CYCLETIME) and EXTRA == tuple(EXTRACYCLES)
+    assert len(CYCLES) == len(EXTRA) == 256
+    jams = {op for op, (mn, _) in OPCODES.items() if mn == "JAM"}
+    assert len(jams) == 12 and {CYCLES[op] for op in jams} == {0}
+    assert {EXTRA[op] for op, (_, mode) in OPCODES.items() if mode == "rel"} == {2}

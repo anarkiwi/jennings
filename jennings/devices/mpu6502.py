@@ -7,9 +7,9 @@ execute byte- and cycle-exact. Drop-in for ``py65.devices.mpu6502.MPU``. Over a
 whose :meth:`run_until` drivers release the GIL.
 """
 
-from deity_informant import lift, PcodeVM, CYCLETIME, EXTRACYCLES
+from deity_informant import lift, PcodeVM
 from jennings.memory import NATIVE, NativeMemory
-from jennings.opcodes import OPCODES, ILLEGAL_OPCODES, MODE_TOKEN
+from jennings.opcodes import CYCLES, EXTRA, OPCODES, ILLEGAL_OPCODES, MODE_TOKEN
 
 if NATIVE:
     # pylint: disable-next=import-error,no-name-in-module
@@ -74,8 +74,8 @@ class MPU:
 
     disassemble = _disassemble_table()
     instruct = _instruct_table()
-    cycletime = list(CYCLETIME)
-    extracycles = list(EXTRACYCLES)
+    cycletime = list(CYCLES)
+    extracycles = list(EXTRA)
 
     def __new__(cls, memory=None, pc=0x0000):
         native = cls is MPU and NATIVE and isinstance(memory, NativeMemory)
@@ -402,6 +402,7 @@ class NativeMPU(MPU):
         stop_ranges=None,
         stop_on_idle=False,
         stop_on_irq=False,
+        remap=None,
     ):
         """Run with the GIL released.
 
@@ -417,7 +418,8 @@ class NativeMPU(MPU):
         with ``irq_period``, :meth:`irq` once the count reaches :attr:`irq_due`.
 
         With ``trace`` (or ``regs``, which implies it) returns ``(reason, Trace)``, one
-        row per executed instruction; ``regs`` adds A/X/Y/SP/P after each.
+        row per executed instruction; ``regs`` adds A/X/Y/SP/P after each. A :class:`Remap`
+        redirects its instructions' accesses.
         """
         reason, cols = self._core.run_until(
             max_cycles,
@@ -429,14 +431,16 @@ class NativeMPU(MPU):
             stop_ranges,
             stop_on_idle,
             stop_on_irq,
+            remap,
         )
         if cols is None:
             return reason
         return reason, Trace(*cols)
 
-    def run_to_rts(self, pc, acc, max_cycles):
-        """``vagrant_moses.cpu.run_to_rts`` on the native core."""
-        self._core.run_to_rts(pc, acc, max_cycles)
+    def run_to_rts(self, pc, acc, max_cycles, remap=None):
+        """``vagrant_moses.cpu.run_to_rts`` on the native core; a :class:`Remap` redirects
+        its instructions' accesses."""
+        self._core.run_to_rts(pc, acc, max_cycles, remap)
 
     def run_to_rts_traced(self, pc, acc, max_cycles, regs=False):
         """:meth:`run_to_rts`, returning a :class:`Trace` of every executed instruction."""
@@ -472,6 +476,7 @@ class NativeMPU(MPU):
         )
         return end, states, memoryview(acc_log).cast("Q"), memoryview(edges).cast("Q")
 
-    def run_to_rts_until(self, pc, acc, pcs, max_cycles):
-        """``pysidtracker.emu.run_to_rts_until`` on the native core."""
-        return self._core.run_to_rts_until(pc, acc, pcs, max_cycles)
+    def run_to_rts_until(self, pc, acc, pcs, max_cycles, remap=None):
+        """``pysidtracker.emu.run_to_rts_until`` on the native core; a :class:`Remap`
+        redirects its instructions' accesses."""
+        return self._core.run_to_rts_until(pc, acc, pcs, max_cycles, remap)

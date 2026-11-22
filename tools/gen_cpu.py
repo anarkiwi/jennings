@@ -11,7 +11,9 @@ import argparse
 import sys
 from pathlib import Path
 
-from deity_informant.lifter import CYCLETIME, OPS, bus_only, lift
+from deity_informant.lifter import OPS, bus_only, lift
+
+from jennings.opcodes import CYCLES
 
 OUT = Path(__file__).resolve().parent.parent / "crates/jennings-core/src/cpu_gen.rs"
 PC = 0x1234
@@ -176,7 +178,7 @@ class _Op:
             ctrl[0],
         )
         body += ["s.%s = %s as u8;" % (r, n) for r, n in self.live.items()]
-        cyc = str(CYCLETIME[self.op])
+        cyc = str(CYCLES[self.op])
         pen = rec["pen"]
         if pen is not None and pen[0] != "branch":
             base = self.iy_base() if pen[0] == "iy" else "w"

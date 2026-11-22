@@ -773,3 +773,88 @@ def test_orbit_runs_under_a_remap():
     end, states, accesses, _ = mpu.orbit(0x1000, 0, 1000, 100, remap=Remap({0x1000: table}))
     assert (end, states, mpu.memory[0x10]) == ("closed", 2, 0)
     assert 0x1000 << 17 | 1 << 16 | 0x10 in list(accesses)
+
+
+def _overrun_program():
+    """A loop of LDA $2000,X ; STA $2100,X ; INC $2200,X ; LDA ($10),Y ; STA $2300,X ; INY over
+    X = 0..15, then RTS: reads, writes, a read-modify-write and an indirect read."""
+    mem = NativeMemory()
+    code = [0xA2, 0x00, 0xBD, 0x00, 0x20, 0x9D, 0x00, 0x21, 0xFE, 0x00, 0x22, 0xB1, 0x10]
+    code += [0x9D, 0x00, 0x23, 0xC8, 0xE8, 0xE0, 0x10, 0xD0, 0xEC, 0x60]
+    mem[0x1000 : 0x1000 + len(code)] = code
+    rng = np.random.default_rng(5)
+    mem[0x2000:0x2400] = rng.integers(0, 256, 0x400).tolist()
+    mem[0x3000:0x3100] = rng.integers(0, 256, 0x100).tolist()
+    mem[0x10:0x12] = [0x80, 0x20]
+    tables = {}
+    for pc in (0x1002, 0x1005, 0x1008, 0x100B):
+        t = np.full(0x10000, -1, np.int32)
+        at = np.arange(0x2000, 0x2400)
+        t[at] = rng.choice([-1, -2, 0x3000, 0x30FF], at.size)
+        t[[0x10, 0x11]] = -2
+        tables[pc] = t
+    return mem, tables
+
+
+def _overrun_model(mpu, tables, pointer_opcodes):
+    """The per-access callbacks the remap replaces (gravity-inversion's sidtrace overrun
+    model): an access by a table's instruction to an address whose entry is not -1 reads 0
+    (-2) or the byte at the entry and writes nothing; a pointer opcode's page-zero pointer
+    bytes are accessed as they are."""
+    mem = mpu.memory
+    ram = memoryview(mem)
+    watched = sorted(set().union(*(np.flatnonzero(v != -1).tolist() for v in tables.values())))
+
+    def outside(addr):
+        pc = mpu.pc
+        src = tables.get(pc)
+        if src is None or src[addr] == -1:
+            return None
+        if ram[pc] in pointer_opcodes:
+            zp = ram[(pc + 1) & 0xFFFF]
+            if addr in (zp, (zp + 1) & 0xFF):
+                return None
+        return int(src[addr])
+
+    def read(addr):
+        src = outside(addr)
+        return None if src is None else 0 if src == -2 else ram[src]
+
+    mem.subscribe_to_read(watched, read)
+    mem.subscribe_to_write(watched, lambda a, v: None if outside(a) is None else ram[a])
+
+
+def _remap_state(mpu):
+    return bytes(mpu.memory), (mpu.a, mpu.x, mpu.y, mpu.sp, mpu.pc, mpu.processorCycles)
+
+
+@pytest.mark.parametrize(
+    "driver",
+    [
+        lambda mpu, remap: mpu.run_to_rts(0x1000, 0, 100_000, remap=remap),
+        lambda mpu, remap: mpu.run_to_rts_until(0x1000, 0, [0x1016], 100_000, remap=remap),
+        lambda mpu, remap: mpu.run_to_rts_accesses(0x1000, 0, 100_000, remap),
+        lambda mpu, remap: mpu.run_until(sp_above=0xFE, max_cycles=100_000, remap=remap),
+    ],
+)
+def test_driver_remap_is_the_overrun_model(driver):
+    pointer = (0xB1,)
+    mem, tables = _overrun_program()
+    ref = MPU(memory=NativeMemory(bytes(mem)))
+    nat = MPU(memory=mem)
+    for mpu in (ref, nat):
+        mpu.sp, mpu.pc = 0xFD, 0x1000
+        mpu.memory[0x1FE], mpu.memory[0x1FF] = 0xFF, 0x0F
+    _overrun_model(ref, tables, pointer)
+    want = driver(ref, None)
+    got = driver(nat, Remap(tables, pointer))
+    if isinstance(want, tuple):
+        assert list(want[0].pc) == list(got[0].pc)
+    else:
+        assert want == got
+    assert _remap_state(nat) == _remap_state(ref)
+    plain = MPU(memory=NativeMemory(bytes(_overrun_program()[0])))
+    plain.sp, plain.pc = 0xFD, 0x1000
+    plain.memory[0x1FE], plain.memory[0x1FF] = 0xFF, 0x0F
+    driver(plain, None)
+    assert _remap_state(plain) != _remap_state(nat)

@@ -1,3 +1,4 @@
+# pylint: disable=too-many-lines
 """ACME 0.97 compatible cross-assembler for the 6502/6510 subset of ACME sources.
 
 Mirrors ACME's passes, operand-size flags and symbol trees, so output files and ``-l``
@@ -12,7 +13,7 @@ import sys
 from jennings.assembler import encoding
 from jennings.opcodes import ILLEGAL_OPCODES, MODE_TOKEN, OPCODES
 
-__all__ = ["Acme", "AcmeError", "assemble", "main", "mnemonics"]
+__all__ = ["Acme", "AcmeError", "assemble", "main", "mnemonics", "read_symbol_list"]
 
 F8, F16, F24 = 1, 2, 4
 FORCE = F8 | F16 | F24
@@ -104,6 +105,16 @@ _OTHER_CPUS = frozenset("65c02 r65c02 w65c02 65816 65ce02 4502 m65 c64dtv2".spli
 def mnemonics(cpu):
     """``{mnemonic: {syntax: {size: opcode}}}`` ACME assembles for ``cpu``."""
     return Acme._cpu(cpu)
+
+
+_SYMBOL_LINE = re.compile(r"^\s*([^\s+=]+)(?:\+[23])?\s*=\s*\$([0-9a-fA-F]+)", re.M)
+
+
+def read_symbol_list(text):
+    """``{name: value}`` of an ACME ``-l``/``--symbollist`` file (:meth:`Acme.symbol_list`):
+    each ``name = $hex`` line, a ``+2``/``+3`` size suffix dropped; undefined (``?``) symbols
+    are left out."""
+    return {m[1]: int(m[2], 16) for m in _SYMBOL_LINE.finditer(text)}
 
 
 class AcmeError(Exception):

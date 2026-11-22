@@ -402,6 +402,33 @@ fn remap_replaces_a_table() {
 }
 
 #[test]
+fn remapped_redirects_without_logging() {
+    let prog: &[u8] = &[0xAD, 0x05, 0x20, 0x8D, 0x07, 0x20, 0x60];
+    let mut t = vec![AS_IS; 0x10000];
+    t[0x2005] = 0x2006;
+    t[0x2007] = ZERO;
+    let mut r = Remap::default();
+    r.insert(0x1000, &t);
+    r.insert(0x1003, &t);
+    let run = |remapped: bool| {
+        let mut m = ram(&[(0x1000, prog)]);
+        m[0x2005] = 1;
+        m[0x2006] = 2;
+        let mut c = Cpu::new();
+        let mut bus = if remapped {
+            Accesses::remapped(&mut *m, &r)
+        } else {
+            Accesses::new(&mut *m, Some(&r))
+        };
+        run_to_rts(&mut c, &mut bus, 0x1000, 0, None, 100, None, || false);
+        let n = bus.log.len();
+        (c.a, m[0x2007], n)
+    };
+    assert_eq!(run(false), (2, 0, 2));
+    assert_eq!(run(true), (2, 0, 0));
+}
+
+#[test]
 fn digest_covers_the_spans_only() {
     let m = FlatMemory::new();
     let all = [(0u32, 0x10000u32)];

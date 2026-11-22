@@ -73,14 +73,14 @@ branch. Interrupt-driven code adds vector obligations ([Interrupts](#interrupts)
 [pytest plugin](#pytest-plugin) records each test's coverage under its node id.
 
 ```python
-from jennings.coverage import CoverageMPU, CoverageMap, EXEC, TAKEN, FALLTHRU
+from jennings.coverage import CoverageMPU, CoverageMap, EXEC, call, one_way
 
 mpu = CoverageMPU(pc=0x0800)          # drop-in MPU; mpu.cov survives reset()
 ...                                   # load code, mpu.step() / mpu.irq() / mpu.nmi()
+call(mpu, 0x1000, a=0, raster=64)     # run to RTS; $D012 = instructions // 64 & $FF before each
 cov = mpu.cov
 executed = (cov.flags & EXEC).nonzero()[0]
-bt = cov.flags & (TAKEN | FALLTHRU)
-one_way = ((bt == TAKEN) | (bt == FALLTHRU)).nonzero()[0]   # branches seen going one way
+one_way(cov, mpu.memory)              # {(branch pc, target never taken)}
 cov.save("run.npz")
 total = CoverageMap.load("a.npz")
 total |= CoverageMap.load("b.npz")    # OR flags, add hits, union the sets
@@ -127,6 +127,17 @@ byte that was written adds a `defuse` record whose `pc` is the `JMP (ind)` or `B
 handler for IRQ/NMI. `CoverageVM.vector_target` holds the last target taken through each
 pointer, the previous target of the next `chains` record. `save` writes one `.npz`;
 `CoverageMap.load` reads it back (files without the newer keys load with them empty).
+
+`call(mpu, addr, a=0, x=0, y=0, max_steps=1_000_000, raster=None)` pushes the sentinel
+`RETURN` and steps until it returns there; with `raster`, `$D012` holds
+`n // raster & $FF` before the `n`-th instruction, so raster polls in init code terminate.
+
+`jennings.coverage.cfg` holds the static flow helpers: `successors(mem, pc)`,
+`instruction_bytes(mem, starts)` (`bool[65536]` of every byte of the instructions starting
+in the mask `starts`, wrapping at `$FFFF`), `return_edges(mem, succ, calls)` (`{rts: {return
+sites}}` from `succ` `{pc: [pcs]}` and `calls` `{callee: {return sites}}`, nested `JSR`s
+skipped to their return site), `control_dependence(edges, exit_=-1)` (`{node: {branch}}` by
+postdominators with a virtual exit after every sink) and `one_way(cov, mem)`.
 
 ## Reporting
 

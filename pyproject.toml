@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jennings"
-version = "0.16.0"
+version = "0.17.0"
 description = "py65-compatible 6502/6510 MPU, assembler, and disassembler with first-class NMOS illegal-opcode support."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -25,9 +25,9 @@ dependencies = ["deity-informant>=0.7.0"]
 
 [project.optional-dependencies]
 superopt = ["z3-solver>=4.12", "numpy>=1.23"]
-coverage = ["numpy>=1.23", "coverage>=7.4", "pyelftools>=0.31", "tqdm>=4.60"]
+coverage = ["numpy>=1.23", "coverage>=7.4", "pyelftools>=0.31", "tqdm>=4.60", "networkx>=3.0"]
 cuda = ["z3-solver>=4.12", "numpy>=1.23", "cupy-cuda12x>=13"]
-dev = ["pytest", "pytest-xdist", "pytest-cov", "coverage>=7.4", "pyelftools>=0.31", "tqdm>=4.60", "build", "black", "pylint", "py65", "numpy", "z3-solver>=4.12"]
+dev = ["pytest", "pytest-xdist", "pytest-cov", "coverage>=7.4", "pyelftools>=0.31", "tqdm>=4.60", "build", "black", "pylint", "py65", "numpy", "z3-solver>=4.12", "networkx>=3.0"]
 
 [project.scripts]
 jennings-acme = "jennings.acme:main"
