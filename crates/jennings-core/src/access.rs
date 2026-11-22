@@ -13,8 +13,9 @@ pub const ZERO: i32 = -2;
 ///
 /// An instruction at a PC with a table accesses each address whose entry is not
 /// [`AS_IS`] elsewhere: a read gives the byte at the entry ([`ZERO`]: 0) and a write
-/// stores nothing. The page-zero pointer bytes (operand and operand + 1) of an
-/// instruction whose opcode is in `pointer_opcodes` are accessed as they are.
+/// stores nothing. The page-zero pointer bytes of an instruction whose opcode is in
+/// `pointer_opcodes` are accessed as they are: operand + X and operand + X + 1 for
+/// `(zp,X)`, else operand and operand + 1 (each wrapping in page zero).
 pub struct Remap {
     site: Box<[u32]>,
     tables: Vec<Box<[i32]>>,
@@ -58,6 +59,12 @@ impl Remap {
             i => Some(&self.tables[i as usize - 1]),
         }
     }
+}
+
+/// Whether `op` is `(zp,X)`: addressing-mode bits `bbb = 000` in group `cc = 01` or `11`.
+#[inline(always)]
+fn indexed_by_x(op: u8) -> bool {
+    op & 0x1D == 0x01
 }
 
 /// The key [`Accesses`] logs a data access by: `pc << 17 | write << 16 | addr`.
@@ -179,8 +186,10 @@ impl<B: Bus> Bus for Accesses<'_, B> {
         self.table = self.remap.and_then(|r| r.table(cpu.pc));
         self.keep = None;
         if let (Some(r), Some(_)) = (self.remap, self.table) {
-            if r.pointer[self.inner.fetch(cpu.pc) as usize] {
-                let zp = self.inner.fetch(cpu.pc.wrapping_add(1)) as u16;
+            let op = self.inner.fetch(cpu.pc);
+            if r.pointer[op as usize] {
+                let x = if indexed_by_x(op) { cpu.x } else { 0 };
+                let zp = self.inner.fetch(cpu.pc.wrapping_add(1)).wrapping_add(x) as u16;
                 self.keep = Some((zp, (zp + 1) & 0xFF));
             }
         }

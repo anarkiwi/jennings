@@ -359,7 +359,7 @@ def test_fixture_dynamic_within_static(fixture):
         (pc + k) & 0xFFFF
         for pc, ops in smc.starts.items()
         for op in ops
-        for k in range(vsa.template(op).length)
+        for k in range(vsa.template(op).len)
     }
     edges = smc.edges | {(a, t) for a, ts in smc.unresolved_transfers.items() for t in ts}
     for vm in runs:

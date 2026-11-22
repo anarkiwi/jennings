@@ -8,8 +8,7 @@ singletons), reading operand bytes through the lifter's ``prov`` tags.
 from functools import lru_cache
 
 import numpy as np
-from deity_informant import lift
-from deity_informant.lifter import STATUS_BITS, bus_only
+from deity_informant.lifter import STATUS_BITS, bus_only, template
 
 from jennings.coverage._core import EXEC, FALLTHRU, TAKEN
 
@@ -24,6 +23,7 @@ __all__ = [
     "word",
     "apply",
     "template",
+    "writes",
     "step",
 ]
 
@@ -236,7 +236,7 @@ def _cones(ops, prov):
 @lru_cache(maxsize=None)
 def _flag_masks(op, f, scalars):
     """``(values of r giving flag 0, giving 1)`` of cone ``f`` of ``op`` with ``scalars``."""
-    _, prog, _ = template(op).cones[f]
+    _, prog, _ = _cone_map(op)[f]
     lane, env = np.arange(0x100), {}
     for k, mn, out_size, in_sizes, args in prog:
         vals = [
@@ -256,48 +256,32 @@ def _flag_masks(op, f, scalars):
     return from_bool(g == 0), from_bool(g == 1)
 
 
-class _Template:
-    __slots__ = ("ops", "prov", "ctrl", "length", "writes", "cones", "bus")
-
-    def __init__(self, op):
-        mem = bytearray(5)
-        mem[:2] = op, 3
-        rec = lift(mem, 0)
-        self.ops, self.ctrl, self.length = rec["ops"], rec["ctrl"], rec["len"]
-        self.bus = bus_only(self.ops)
-        self.prov = dict(rec["prov"]["ops"])
-        mem[4] = 0x5A
-        for i, (a, b) in enumerate(zip(self.ops, lift(mem, 0)["ops"])):
-            for j, (va, vb) in enumerate(zip(a[2], b[2])):
-                if va != vb:
-                    self.prov[(i, j)] = ([1], "ptrhi1")
-        stk = {SP} if self.ctrl[0] in ("jsr", "rts", "rti", "brk") else set()
-        stk |= {i for i, _ in STATUS_BITS} if self.ctrl[0] == "rti" else set()
-        stk |= {10} if self.ctrl[0] == "brk" else set()
-        self.writes = frozenset(o[1][1] for o in self.ops if o[1] and o[1][0] == "r") | stk
-        self.cones = _cones(self.ops, self.prov)
+@lru_cache(maxsize=None)
+def writes(op):
+    """Registers ``op`` writes, with the SP, status and I its stack and interrupt traffic sets."""
+    kind = template(op).ctrl[0]
+    stk = {SP} if kind in ("jsr", "rts", "rti", "brk") else set()
+    stk |= {i for i, _ in STATUS_BITS} if kind == "rti" else set()
+    stk |= {10} if kind == "brk" else set()
+    return frozenset(o[1][1] for o in template(op).ops if o[1] and o[1][0] == "r") | stk
 
 
 @lru_cache(maxsize=None)
-def template(op):
-    """Lifted pcode of ``op`` with every operand-derived constant tagged in ``prov``
-    (``ptrhi1``: the zero-page pointer high byte plus one that SHA (zp),Y folds in); ``bus``
-    the indices of its dummy bus accesses, which have no data use and are not executed."""
-    return _Template(op)
+def _bus(op):
+    return bus_only(template(op).ops)
+
+
+@lru_cache(maxsize=None)
+def _cone_map(op):
+    t = template(op)
+    return _cones(t.ops, t.prov)
 
 
 def _const(fn, srcs, pc, mem):
     if fn == "word":
         return mem.word((pc + 1) & 0xFFFF, (pc + 2) & 0xFFFF)
     b = mem.byte((pc + srcs[0]) & 0xFFFF)
-    if fn == "id":
-        return b
-    if fn == "hi1":
-        return rot(b, 1)
-    hi = 0
-    for z in bits(b).tolist():
-        hi |= mem.byte((z + 1) & 0xFF)
-    return rot(hi, 1)
+    return b if fn == "id" else rot(b, 1)
 
 
 def _stack(sp):
@@ -334,8 +318,8 @@ def _vector(mem, ptrs):
     return out
 
 
-def _origins(op, t, pre, regs, consts, uniq, out):
-    for f, (r, _, leaves) in t.cones.items():
+def _origins(op, cones, pre, regs, consts, uniq, out):
+    for f, (r, _, leaves) in cones.items():
         scalars = []
         for kind, key in leaves:
             m = consts[key] if kind == "p" else pre[key] if kind == "pre" else uniq[key]
@@ -357,11 +341,12 @@ def step(op, pc, regs, mem, origins=None):
     function of register ``r``'s new value: ``m0``/``m1`` its values with the flag 0/1.
     """
     t = template(op)
-    pre = list(regs) if origins is not None and t.cones else None
+    cones = _cone_map(op)
+    pre = list(regs) if origins is not None and cones else None
     consts = {k: _const(fn, srcs, pc, mem) for k, (srcs, fn) in t.prov.items()}
     uniq = {}
     for i, (mn, out, ins) in enumerate(t.ops):
-        if i in t.bus:
+        if i in _bus(op):
             continue
         vals = [
             (
@@ -377,13 +362,13 @@ def step(op, pc, regs, mem, origins=None):
         res = mem.load(vals[0]) if mn == "LOAD" else apply(mn, out[2], [v[2] for v in ins], vals)
         (regs if out[0] == "r" else uniq)[out[1]] = res
     if pre is not None:
-        _origins(op, t, pre, regs, consts, uniq, origins)
+        _origins(op, cones, pre, regs, consts, uniq, origins)
     kind = t.ctrl[0]
-    nxt = (pc + t.length) & 0xFFFF
+    nxt = (pc + t.len) & 0xFFFF
     if kind == "next":
         return [(EXEC, 1 << nxt, regs)]
     if kind == "br":
-        flag, pol = t.ctrl[1][1], t.ctrl[2]
+        flag, pol = t.ctrl[1:]
         out = []
         if regs[flag] >> pol & 1:
             taken = list(regs)

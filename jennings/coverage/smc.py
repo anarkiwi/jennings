@@ -15,7 +15,7 @@ import numpy as np
 from jennings.coverage._core import EXEC, RETURN, TAKEN
 from jennings.coverage.plugin import save_sidecar
 from jennings.coverage.vsa import TOP8, TOP16, bits, from_bool, from_values, is_single
-from jennings.coverage.vsa import rot, step, template, word
+from jennings.coverage.vsa import rot, step, template, word, writes
 from jennings.opcodes import MEM_MODES, MODE_LEN, OPCODES
 
 __all__ = [
@@ -453,12 +453,12 @@ class _Analysis:
                 self.executed[(pc + k) & 0xFFFF] |= mem.byte((pc + k) & 0xFFFF)
             origins = {}
             succ = step(op, pc, list(st.regs), mem, origins)
-            fo = _carry(st.fo, template(op).writes, origins)
+            fo = _carry(st.fo, writes(op), origins)
             if kind == "next":
                 d = _PUSH.get(_MN[op], 0)
                 follow = None
                 rets = _shift(st.rets, d) if d or not mem.stack else {}
-                if 3 in template(op).writes and not d:
+                if 3 in writes(op) and not d:
                     rets = {}
             else:
                 follow, rets = self._follow(kind, pc, st, mem)
@@ -469,7 +469,7 @@ class _Analysis:
             for flag, targets, regs in succ:
                 if flag != EXEC:
                     ctrl = template(op).ctrl
-                    cut = _refine(regs, fo, ctrl[1][1], ctrl[2] ^ (flag != TAKEN))
+                    cut = _refine(regs, fo, ctrl[1], ctrl[2] ^ (flag != TAKEN))
                     if cut is None:
                         continue
                     regs, sfo = cut

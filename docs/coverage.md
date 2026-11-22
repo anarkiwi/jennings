@@ -296,8 +296,9 @@ and stack); their stores and loads are correspondingly imprecise.
 **Domain** (`jennings.coverage.vsa`). A value of `w` bytes is the exact set of integers it may
 hold (a `256**w`-bit mask); each pcode op is evaluated over the product of its input sets with
 the semantics of `PcodeVM`, and `step` adds the JSR/RTS/RTI/BRK stack traffic, so on singleton
-sets it is the concrete machine. Operand bytes enter through the lifter's `prov` tags, so a
-self-modified operand contributes every value its bytes may hold.
+sets it is the concrete machine. Operand bytes enter through the `prov` bindings of
+`deity_informant.lifter.template`, so a self-modified operand contributes every value its bytes
+may hold.
 
 **Fixpoint.** One joined state per instruction address and innermost pending return address,
 so a subroutine's states stay apart per call site: register sets, the bytes written along the

@@ -1176,7 +1176,7 @@ impl Core {
 /// ``Remap({pc: table}, pointer_opcodes=())``: each ``table`` holds one int32 per address,
 /// -1 accessed as it is, -2 reads 0, else the address the read takes its byte from; a
 /// redirected write stores nothing. The page-zero pointer bytes of an instruction whose
-/// opcode is in ``pointer_opcodes`` are accessed as they are.
+/// opcode is in ``pointer_opcodes`` (``(zp,X)``: indexed by X) are accessed as they are.
 #[pyclass(module = "jennings._core", name = "Remap", frozen)]
 pub struct PyRemap(Remap);
 

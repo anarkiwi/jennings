@@ -11,6 +11,7 @@ import pytest
 
 from deity_informant import PcodeVM
 from jennings.devices.mpu6502 import MPU, NativeMPU, Remap
+from jennings.isa import pointer_bytes
 from jennings.memory import NATIVE, NativeMemory
 
 pytestmark = pytest.mark.skipif(not NATIVE, reason="native core not built")
@@ -701,6 +702,19 @@ def test_remap_redirects_its_instructions():
         Remap({0x1000: np.full(0x10000, -3, np.int32)})
 
 
+def test_remap_keeps_zpx_pointer_bytes_indexed_by_x():
+    """``LDA ($10,X)`` with X = 4 reads its pointer from $14/$15 as is; $10 is redirected."""
+    mem = NativeMemory()
+    mem[0x1000:0x1005] = [0xA2, 0x04, 0xA1, 0x10, 0x60]
+    mem[0x14:0x16] = mem[0x2014:0x2016] = [0x10, 0x00]
+    mem[0x10], mem[0x2010] = 9, 7
+    table = np.full(0x10000, -1, np.int32)
+    table[:0x100] = np.arange(0x2000, 0x2100)
+    mpu = MPU(memory=mem)
+    mpu.run_to_rts(0x1000, 0, 100, remap=Remap({0x1002: table}, [0xA1]))
+    assert mpu.a == 7
+
+
 def test_digest_of_spans():
     mem = NativeMemory()
     whole, parts = mem.digest(), mem.digest([range(0, 0x100), range(0x200, 0x10000)])
@@ -810,10 +824,8 @@ def _overrun_model(mpu, tables, pointer_opcodes):
         src = tables.get(pc)
         if src is None or src[addr] == -1:
             return None
-        if ram[pc] in pointer_opcodes:
-            zp = ram[(pc + 1) & 0xFFFF]
-            if addr in (zp, (zp + 1) & 0xFF):
-                return None
+        if ram[pc] in pointer_opcodes and addr in pointer_bytes(ram, pc, mpu.x):
+            return None
         return int(src[addr])
 
     def read(addr):
