@@ -18,7 +18,7 @@ pub mod orbit;
 pub mod run;
 pub mod taint;
 
-pub use access::{access_key, Accesses, Remap, AS_IS, ZERO};
+pub use access::{access_key, base_of, Accesses, Base, Remap, AS_IS, ZERO};
 pub use bus::Bus;
 pub use cpu::Cpu;
 pub use flat::{Access, FlatBus, FlatMemory, Hooks, NoHooks};

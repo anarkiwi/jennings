@@ -6,7 +6,7 @@ import numpy as np
 from jennings.coverage._core import EXEC, OPERAND, READ, WRITE
 from jennings.coverage.cfg import LEN, successors
 from jennings.coverage.plugin import save_sidecar
-from jennings.coverage.resolve import Tables
+from jennings.coverage.resolve import Tables, split_table
 from jennings.devices.mpu6502 import MPU
 from jennings.disassembler import Disassembler
 from jennings.opcodes import ILLEGAL_OPCODES
@@ -44,7 +44,7 @@ def _walk(m, stack, owned, known, forced=frozenset(), bad=None):
     return succ, jumps, callees
 
 
-def _resolve(m, succ, owned, image, cov, heads, jumps, callees):
+def _resolve(m, succ, owned, image, cov, heads, jumps, callees, tabled):
     """Decode the statically resolved targets of computed transfers into ``succ``/``owned``
     until no new transfer appears: ``(edges {(transfer, target)}, new roots)``. A target is
     taken only if its whole descent decodes documented opcodes other than BRK inside the
@@ -52,7 +52,7 @@ def _resolve(m, succ, owned, image, cov, heads, jumps, callees):
     flags = np.zeros(0x10000, np.uint8) if cov is None else cov.flags
     code = (flags & (EXEC | OPERAND)) != 0
     var = ((flags & WRITE) != 0) & ~code
-    data = ((flags & READ) != 0) & ~code & ~var
+    data = (((flags & READ) != 0) & ~code & ~var) | tabled
     edges, new, done, firsts = set(), set(), set(), set()
     while True:
         tables = Tables(m, succ, owned, image, cov, heads | callees, firsts)
@@ -116,16 +116,24 @@ class Listing:
         return int(hit[0]) if hit.size else None
 
     @classmethod
-    def disassemble(cls, mem, entries, cov=None, ranges=(), resolve=False):
+    # pylint: disable-next=too-many-arguments,too-many-positional-arguments
+    def disassemble(cls, mem, entries, cov=None, ranges=(), resolve=False, tables=()):
         """Decode from ``entries`` and, given ``cov``, from every executed address and dynamic
         edge/interrupt target; ``ranges`` (inclusive ``(lo, hi)``) add ``.byte`` rows for
         the bytes in them that no instruction covers. Executed starts may overlap.
         ``resolve`` also decodes the targets of computed transfers read from constant tables
-        (``resolved``: ``[[transfer, target]]``; new roots are marked ``; resolved from``)."""
+        (``resolved``: ``[[transfer, target]]``; new roots are marked ``; resolved from``).
+        ``tables`` are hand-written split tables, :func:`~.resolve.split_table` arguments
+        ``(lo, hi, n[, stride[, high]])``: their words are entries, their bytes table data."""
         m = np.zeros(0x10000, np.uint8)
         src = np.asarray(mem, np.uint8)[:0x10000]
         m[: src.size] = src
         roots = {a & 0xFFFF for a in entries}
+        tabled = np.zeros(0x10000, bool)
+        for t in tables:
+            words, cells = split_table(m, *t)
+            roots.update(words.tolist())
+            tabled[cells] = True
         execd = np.zeros(0, np.int64)
         seeds = set()
         if cov is not None:
@@ -145,7 +153,7 @@ class Listing:
         edges, new = set(), set()
         if resolve:
             image = want if ranges else np.ones(0x10000, bool)
-            edges, new = _resolve(m, succ, owned, image, cov, roots | seeds, jumps, callees)
+            edges, new = _resolve(m, succ, owned, image, cov, roots | seeds, jumps, callees, tabled)
         via = {}
         for t, target in sorted(edges):
             via.setdefault(target, []).append("$%04X" % t)

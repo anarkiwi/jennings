@@ -715,6 +715,23 @@ def test_remap_keeps_zpx_pointer_bytes_indexed_by_x():
     assert mpu.a == 7
 
 
+def test_run_to_rts_accesses_bases():
+    """Indexed accesses are based on their operand, ``(zp),Y`` on the pointer word its
+    loads read (redirected ones included), everything else on the address itself."""
+    mpu = _access_program()
+    mpu.memory[0x2008] = 1
+    mpu.x, mpu.y = 3, 5
+    _, log, bases = mpu.run_to_rts_accesses(0x1000, 0, 1000, bases=True)
+    assert [k & 0xFFFF for k in log] == [0x2008, 0x2108, 0x10, 0x11, 0x2305]
+    assert list(bases) == [0x2005, 0x2105, 0x10, 0x11, 0x2300]
+    table = np.full(0x10000, -1, np.int32)
+    table[0x11] = 0x2003
+    mpu.x = mpu.y = 0
+    _, log, bases = mpu.run_to_rts_accesses(0x1000, 0, 1000, Remap({0x1006: table}), True)
+    assert list(bases) == [0x2005, 0x2105, 0x10, 0x11, 0x0400]
+    assert len(mpu.run_to_rts_accesses(0x1000, 0, 1000)) == 2
+
+
 def test_digest_of_spans():
     mem = NativeMemory()
     whole, parts = mem.digest(), mem.digest([range(0, 0x100), range(0x200, 0x10000)])

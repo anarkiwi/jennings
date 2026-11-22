@@ -73,16 +73,45 @@ pub fn access_key(pc: u16, write: bool, addr: u16) -> u64 {
     (pc as u64) << 17 | (write as u64) << 16 | addr as u64
 }
 
+/// How an instruction's data accesses are based: [`Base::Abs`] and [`Base::Zp`] on the
+/// operand of an indexed absolute or page-zero mode, [`Base::IndY`] on the pointer word of
+/// `(zp),Y` (read by its first two loads), [`Base::Addr`] on the address accessed.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Base {
+    Addr,
+    Abs,
+    Zp,
+    IndY,
+}
+
+/// The [`Base`] of opcode `op` by its addressing-mode bits `bbb`: `zp,X`/`zp,Y` (101),
+/// `abs,X`/`abs,Y` (111, and 110 in groups `cc = 01`/`11`), `(zp),Y` (100 in those groups).
+pub fn base_of(op: u8) -> Base {
+    match (op >> 2 & 7, op & 1) {
+        (5, _) => Base::Zp,
+        (7, _) | (6, 1) => Base::Abs,
+        (4, 1) => Base::IndY,
+        _ => Base::Addr,
+    }
+}
+
 /// `inner` with every data LOAD/STORE logged by [`access_key`] (the instruction's start PC)
-/// and the accesses of `remap`'s instructions redirected.
+/// and the accesses of `remap`'s instructions redirected; with [`Accesses::with_bases`]
+/// also each access's base address ([`Base`]) in `bases`, in step with `log`.
 pub struct Accesses<'a, B: Bus> {
     pub inner: &'a mut B,
     pub log: Vec<u64>,
+    pub bases: Vec<u16>,
     logs: bool,
+    based: bool,
     remap: Option<&'a Remap>,
     pc: u16,
     table: Option<&'a [i32]>,
     keep: Option<(u16, u16)>,
+    base: Base,
+    operand: [u8; 2],
+    pointer: [u8; 2],
+    loads: u8,
 }
 
 impl<'a, B: Bus> Accesses<'a, B> {
@@ -90,11 +119,25 @@ impl<'a, B: Bus> Accesses<'a, B> {
         Accesses {
             inner,
             log: Vec::new(),
+            bases: Vec::new(),
             logs: true,
+            based: false,
             remap,
             pc: 0,
             table: None,
             keep: None,
+            base: Base::Addr,
+            operand: [0; 2],
+            pointer: [0; 2],
+            loads: 0,
+        }
+    }
+
+    /// As [`Accesses::new`], also logging each access's base in `bases`.
+    pub fn with_bases(inner: &'a mut B, remap: Option<&'a Remap>) -> Self {
+        Accesses {
+            based: true,
+            ..Accesses::new(inner, remap)
         }
     }
 
@@ -115,6 +158,14 @@ impl<'a, B: Bus> Accesses<'a, B> {
     fn note(&mut self, write: bool, addr: u16) {
         if self.logs {
             self.log.push(access_key(self.pc, write, addr));
+        }
+        if self.based {
+            self.bases.push(match self.base {
+                Base::Abs => u16::from_le_bytes(self.operand),
+                Base::Zp => self.operand[0] as u16,
+                Base::IndY if self.loads >= 2 => u16::from_le_bytes(self.pointer),
+                _ => addr,
+            });
         }
     }
 
@@ -153,14 +204,28 @@ impl<B: Bus> Bus for Accesses<'_, B> {
 
     #[inline(always)]
     fn fetch(&mut self, addr: u16) -> u8 {
-        self.inner.fetch(addr)
+        let v = self.inner.fetch(addr);
+        if self.based {
+            match addr.wrapping_sub(self.pc) {
+                1 => self.operand[0] = v,
+                2 => self.operand[1] = v,
+                _ => {}
+            }
+        }
+        v
     }
 
     #[inline(always)]
     fn load(&mut self, addr: u16) -> u8 {
         self.note(false, addr);
-        self.redirected_read(addr)
-            .unwrap_or_else(|| self.inner.load(addr))
+        let v = self
+            .redirected_read(addr)
+            .unwrap_or_else(|| self.inner.load(addr));
+        if self.based && self.base == Base::IndY && self.loads < 2 {
+            self.pointer[self.loads as usize] = v;
+            self.loads += 1;
+        }
+        v
     }
 
     #[inline(always)]
@@ -190,6 +255,10 @@ impl<B: Bus> Bus for Accesses<'_, B> {
         self.pc = cpu.pc;
         self.table = self.remap.and_then(|r| r.table(cpu.pc));
         self.keep = None;
+        if self.based {
+            self.base = base_of(self.inner.fetch(cpu.pc));
+            self.loads = 0;
+        }
         if let (Some(r), Some(_)) = (self.remap, self.table) {
             let op = self.inner.fetch(cpu.pc);
             if r.pointer[op as usize] {

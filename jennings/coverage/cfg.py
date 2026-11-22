@@ -1,6 +1,6 @@
 """Static control flow of 6502 instructions, shared by the listing and DWARF mappers: single
-instructions' successors, the bytes of executed instructions, return edges, control
-dependence and the branches a coverage map saw go one way."""
+instructions' successors, the bytes and control operands of executed instructions, return
+edges, control dependence and the branches a coverage map saw go one way."""
 
 import collections
 
@@ -12,7 +12,9 @@ from jennings.isa import is_branch, length, s8
 
 __all__ = [
     "LEN",
+    "STOPS",
     "control_dependence",
+    "control_operands",
     "instruction_bytes",
     "is_jump",
     "one_way",
@@ -23,6 +25,9 @@ __all__ = [
 LEN = np.array([length(op) for op in range(256)], np.int64)
 EXIT = frozenset((0x00, 0x40, 0x60, 0x6C)) | _JAM
 JMP, JSR, _RTS = 0x4C, 0x20, 0x60
+#: Opcodes after which control never reaches the next instruction: the exits and ``JMP``.
+STOPS = EXIT | {JMP}
+_CONTROL = np.array([is_branch(op) or op in (JMP, JSR, 0x6C) for op in range(256)])
 
 
 def successors(m, a):
@@ -49,20 +54,35 @@ def is_jump(flag, jump):
     return flag == TAKEN or (flag == EXEC and jump is not None)
 
 
+def _bytes(mem):
+    """``mem`` (an array, sequence or buffer of 65536 bytes) as an array."""
+    if isinstance(mem, (np.ndarray, list, tuple)):
+        return np.asarray(mem)
+    return np.frombuffer(mem, np.uint8)
+
+
+def _cover(m, pcs, first):
+    """bool [65536]: bytes ``first`` onward of the instructions at ``pcs``, wrapping."""
+    n = LEN[m[pcs]]
+    out = np.zeros(0x10000, bool)
+    for i in range(first, 3):
+        out[(pcs + i)[n > i] & 0xFFFF] = True
+    return out
+
+
 def instruction_bytes(mem, starts):
     """bool [65536]: every byte of the instructions starting where the bool mask ``starts``
     is set, wrapping at ``$FFFF``; ``mem`` an array, sequence or buffer of 65536 bytes."""
+    return _cover(_bytes(mem), np.flatnonzero(starts), 0)
+
+
+def control_operands(mem, starts):
+    """bool [65536]: the operand bytes of the branch, ``JMP`` and ``JSR`` instructions
+    starting where ``starts`` is set, wrapping at ``$FFFF`` (``mem`` as
+    :func:`instruction_bytes`)."""
+    m = _bytes(mem)
     pcs = np.flatnonzero(starts)
-    m = (
-        np.asarray(mem)
-        if isinstance(mem, (np.ndarray, list, tuple))
-        else np.frombuffer(mem, np.uint8)
-    )
-    n = LEN[m[pcs]]
-    out = np.zeros(0x10000, bool)
-    for i in range(3):
-        out[(pcs + i)[n > i] & 0xFFFF] = True
-    return out
+    return _cover(m, pcs[_CONTROL[m[pcs]]], 1)
 
 
 def return_edges(mem, succ, calls):

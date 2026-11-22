@@ -134,7 +134,10 @@ pointer, the previous target of the next `chains` record. `save` writes one `.np
 
 `jennings.coverage.cfg` holds the static flow helpers: `successors(mem, pc)`,
 `instruction_bytes(mem, starts)` (`bool[65536]` of every byte of the instructions starting
-in the mask `starts`, wrapping at `$FFFF`), `return_edges(mem, succ, calls)` (`{rts: {return
+in the mask `starts`, wrapping at `$FFFF`), `control_operands(mem, starts)` (the operand
+bytes of the branches, `JMP`s and `JSR`s among them, wrapping likewise), `STOPS` (the opcodes
+after which control never reaches the next instruction: `BRK`, `RTI`, `RTS`, the JAMs and
+both `JMP`s), `return_edges(mem, succ, calls)` (`{rts: {return
 sites}}` from `succ` `{pc: [pcs]}` and `calls` `{callee: {return sites}}`, nested `JSR`s
 skipped to their return site), `control_dependence(edges, exit_=-1)` (`{node: {branch}}` by
 postdominators with a virtual exit after every sink) and `one_way(cov, mem)`.
@@ -209,6 +212,12 @@ lines it reaches carry no mark, and all resolved edges, including those to liste
 in `resolved`. Bounds come only from the path (masks, shifts, compares, the image values of
 constant bytes it reads); an index read from a variable is unbounded, so a dispatch indexed
 by a command byte lists every entry up to the table's end.
+
+Tables the resolver cannot bound or find are given by hand: `Listing.disassemble(...,
+tables=[(lo, hi, n, stride, high)])` decodes from the words of each split table and keeps its
+bytes as data. `resolve.split_table(mem, lo, hi, n, stride=1, high=None)` gives a table's
+`(words, cells)`: word `k` has its low byte at `lo + stride * k` and its high byte at
+`hi + stride * k`, or `high` for every word.
 
 The sidecar is JSON and independent of how the source was produced:
 

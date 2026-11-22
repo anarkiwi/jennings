@@ -10,12 +10,15 @@ import jennings.coverage
 from jennings.coverage import FALLTHRU, RETURN, TAKEN, CoverageMPU, call
 from jennings.coverage.cfg import (
     LEN,
+    STOPS,
     control_dependence,
+    control_operands,
     instruction_bytes,
     one_way,
     return_edges,
     successors,
 )
+from jennings.opcodes import OPCODES
 
 
 def test_instruction_bytes_marks_each_instruction_and_wraps():
@@ -31,6 +34,36 @@ def test_instruction_bytes_marks_each_instruction_and_wraps():
     assert want[[0, 1]].all()
     for m in (mem, bytes(mem), list(mem.tolist())):
         assert (instruction_bytes(m, starts) == want).all()
+
+
+def test_control_operands_are_transfer_operands_and_wrap():
+    """The operand bytes of branches, JMP (both modes) and JSR only, by mnemonic and mode."""
+    rng = np.random.default_rng(4)
+    mem = rng.integers(0, 256, 0x10000, dtype=np.uint8)
+    starts = rng.random(0x10000) < 0.05
+    starts[0xFFFE] = True
+    mem[0xFFFE] = 0x4C
+    want = np.zeros(0x10000, bool)
+    for pc in np.flatnonzero(starts):
+        name, md = OPCODES[mem[pc]]
+        if md == "rel" or name in ("JMP", "JSR"):
+            want[(pc + np.arange(1, LEN[mem[pc]])) & 0xFFFF] = True
+    assert want[[0xFFFF, 0]].all() and want.sum() < instruction_bytes(mem, starts).sum()
+    for m in (mem, bytes(mem)):
+        assert (control_operands(m, starts) == want).all()
+
+
+def test_stops_never_fall_through():
+    """STOPS are the opcodes whose static successors omit the next instruction."""
+    mem = np.zeros(0x10000, np.uint8)
+    falls = set()
+    for op in range(256):
+        mem[0x1000], mem[0x1001], mem[0x1002] = op, 0x10, 0x20
+        nxt = 0x1000 + LEN[op]
+        if any(t == nxt for _, t in successors(mem, 0x1000)[0]):
+            falls.add(op)
+    assert STOPS == frozenset(range(256)) - falls
+    assert {OPCODES[op][0] for op in STOPS} == {"BRK", "JMP", "RTI", "RTS", "JAM"}
 
 
 def _flow(mem, entry):

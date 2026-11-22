@@ -113,7 +113,12 @@ The page-zero pointer bytes of an opcode in `pointer_opcodes` (operand + X and o
 for `(zp,X)`, operand and operand + 1 for `(zp),Y`, wrapping in page zero) are accessed as
 they are. The log keeps the address the instruction named. `run_to_rts`,
 `run_to_rts_until` and `run_until` take the same `remap=None`, applied without a log
-(`Accesses::remapped` in jennings-core).
+(`Accesses::remapped` in jennings-core). With `bases=True` it returns `(Trace, accesses,
+bases)`, `bases` a uint16 memoryview in step with `accesses`: each access's address before
+indexing, the operand of an `abs,X`/`abs,Y`/`zp,X`/`zp,Y` instruction, the pointer word
+of a `(zp),Y` one (as its first two loads read it, after any remap; those loads are based
+on themselves), else the address itself (`Base` and `Accesses::with_bases` in
+jennings-core).
 `mem.digest(spans=None)` is a 16-byte digest of the RAM in `spans` (as
 `observe_data_access` takes them, default all): equal RAM there gives an equal digest, so a
 run of calls detects a repeated state without copying memory to Python.
