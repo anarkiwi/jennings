@@ -308,19 +308,34 @@ def widen(comps, cyc):
     return replace(comps, closures=cls, feed=feed, feeding=_feeding(cls, _tainted(comps)))
 
 
-def cover_calls(state, pc, comps, limit, *, acc=0, max_cycles=MAX_CYCLES, remap=None):
-    """``(calls, comps)``: the calls from ``state`` after which every data access and control
-    edge has been seen (the feed set's preperiod plus period; None if it does not repeat within
-    ``limit``), with ``comps`` widened until autonomous on the trajectory."""
-    rows = trajectory(
-        state, pc, comps.persistent, limit, acc=acc, max_cycles=max_cycles, remap=remap
-    )
+def _autonomous(rows, comps):
+    """``(cycles, comps)``: ``comps`` widened until no closure conflicts on ``rows``."""
     while True:
         cyc = _measure(rows, comps)
         if not cyc.conflicts:
-            break
+            return cyc, comps
         wider = widen(comps, cyc)
         if wider == comps:
             raise RuntimeError("conflicts no persistent cell explains: %r" % cyc.conflicts)
         comps = wider
-    return (None if cyc.feed is None else cyc.feed[0] + cyc.feed[1]), comps
+
+
+def cover_calls(
+    state, pc, comps, limit, *, acc=0, max_cycles=MAX_CYCLES, remap=None, exclude=(STACK, IO)
+):
+    """``(calls, comps)``: the calls from ``state`` after which every data access and control
+    edge has been seen (the feed set's preperiod plus period; None if it does not repeat within
+    ``limit``), ``comps`` relearned over at least ``calls`` calls and widened until autonomous."""
+    kw = {"acc": acc, "max_cycles": max_cycles, "remap": remap}
+    rows = None
+    while True:
+        if rows is None or rows.shape[1] != len(comps.persistent):
+            rows = trajectory(state, pc, comps.persistent, limit, **kw)
+        cyc, comps = _autonomous(rows, comps)
+        calls = None if cyc.feed is None else cyc.feed[0] + cyc.feed[1]
+        if calls is None or calls <= comps.calls:
+            return calls, comps
+        wider = learn(state, pc, calls, exclude=exclude, **kw)
+        if wider.persistent != comps.persistent:
+            rows = None
+        comps = wider

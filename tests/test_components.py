@@ -311,6 +311,36 @@ def test_a_missed_dependence_is_a_conflict_that_widening_closes():
     assert C.widen(blind, C.cycles(ram, PLAY, blind, 100)).feed == frozenset({n, m})
 
 
+LATE = """
+    inc m
+    lda m
+    cmp #200
+    bcc +
+    ldx k
+    lda tab,x
+    sta $d400
+    inx
+    cpx #3
+    bne ++
+    ldx #0
+++  stx k
++   rts
+m   !byte 0
+k   !byte 0
+tab !byte 1, 2, 3
+"""
+
+
+def test_cover_calls_relearns_over_the_calls_it_vouches_for():
+    ram, s = image(LATE)
+    early = C.learn(ram, PLAY, 50)
+    assert early.persistent == (s["m"],) and early.feed == frozenset({s["m"]})
+    calls, comps = C.cover_calls(ram, PLAY, early, 4000)
+    assert comps.calls >= calls and s["k"] in comps.feed
+    assert calls == 768, "k advances 56 of every 256 calls: mod 3 it returns after 768"
+    assert seen(ram, calls) == seen(ram, 8 * calls)
+
+
 def test_remap_redirects_what_a_call_reads_and_suppresses_its_writes():
     ram, s = image("""
 ld  lda $0400

@@ -531,8 +531,9 @@ the two entries apart, with their ancestors.
 
 **cover_calls** widens until there is no conflict and returns the feed set's preperiod plus
 period: the state the addresses and control of a call are a function of has then taken every
-value it ever takes, so every reachable access and edge has been seen. None means it does
-not repeat within `limit`. A feed set's period can exceed the calls after which coverage
+value it ever takes, so every reachable access and edge has been seen. The taints vouch only
+for the paths learning saw, so while that bound exceeds the calls learned from, it learns
+again over the bound and repeats. None means the feed set does not repeat within `limit`. A feed set's period can exceed the calls after which coverage
 stops growing when a branch condition reads a long-period component whose both outcomes come
 early (a sweep reversing at its bounds): the bound is the one the components prove.
 
