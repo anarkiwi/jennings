@@ -10,7 +10,15 @@ from typing import NamedTuple
 import numpy as np
 from deity_informant.lifter import STATUS_BITS, bus_only, template
 
-from jennings.coverage.vsa import TOP8, apply, bits, from_bool, from_values, is_single
+from jennings.coverage.vsa import (
+    TOP8,
+    apply,
+    bits,
+    evaluate,
+    from_bool,
+    from_values,
+    is_single,
+)
 from jennings.opcodes import MODE_LEN, OPCODES
 
 __all__ = [
@@ -33,6 +41,7 @@ __all__ = [
     "MODES",
     "MODE_CODE",
     "OPERAND",
+    "OUTPUT_FLAGS",
     "READS",
     "Roles",
     "SP",
@@ -48,6 +57,7 @@ __all__ = [
     "decode_many",
     "names",
     "roles",
+    "taken",
     "transfer",
 ]
 
@@ -108,6 +118,7 @@ class _Walk(NamedTuple):
     sources: int
     stack: bool
     loads: frozenset
+    stacked: frozenset
 
 
 def _mask(locs):
@@ -171,6 +182,7 @@ def _walk(op):
         sum(v for r, v in final.items() if 1 << r & _REGS),
         bool(stack),
         frozenset(loads),
+        frozenset(i for _, i, _, _ in stack),
     )
 
 
@@ -402,14 +414,18 @@ class _Unknown:
         return "UNKNOWN"
 
 
-#: A destination (or a whole opcode) :func:`transfer` cannot give exactly.
+#: An opcode :func:`transfer` does not model (control flow).
 UNKNOWN = _Unknown()
-_OPAQUE = frozenset(KIND_CODE[k] for k in ("branch", "jump", "call", "return", "stack", "other"))
+_OPAQUE = frozenset(KIND_CODE[k] for k in ("branch", "jump", "call", "return", "other"))
+#: Flags :func:`transfer` reports and takes as inputs, each a value set over ``{0, 1}``.
+OUTPUT_FLAGS = ("C", "Z", "V", "N")
+_OUT = _REGS | _mask(OUTPUT_FLAGS)
 
 
-def _slice(t, bus):
+def _slice(t, bus, stacked):
     """``(needed op indices, {destination: defining op})`` of ``t``'s value outputs: the
-    final A/X/Y/SP writes and the last non-bus store (``"M"``), not through addresses."""
+    final A/X/Y/SP and :data:`OUTPUT_FLAGS` writes, the last non-bus data store (``"M"``)
+    and stack store (``"PUSHED"``), not through addresses."""
     reg_def, uniq_def, deps, outs = {}, {}, [], {}
     for i, (mn, dst, ins) in enumerate(t.ops):
         if i in bus:
@@ -420,10 +436,10 @@ def _slice(t, bus):
             tuple((uniq_def if vn[0] == "u" else reg_def).get(vn[1]) for vn in use if vn[0] != "c")
         )
         if mn == "STORE":
-            outs["M"] = i
+            outs["PUSHED" if i in stacked else "M"] = i
         elif dst[0] == "r":
             reg_def[dst[1]] = i
-            if 1 << dst[1] & _REGS:
+            if 1 << dst[1] & _OUT:
                 outs[_REG[dst[1]]] = i
         else:
             uniq_def[dst[1]] = i
@@ -436,43 +452,74 @@ def _slice(t, bus):
     return need, outs
 
 
-def transfer(op, a=None, x=None, y=None, m=None, c=None, sp=None, operand=None):
-    """``{destination: value-set mask or UNKNOWN}`` of ``op`` (``"A"``, ``"X"``, ``"Y"``,
-    ``"SP"``, ``"M"`` the memory operand) over value sets as :func:`as_mask` (None: any), D
-    clear; ``m`` is the operand's value (the immediate in ``imm`` mode). Control and stack
-    opcodes give UNKNOWN; a destination is UNKNOWN where its pcode joins dependent sets."""
+def _flag(v):
+    mask = 3 if v is None else as_mask(v)
+    if not 0 < mask < 4:
+        raise ValueError("flag value set must be a non-empty subset of {0, 1}")
+    return mask
+
+
+def transfer(
+    op,
+    a=None,
+    x=None,
+    y=None,
+    m=None,
+    c=None,
+    sp=None,
+    operand=None,
+    n=None,
+    z=None,
+    v=None,
+    pulled=None,
+):
+    """``{destination: value-set mask}`` of ``op`` over value sets as :func:`as_mask`
+    (None: any), D clear. Destinations are the ``"A"``, ``"X"``, ``"Y"``, ``"SP"`` and
+    :data:`OUTPUT_FLAGS` the pcode writes, ``"M"`` the memory operand and ``"PUSHED"`` the
+    byte a push writes; ``m`` is the operand's value (the immediate in
+    ``imm`` mode), ``pulled`` the byte a pull reads, and ``c``, ``n``, ``z``, ``v`` the input
+    flags over ``{0, 1}``. Control opcodes give UNKNOWN; every destination is exact, by mask
+    propagation where its pcode combines independent sets, else by enumerating the product of
+    the input sets it depends on. Each flag's set is exact on its own: the relation between
+    flags (or a flag and a register) of one result is not kept."""
     if KIND[op] in _OPAQUE:
         return UNKNOWN
     t = template(op)
-    need, outs = _slice(t, bus_only(t.ops))
+    stacked = _WALKS[op].stacked
+    need, outs = _slice(t, bus_only(t.ops), stacked)
     imm = OPCODES[op][1] == "imm"
     if imm and m is None and operand is not None:
         m = {operand & 0xFF}
-    leaf = {n: as_mask(v) for n, v in (("A", a), ("X", x), ("Y", y), ("SP", sp), ("C", c))}
-    leaf["M"], leaf["D"] = as_mask(m), 1
-    if not all(leaf.values()):
+    byte = (("A", a), ("X", x), ("Y", y), ("SP", sp), ("M", m), ("PULLED", pulled))
+    dom = {k: as_mask(s) for k, s in byte}
+    if not all(dom.values()):
         raise ValueError("empty value set")
-    regs = {i: (leaf.get(n, 3), frozenset((n,)), True) for i, n in _REG.items()}
+    dom.update({k: _flag(s) for k, s in zip(OUTPUT_FLAGS, (c, z, v, n))}, D=1)
+    regs = {}
+    for i, k in _REG.items():
+        dom.setdefault(k, 3)
+        regs[i] = (dom[k], frozenset((k,)), True, ("leaf", k))
 
     def const(at, size):
         offs, fn = t.prov[at]
         if imm and fn == "id" and offs == (1,):
-            return leaf["M"], frozenset(("M",)), True
+            return dom["M"], frozenset(("M",)), True, ("leaf", "M")
         if operand is None:
-            return (1 << (1 << (8 * size))) - 1, frozenset(("OPERAND",)), True
+            dom.setdefault("OPERAND", (1 << (1 << (8 * size))) - 1)
+            return dom["OPERAND"], frozenset(("OPERAND",)), True, ("leaf", "OPERAND")
         b = (operand & 0xFF, operand >> 8 & 0xFF)[offs[0] - 1]
-        return 1 << {"word": operand & 0xFFFF, "id": b, "hi1": (b + 1) & 0xFF}[fn], (), True
+        return 1 << {"word": operand & 0xFFFF, "id": b, "hi1": (b + 1) & 0xFF}[fn], (), True, None
 
-    uniq, got = {}, {}
+    uniq, got, args = {}, {}, {}
     for i, (mn, dst, ins) in enumerate(t.ops):
         if i not in need:
             continue
-        vals = [
+        vals = args[i] = [
             (
                 const((i, j), vn[2])
                 if (i, j) in t.prov
                 else (
-                    (1 << vn[1], frozenset(), True)
+                    (1 << vn[1], frozenset(), True, None)
                     if vn[0] == "c"
                     else (regs if vn[0] == "r" else uniq)[vn[1]]
                 )
@@ -481,14 +528,12 @@ def transfer(op, a=None, x=None, y=None, m=None, c=None, sp=None, operand=None):
             if j or mn not in ("LOAD", "STORE")
         ]
         if mn == "STORE":
-            got["M"] = vals[0]
+            got["PUSHED" if i in stacked else "M"] = vals[0]
             continue
         if mn == "LOAD":
-            res = (
-                (leaf["M"], frozenset(("M",)), True)
-                if i in _WALKS[op].loads
-                else (TOP8, frozenset((i,)), True)
-            )
+            src = "M" if i in _WALKS[op].loads else "PULLED" if i in stacked else i
+            dom.setdefault(src, TOP8)
+            res = dom[src], frozenset((src,)), True, ("leaf", src)
         else:
             wide = [v for v in vals if not is_single(v[0])]
             joint = any(p[1] & q[1] for k, p in enumerate(wide) for q in wide[k + 1 :])
@@ -498,7 +543,49 @@ def transfer(op, a=None, x=None, y=None, m=None, c=None, sp=None, operand=None):
                 mask,
                 frozenset() if single else frozenset().union(*(v[1] for v in vals)),
                 single or (all(v[2] for v in vals) and not joint),
+                ("op", i),
             )
         (regs if dst[0] == "r" else uniq)[dst[1]] = res
         got.update({k: res for k, d in outs.items() if d == i})
-    return {k: v[0] if v[2] else UNKNOWN for k, v in got.items()}
+    return {k: r[0] if r[2] else _exhaust(t.ops, args, r, dom) for k, r in got.items()}
+
+
+_CHUNK = 1 << 16
+
+
+def _exhaust(ops, args, res, dom):
+    """Exact value set of pcode value ``res`` (``(mask, leaves, exact, node)``), evaluating
+    its ops on numpy arrays over the cartesian product of its leaves' value sets."""
+    leaves = sorted(res[1], key=str)
+    doms = [bits(dom[k]) for k in leaves]
+    shape = tuple(len(d) for d in doms)
+    total = int(np.prod(shape))
+    out = np.zeros(1 << (8 * ops[res[3][1]][1][2]), bool)
+
+    def ev(v, cols, memo):
+        if is_single(v[0]):
+            return v[0].bit_length() - 1
+        if v[3][0] == "leaf":
+            return cols[v[3][1]]
+        k = v[3][1]
+        if k not in memo:
+            mn, dst, ins = ops[k]
+            vals = [ev(a, cols, memo) for a in args[k]]
+            memo[k] = evaluate(mn, dst[2], [vn[2] for vn in ins], vals)
+        return memo[k]
+
+    for start in range(0, total, _CHUNK):
+        idx = np.unravel_index(np.arange(start, min(start + _CHUNK, total)), shape)
+        out[ev(res, {k: d[j] for k, d, j in zip(leaves, doms, idx)}, {})] = True
+    return from_bool(out)
+
+
+def taken(op, flags=None):
+    """Frozenset of the outcomes (True: taken) conditional branch ``op`` may have, its flag
+    from ``flags`` (``{name: value set over {0, 1}}``, a missing flag any), as the
+    branch template tests it; ValueError for other opcodes."""
+    ctrl = template(op).ctrl
+    if ctrl[0] != "br":
+        raise ValueError("not a conditional branch: %02x" % op)
+    mask = _flag((flags or {}).get(LOCATIONS[ctrl[1]]))
+    return frozenset(s for s in (True, False) if mask >> (ctrl[2] ^ (not s)) & 1)

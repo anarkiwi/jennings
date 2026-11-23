@@ -13,7 +13,7 @@
 | `AddressParser` | `jennings.utils.addressing` |
 | `ObservableMemory`, `NativeMemory` | `jennings.memory` |
 | `OPCODES` | `jennings.opcodes` |
-| `decode`, `decode_many`, `roles`, `accesses`, `transfer`, `Instruction`, `Roles`, `UNKNOWN`, `as_mask`, `as_values` | `jennings.decoding` |
+| `decode`, `decode_many`, `roles`, `accesses`, `transfer`, `taken`, `Instruction`, `Roles`, `UNKNOWN`, `as_mask`, `as_values` | `jennings.decoding` |
 
 The py65 module paths (`jennings.devices.mpu6502`, `jennings.utils.addressing`, ...) remain the
 canonical homes; there are no alias modules.
@@ -104,20 +104,88 @@ NMOS high byte `reg & (H + 1)` (`a` needed for `SHA`/`TAS`). On singletons it eq
 `isa.addresses(...)["data"]`.
 
 ```python
-transfer(op, a=None, x=None, y=None, m=None, c=None, sp=None, operand=None)
-    -> {destination: mask | UNKNOWN} | UNKNOWN
+transfer(op, a=None, x=None, y=None, m=None, c=None, sp=None, operand=None,
+         n=None, z=None, v=None, pulled=None)
+    -> {destination: mask} | UNKNOWN
 ```
 
-The value sets `op` leaves in `"A"`, `"X"`, `"Y"`, `"SP"` and `"M"` (the memory operand),
-evaluated over the opcode's pcode with `D` clear (binary mode). `m` is the memory operand's
-value, or the immediate in `imm` mode (taken from `operand` when `m` is None); `operand`
-also supplies `SHx`'s `H + 1`. Unset inputs are any value. A destination is exact unless its
-computation combines two sets derived from the same input (e.g. `RRA`'s `A`, from the rotated
-byte and its carry), where it is `UNKNOWN`. Branch, jump, call, return, stack and `BRK`/`JAM`
-opcodes return `UNKNOWN`; flag, compare and nop opcodes `{}`.
+The value sets `op` leaves in its destinations, evaluated over the opcode's pcode with `D`
+clear (binary mode). Destinations are exactly the locations the pcode writes:
+
+| Key | Value set |
+| --- | --- |
+| `"A"`, `"X"`, `"Y"`, `"SP"` | the register |
+| `"C"`, `"Z"`, `"V"`, `"N"` (`OUTPUT_FLAGS`) | the flag, over `{0, 1}`: mask `1` clear, `2` set, `3` either |
+| `"M"` | the byte written to the memory operand |
+| `"PUSHED"` | the byte `PHA`/`PHP` writes to the stack |
+
+A key is absent when the opcode leaves that location unchanged (`STA` gives only `"M"`), so a
+caller carries its own value forward. `m` is the memory operand's value, or the immediate in
+`imm` mode (taken from `operand` when `m` is None); `operand` also supplies `SHx`'s `H + 1`;
+`pulled` is the byte `PLA`/`PLP` read from the stack. `c`, `n`, `z`, `v` are the input flags
+as value sets over `{0, 1}` (a mask of `1`, `2` or `3`, or a set such as `{0}`; ValueError
+otherwise); `I` is any and `D` clear (after `SED`/`PLP` setting `D` the results do not hold).
+Unset inputs are any value.
+
+Every destination is exact. Sets propagate as masks op by op while the pcode combines
+independent sets; a destination whose computation combines two sets derived from the same
+input (`ADC`/`SBC`/`ISC`'s `C` and `V`, `ARR`'s `C` and `V`, `RRA`'s result) is instead
+evaluated on numpy arrays over the cartesian product of the input sets it depends on (at most
+`A × M × C`). Each flag's set is exact on its own: the relation between flags of one result
+(or between a flag and the register it describes) is not kept, so `Z` and `N` of `{0, 1}` admit
+the combination `Z = N = 1` that no single value gives. Branch, jump, call, return and
+`BRK`/`JAM` opcodes return `UNKNOWN`; `CLI`/`SEI`/`CLD`/`SED` and `NOP` `{}`.
 
 ```python
 >>> from jennings.coverage.vsa import bits
 >>> {k: bits(v).tolist() for k, v in transfer(0x69, a={1, 2}, m={10}, c={0, 1}).items()}
-{'A': [11, 12, 13]}
+{'V': [0], 'C': [0], 'A': [11, 12, 13], 'Z': [0], 'N': [0]}
+>>> transfer(0xC9, a={5}, m={5})
+{'C': 2, 'Z': 2, 'N': 1}
+```
+
+```python
+taken(op, flags=None) -> frozenset of {True, False}
+```
+
+The outcomes conditional branch `op` may have (`True`: taken), its flag (`N` for BPL/BMI, `V`
+for BVC/BVS, `C` for BCC/BCS, `Z` for BNE/BEQ, as the branch template tests it) read from
+`flags`, a `{name: value set over {0, 1}}` dict such as `transfer`'s result; a missing flag
+is either. ValueError for any other opcode.
+
+A forward interpreter with concrete inputs follows the one edge the flags decide:
+
+```python
+from jennings.coverage.vsa import bits, is_single
+from jennings.decoding import KIND, KIND_CODE, accesses, decode, taken, transfer
+
+INPUTS = ("A", "X", "Y", "SP", "C", "Z", "V", "N")
+STOP = {KIND_CODE[k] for k in ("stack", "jump", "call", "return", "other")}
+
+
+def run(mem, pc, state, steps):
+    """Step from ``pc`` over the numpy image ``mem`` while every result is a single value;
+    ``state`` maps INPUTS names to masks (missing: any)."""
+    for _ in range(steps):
+        ins = decode(mem, pc)
+        op = ins.opcode
+        if KIND[op] == KIND_CODE["branch"]:
+            edges = taken(op, state)
+            if len(edges) != 1:
+                break
+            pc = ins.operand if True in edges else pc + ins.length
+            continue
+        ea = accesses(op, ins.operand or 0, x=state.get("X"), y=state.get("Y"), mem=mem,
+                      a=state.get("A"))
+        if KIND[op] in STOP or len(ea) > 1:
+            break
+        regs = {k.lower(): v for k, v in state.items() if k in INPUTS}
+        out = transfer(op, operand=ins.operand, m=set(mem[ea].tolist()) or None, **regs)
+        if not all(map(is_single, out.values())):
+            break
+        if "M" in out:
+            mem[ea[0]] = bits(out.pop("M"))[0]
+        state.update(out)
+        pc += ins.length
+    return pc, state
 ```

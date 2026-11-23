@@ -31,6 +31,7 @@ from jennings.decoding import (
     decode_many,
     names,
     roles,
+    taken,
     transfer,
 )
 from jennings.devices.mpu6502 import MPU
@@ -92,6 +93,10 @@ def test_decode_many_mask_and_containers():
 class _Observed(PcodeVM):
     __slots__ = ("log",)
 
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.log = ([], [])
+
     def _rd(self, addr, sz):
         self.log[0].extend((addr + i) & 0xFFFF for i in range(sz))
         return PcodeVM._rd(self, addr, sz)
@@ -106,7 +111,7 @@ def _observe(mem, state):
     vm = _Observed(b"")
     for attr in ("mem", "reg", "uniq", "cycles", "volatile", "vicirq", "ciaicr", "wlog"):
         setattr(vm, attr, getattr(mpu._vm, attr))
-    vm.volatile, vm.dummies, vm.log = False, False, ([], [])
+    vm.volatile, vm.dummies = False, False
     mpu._vm = vm
     mpu.a, mpu.x, mpu.y, mpu.p, mpu.sp = state
     mpu.step()
@@ -240,15 +245,16 @@ def test_value_set_helpers():
     assert as_mask(None) == vsa.TOP8 and as_mask(None, 2) == vsa.TOP16
 
 
-def _flagged(r):
-    return {k for k, v in r.items() if v is UNKNOWN}
-
-
 _MODE_OPERAND = {"zp": 0x80, "zpx": 0x80, "zpy": 0x80, "indx": 0x80, "indy": 0x80}
 
 
+_INPUTS = "A X Y C SP N Z V I PULLED".split()
+_FLAG_BIT = {"C": 0, "Z": 1, "I": 2, "V": 6, "N": 7}
+_PUSH = {"PHA", "PHP"}
+
+
 def _concrete(op, regs, m, operand):
-    a, x, y, c, sp = regs
+    a, x, y, c, sp, n, z, v, i, pulled = regs
     md = OPCODES[op][1]
     mem = bytearray(0x10000)
     if md in ("indx", "indy"):
@@ -259,22 +265,28 @@ def _concrete(op, regs, m, operand):
     data = isa.addresses(mem, PC, x, y, sp, a)["data"]
     for e in data:
         mem[e] = m
+    mem[0x100 | (sp + 1) & 0xFF] = pulled
     mpu = MPU(memory=mem, pc=PC)
-    mpu.a, mpu.x, mpu.y, mpu.p, mpu.sp = a, x, y, 0x30 | c, sp
+    mpu.a, mpu.x, mpu.y, mpu.sp = a, x, y, sp
+    mpu.p = 0x30 | c | z << 1 | i << 2 | v << 6 | n << 7
     mpu.step()
-    out = {"A": mpu.a, "X": mpu.x, "Y": mpu.y, "SP": mpu.sp}
+    out = {"A": mpu.a, "X": mpu.x, "Y": mpu.y, "SP": mpu.sp, "PUSHED": mpu.memory[0x100 | sp]}
+    out.update({f: mpu.p >> b & 1 for f, b in _FLAG_BIT.items()})
     if data:
         out["M"] = mpu.memory[data[0]]
     return out
 
 
-#: Destinations transfer gives exactly for every value set.
-EXACT = set(
-    "LDA LDX LDY LAX TAX TXA TAY TYA TSX TXS INX INY DEX DEY INC DEC ADC SBC AND ORA EOR"
-    " ASL LSR ROL ROR STA STX STY SAX ANC ALR LXA ANE SBX LAS SHA SHX SHY".split()
-)
 SHA_INDY = 0x93
-ILLEGAL_M = set("DCP ISC SLO RLA SRE RRA".split())
+EXTREMES = {0x00, 0x01, 0x7F, 0x80, 0xFE, 0xFF}
+
+
+def _sample(rng, n, live):
+    if n in ("C", "N", "Z", "V"):
+        return set(rng.sample(range(2), rng.choice((1, 2)) if n in live else 1))
+    if n == "I":
+        return {0, 1} if n in live else {0}
+    return set(rng.sample(range(256), 3 if n in live else 1))
 
 
 @pytest.mark.parametrize("op", [op for op in range(256) if transfer(op) is not UNKNOWN])
@@ -283,20 +295,16 @@ def test_transfer_matches_concrete_execution(op):
     r = roles(op)
     md = r.mode
     operand = _MODE_OPERAND.get(md, 0x3000)
-    for trial in range(4):
-        live = set(r.reads) | ({"M"} if {"M", "OPERAND"} & set(r.reads) else set())
-        sets = {
-            n: (
-                set(
-                    rng.sample(range(2 if n == "C" else 256), rng.choice((1, 2)) if n == "C" else 3)
-                )
-                if n in live
-                else {rng.randrange(2 if n == "C" else 256)}
-            )
-            for n in "A X Y C SP M".split()
-        }
+    live = set(r.reads) | ({"M"} if {"M", "OPERAND"} & set(r.reads) else set())
+    live |= {"PULLED"} if r.kind == "stack" else set()
+    flags = set(decoding.OUTPUT_FLAGS)
+    for trial in range(5):
+        sets = {n: _sample(rng, n, live) for n in _INPUTS + ["M"]}
         if trial == 3:
-            sets["M"] = {0x00, 0xFF, 0x80}
+            sets["M"] = sets["PULLED"] = {0x00, 0xFF, 0x80}
+        if trial == 4:
+            sets.update({n: EXTREMES for n in ("A", "M", "PULLED") if n in live})
+            sets.update({n: {0, 1} for n in ("C", "V") if n in live})
         got = transfer(
             op,
             a=sets["A"],
@@ -306,37 +314,93 @@ def test_transfer_matches_concrete_execution(op):
             c=sets["C"],
             sp=sets["SP"],
             operand=None if md == "imm" else operand,
+            n=sets["N"],
+            z=sets["Z"],
+            v=sets["V"],
+            pulled=sets["PULLED"],
         )
         want = {k: set() for k in got}
-        for regs in itertools.product(*(sorted(sets[n]) for n in "A X Y C SP".split())):
+        for regs in itertools.product(*(sorted(sets[n]) for n in _INPUTS)):
             for m in sets["M"]:
                 out = _concrete(op, regs, m, operand)
                 for k in want:
                     want[k].add(out[k])
-        dests = {n for n in r.writes if n in ("A", "X", "Y", "SP")}
-        assert set(got) == dests | ({"M"} if r.mem_write else set())
+        dests = {n for n in r.writes if n in {"A", "X", "Y", "SP"} | flags}
+        dests |= {"M"} if r.mem_write else set()
+        assert set(got) == dests | ({"PUSHED"} if r.mnemonic in _PUSH else set())
         for k, v in got.items():
-            if v is not UNKNOWN and op == SHA_INDY:
+            if op == SHA_INDY:
                 assert want[k] <= set(vsa.bits(v).tolist())
-            elif v is not UNKNOWN:
+            else:
                 assert vsa.bits(v).tolist() == sorted(want[k]), (k, sets)
-        if r.mnemonic in EXACT:
-            assert not _flagged(got)
-        if r.mnemonic in ILLEGAL_M:
-            assert got["M"] is not UNKNOWN
 
 
-def test_transfer_unknowns_and_defaults():
-    assert transfer(0x60) is UNKNOWN and transfer(0x48) is UNKNOWN and transfer(0xD0) is UNKNOWN
-    assert transfer(0x18) == {} and transfer(0xC9) == {} and transfer(0xEA) == {}
-    assert transfer(0xE8) == {"X": vsa.TOP8}
-    assert transfer(0xA9, operand=0x42) == {"A": 1 << 0x42}
+def test_transfer_flags_unknowns_and_defaults():
+    assert transfer(0x60) is UNKNOWN and transfer(0xD0) is UNKNOWN and transfer(0x00) is UNKNOWN
+    assert transfer(0x18) == {"C": 1} and transfer(0x38) == {"C": 2} and transfer(0xB8) == {"V": 1}
+    assert transfer(0x58) == {} and transfer(0xEA) == {}
+    assert transfer(0xC9, a={5}, m={5}) == {"C": 2, "Z": 2, "N": 1}
+    assert transfer(0x24, a={1}, m={0xC0}) == {"Z": 2, "V": 2, "N": 2}
+    assert transfer(0x85, a={1}, n={1}) == {"M": 2}
+    assert transfer(0x28, pulled={0xC3}, sp={0xF0}) == {
+        "SP": 1 << 0xF1,
+        "C": 2,
+        "Z": 2,
+        "V": 2,
+        "N": 2,
+    }
+    assert transfer(0x48, a={7}, sp={0}) == {"PUSHED": 1 << 7, "SP": 1 << 0xFF}
+    assert transfer(0xE8) == {"X": vsa.TOP8, "Z": 3, "N": 3}
+    assert transfer(0x69, a={1}, m={2}) == {"A": 0b11000, "C": 1, "V": 1, "Z": 1, "N": 1}
+    assert transfer(0xA9, operand=0x42) == {"A": 1 << 0x42, "Z": 1, "N": 1}
     assert transfer(0x9E, x={0xFF}, operand=0x3000) == {"M": 1 << 0x31}
     assert transfer(0x9E, x={0xFF})["M"] == vsa.TOP8
-    assert transfer(0x7F, a={1}, m={3, 4}, c={0, 1})["A"] is UNKNOWN
+    assert transfer(0x7F, a={1}, m={3, 4}, c={0, 1})["A"] == 1 << 3 | 1 << 131
+    assert transfer(0x69, a={0x7F, 0x80}, m={0x7F, 0x80}, c={0})["V"] == 3
+    assert transfer(0x69, a={0x7F, 0x80}, m={0x00, 0x01}, c={0})["V"] == 3
+    assert transfer(0x69, a={0x10, 0x20}, m={0x10, 0x20}, c={0, 1})["V"] == 1
+    outs = [o for o in map(transfer, range(256)) if o is not UNKNOWN]
+    assert all(UNKNOWN not in o.values() for o in outs)
     assert repr(UNKNOWN) == "UNKNOWN"
-    with pytest.raises(ValueError):
-        transfer(0xAA, a=set())
+    for bad in ({"a": set()}, {"c": set()}, {"z": {2}}, {"v": {0, 1, 2}}):
+        with pytest.raises(ValueError):
+            transfer(0xAA, **bad)
+
+
+_BRANCHES = [op for op in range(256) if roles(op).kind == "branch"]
+_FLAG_P = {"C": 0x01, "Z": 0x02, "V": 0x40, "N": 0x80}
+
+
+def _branch_taken(op, values):
+    mem = bytearray(0x10000)
+    mem[PC], mem[PC + 1] = op, 0x10
+    mpu = MPU(memory=mem, pc=PC)
+    mpu.p = 0x30 | sum(p for f, p in _FLAG_P.items() if values[f])
+    mpu.step()
+    return mpu.pc == PC + 0x12
+
+
+def test_taken_matches_branch_execution():
+    assert len(_BRANCHES) == 8
+    names_ = tuple(_FLAG_P)
+    for op in _BRANCHES:
+        concrete = {
+            bits: _branch_taken(op, dict(zip(names_, bits)))
+            for bits in itertools.product((0, 1), repeat=4)
+        }
+        for masks in itertools.product((1, 2, 3), repeat=4):
+            flags = dict(zip(names_, masks))
+            want = {
+                t
+                for bits, t in concrete.items()
+                if all(masks[k] >> b & 1 for k, b in enumerate(bits))
+            }
+            assert taken(op, flags) == want
+        assert taken(op) == {True, False} == taken(op, {})
+    assert taken(0xF0, {"Z": {1}}) == {True} and taken(0xD0, transfer(0xA9, operand=0)) == {False}
+    for op in (0x4C, 0xEA, 0x20):
+        with pytest.raises(ValueError):
+            taken(op)
 
 
 def test_lazy_top_level_exports():
