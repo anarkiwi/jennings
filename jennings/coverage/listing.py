@@ -89,9 +89,10 @@ def _resolve(m, succ, owned, image, cov, heads, jumps, callees, tabled):
 
 
 class _Labels(AddressParser):
-    def __init__(self, addresses):
+    def __init__(self, addresses, names=None):
         super().__init__()
         self._names = {a: "L%04X" % a for a in addresses}
+        self._names.update(names or {})
 
     def label_for(self, address, default=None):
         return self._names.get(address, default)
@@ -117,14 +118,18 @@ class Listing:
 
     @classmethod
     # pylint: disable-next=too-many-arguments,too-many-positional-arguments
-    def disassemble(cls, mem, entries, cov=None, ranges=(), resolve=False, tables=()):
+    def disassemble(
+        cls, mem, entries, cov=None, ranges=(), resolve=False, tables=(), names=None, inside=None
+    ):
         """Decode from ``entries`` and, given ``cov``, from every executed address and dynamic
         edge/interrupt target; ``ranges`` (inclusive ``(lo, hi)``) add ``.byte`` rows for
         the bytes in them that no instruction covers. Executed starts may overlap.
         ``resolve`` also decodes the targets of computed transfers read from constant tables
         (``resolved``: ``[[transfer, target]]``; new roots are marked ``; resolved from``).
         ``tables`` are hand-written split tables, :func:`~.resolve.split_table` arguments
-        ``(lo, hi, n[, stride[, high]])``: their words are entries, their bytes table data."""
+        ``(lo, hi, n[, stride[, high]])``: their words are entries, their bytes table data.
+        ``names`` ``{address: name}`` override the ``L%04X`` labels; ``inside`` (inclusive
+        ``(lo, hi)`` spans) limits descent to instructions wholly within them."""
         m = np.zeros(0x10000, np.uint8)
         src = np.asarray(mem, np.uint8)[:0x10000]
         m[: src.size] = src
@@ -141,6 +146,10 @@ class Listing:
             roots |= {t for _, t in cov.entries}
             seeds = {t for _, t in cov.edges}
         owned = np.zeros(0x10000, bool)
+        if inside is not None:
+            owned[:] = True
+            for lo, hi in inside:
+                owned[lo : hi + 1] = False
         span = LEN[m[execd]]
         for k in range(3):
             owned[(execd[span > k] + k) & 0xFFFF] = True
@@ -166,7 +175,7 @@ class Listing:
         line_of = {a: i + 1 for i, (a, n) in enumerate(rows) if not n}
 
         targets = {t for out in succ.values() for _, t in out}
-        labels = _Labels((jumps | callees | roots | seeds | new) & line_of.keys())
+        labels = _Labels((jumps | callees | roots | seeds | new) & line_of.keys(), names)
         dis = Disassembler(MPU(memory=m.tolist()), labels)
         entry = roots | callees | (succ.keys() - targets)
         text, trans = [], []

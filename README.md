@@ -51,6 +51,13 @@ computes NMOS ADC/SBC including decimal mode; `jennings.opcodes` holds the opcod
 (`CYCLES`) and penalty (`EXTRA`) tables; `jennings.testing` is the decimal-mode reference
 model for tests of other 6502 implementations.
 
+`jennings.decoding` decodes instructions from a 64 KiB image (`decode`, and `decode_many` as
+numpy records), holds per-opcode role tables read off the lifted pcode (values read, registers
+written, memory read/written, index register, kind, stored-value sources), and gives the data
+addresses (`accesses`) and destination value sets (`transfer`) of an instruction over value
+sets of its inputs. Its stable names, with `MPU`, `Assembler`, `Disassembler` and
+`AddressParser`, import lazily from `jennings`. See [docs/api.md](docs/api.md).
+
 `jennings.dataflow.flow` reads each instruction's output-to-input dependencies
 (registers, flags, memory bytes, a branch's condition) off the same lifted pcode the
 MPU executes, given the addresses an observed run accessed; `addressed=False` gives the
@@ -63,6 +70,19 @@ explains one-way branches, and records per-test coverage from pytest. `jennings.
 splits a repeatedly called routine into autonomous components by native data and control taint,
 measures each one's cycle and gives the calls that cover every access and edge it can make. See
 [docs/coverage.md](docs/coverage.md).
+
+## Command line
+
+```bash
+jennings dis tune.sid -f --resolve                 # recursive descent from INIT/PLAY
+jennings dis drive.bin -f -e 600 --symbols 1541    # raw dump at $0000, ROM calls external
+jennings dis game.prg 0810:0900 --source > g.a     # ACME source that reassembles
+jennings xref kernal.bin@e000 0314 --symbols c64   # who reads/writes an address
+jennings find game.prg "8d ?? d4" --dis            # byte pattern search
+jennings run tune.sid --init --play 1000           # cycles, registers, changed memory
+```
+
+See [docs/cli.md](docs/cli.md).
 
 ## Native core
 
