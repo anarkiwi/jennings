@@ -24,26 +24,3 @@ engine) transitively.
   helper) should be deleted — jennings has them built in, and mutating those
   tables has no effect on execution.
 - **`py65.monitor` is not provided.**
-
-## anarkiwi repositories to migrate
-
-Direct py65 users:
-
-| Repo | What to change |
-|---|---|
-| pysidtracker | swap imports in `emu.py`; delete `patch_illegals()` |
-| preframr-tokens | swap import in `bacc/sidemu.py`; dep py65 -> jennings |
-| pysoundmonitor | swap `MPU` + `ObservableMemory` imports in `player.py` |
-| pydexomizer | swap import in `sfx.py` |
-| sentinel-solver | swap imports in `sentinel/tests/oracle.py` |
-| re-sentinel | swap imports in `scripts/_emu.py`, `roundtrip_test.py` (uses Assembler) |
-| tumbler-snapper | swap imports in `tools/disasm.py` (uses Disassembler) |
-| sid-wizard | swap imports in `test/sidwizard/run_protocol_test.py` |
-
-Transitive users (via pysidtracker) generally need no code change, but drop any
-explicit `py65` pin: pyjch, pygoattracker, pydefmon, pydmcsid, pysidwizard,
-pymusicassembler, pyfuturecomposer.
-
-Keep py65 in **deity-informant** — there it is the external differential oracle
-for legal opcodes, and jennings depends on deity-informant (switching would be
-circular).
