@@ -31,6 +31,7 @@ EXPORTS = {
     "decode": "jennings.decoding",
     "decode_many": "jennings.decoding",
     "roles": "jennings.decoding",
+    "taken": "jennings.decoding",
     "transfer": "jennings.decoding",
 }
 

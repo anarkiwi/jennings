@@ -22,6 +22,7 @@ __all__ = [
     "rot",
     "word",
     "apply",
+    "evaluate",
     "template",
     "writes",
     "step",
@@ -135,6 +136,13 @@ def _compare(mn, m0, m1, mask0):
         return hi0 > lo1, lo0 <= hi1
     eq = (not (m0 == m1 and is_single(m0)), bool(m0 & m1))
     return eq if mn == "INT_EQUAL" else eq[::-1]
+
+
+def evaluate(mn, out_size, in_sizes, vals):
+    """Value of pcode op ``mn`` (not LOAD/STORE) on integers or ``int64`` arrays ``vals``."""
+    if mn in ("COPY", "INT_ZEXT"):
+        return vals[0]
+    return _concrete(mn, vals[0], vals[1], (1 << (8 * out_size)) - 1, (1 << (8 * in_sizes[0])) - 1)
 
 
 _COMPARE = frozenset(("INT_CARRY", "INT_LESS", "INT_LESSEQUAL", "INT_EQUAL", "INT_NOTEQUAL"))
