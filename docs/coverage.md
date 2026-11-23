@@ -182,7 +182,9 @@ address, and the targets of `cov.edges` and `cov.entries`, so code reached only 
 target, `JSR` to the next instruction with the callee as a new entry; `RTS`, `RTI`,
 `JMP (ind)`, `BRK` and `JAM` exit. Executed instruction starts are always listed, even when
 they overlap; statically found starts that overlap listed bytes are dropped. Bytes inside
-`ranges` that no instruction covers become non-executable `.byte` rows.
+`ranges` that no instruction covers become non-executable `.byte` rows. `names={address: name}`
+override the `L%04X` labels; `inside=[(lo, hi)]` limits static descent to instructions wholly
+inside those inclusive spans (targets elsewhere are left undecoded).
 
 ### Computed transfers
 

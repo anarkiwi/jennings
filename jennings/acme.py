@@ -107,6 +107,17 @@ def mnemonics(cpu):
     return Acme._cpu(cpu)
 
 
+def canonical(cpu, table):
+    """Opcodes of ``table`` (``[(mnemonic, mode)]`` by opcode, jennings mode names) that ACME
+    assembles back to themselves for ``cpu``."""
+    ops = mnemonics(cpu)
+    return {
+        op
+        for op, (mn, md) in enumerate(table)
+        if ops.get(mn.lower(), {}).get(_SYNTAX[md][0], {}).get(_SYNTAX[md][1]) == op
+    }
+
+
 _SYMBOL_LINE = re.compile(r"^\s*([^\s+=]+)(?:\+[23])?\s*=\s*\$([0-9a-fA-F]+)", re.M)
 
 

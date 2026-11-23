@@ -64,6 +64,19 @@ splits a repeatedly called routine into autonomous components by native data and
 measures each one's cycle and gives the calls that cover every access and edge it can make. See
 [docs/coverage.md](docs/coverage.md).
 
+## Command line
+
+```bash
+jennings dis tune.sid -f --resolve                 # recursive descent from INIT/PLAY
+jennings dis drive.bin -f -e 600 --symbols 1541    # raw dump at $0000, ROM calls external
+jennings dis game.prg 0810:0900 --source > g.a     # ACME source that reassembles
+jennings xref kernal.bin@e000 0314 --symbols c64   # who reads/writes an address
+jennings find game.prg "8d ?? d4" --dis            # byte pattern search
+jennings run tune.sid --init --play 1000           # cycles, registers, changed memory
+```
+
+See [docs/cli.md](docs/cli.md).
+
 ## Native core
 
 Wheels carry a Rust 6510 core (`jennings._core`) whose opcode semantics are generated
