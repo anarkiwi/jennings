@@ -9,40 +9,24 @@ import numpy as np
 import pytest
 
 import jennings
-from jennings.assembler import Assembler
 from jennings.coverage import CoverageMap, CoverageMPU
 from jennings.coverage.listing import Listing
 from jennings.coverage.plugin import PLUGIN_NAME, FileReporter6502, Plugin6502, load_sidecar
 from jennings.coverage.report import executed_arcs, write_data
 from jennings.devices.mpu6502 import MPU
+from helpers import build_mpu, run_to
 
 ORG = 0x0800
 BRANCH = ["LDA $10", "BEQ $0806", "LDX #$01", "NOP"]
 
 
 def _mpu(statements, org=ORG, **mem):
-    mpu = CoverageMPU(pc=org)
-    asm, pc = Assembler(mpu), org
-    for st in statements:
-        code = asm.assemble(st, pc)
-        mpu.memory[pc : pc + len(code)] = code
-        pc += len(code)
-    for addr, val in mem.items():
-        mpu.memory[int(addr[1:], 16)] = val
-    return mpu
-
-
-def _run_to(mpu, end, limit=1000):
-    for _ in range(limit):
-        if mpu.pc == end:
-            return mpu.cov
-        mpu.step()
-    raise AssertionError("did not reach %04X" % end)
+    return build_mpu(statements, org, CoverageMPU, **mem)[0]
 
 
 def _branch_run(value):
     mpu = _mpu(BRANCH, m10=value)
-    return mpu, _run_to(mpu, 0x0807)
+    return mpu, run_to(mpu, 0x0807).cov
 
 
 def _write(tmp_path, mpu, cov, entries=(ORG,), name="prog.s", **kw):
@@ -122,7 +106,7 @@ def test_cli_report_fail_under(tmp_path):
 def test_static_discovery_of_unexecuted_code(tmp_path):
     mpu = _mpu(["LDA $10", "BEQ $0807", "JSR $0900", "NOP"], m10=0)
     mpu.memory[0x0900:0x0902] = [0xE8, 0x60]
-    cov = _run_to(mpu, 0x0808)
+    cov = run_to(mpu, 0x0808).cov
     listing, src = _write(tmp_path, mpu, cov)
     callee = listing.line(0x0900)
     assert listing.line(0x0804) == 3 and callee == 6 and listing.line(0x0901) == 7
@@ -136,7 +120,7 @@ def test_static_discovery_of_unexecuted_code(tmp_path):
 def test_rts_dispatch_target_from_edges(tmp_path):
     mpu = _mpu(["LDA #$08", "PHA", "LDA #$0F", "PHA", "RTS"])
     mpu.memory[0x0810] = 0xEA
-    cov = _run_to(mpu, 0x0810)
+    cov = run_to(mpu, 0x0810).cov
     assert not cov.flags[0x0810]
     assert Listing.disassemble(mpu.memory, [ORG]).line(0x0810) is None
     listing, src = _write(tmp_path, mpu, cov)
@@ -155,7 +139,7 @@ def test_interrupt_entry_and_jmp_indirect(tmp_path):
     mpu.memory[0x0900] = 0xEA
     mpu.step()
     mpu.irq()
-    _run_to(mpu, 0x0901)
+    run_to(mpu, 0x0901)
     listing, src = _write(tmp_path, mpu, mpu.cov)
     rti, jmp, tgt = listing.line(0x0A00), listing.line(0x0801), listing.line(0x0900)
     assert {(-rti, rti), (rti, -rti), (jmp, tgt), (rti, jmp)} <= executed_arcs(mpu.cov, src)
@@ -191,7 +175,7 @@ def test_overlapping_starts_prefer_executed():
     for value in (0, 1):
         mpu = _mpu(prog, m10=value)
         mpu.memory[0x0804:0x0808] = [0x2C, 0xA9, 0x02, 0xEA]
-        covs.append(_run_to(mpu, 0x0808))
+        covs.append(run_to(mpu, 0x0808).cov)
     one = Listing.disassemble(mpu.memory, [ORG], covs[0])
     assert one.line(0x0804) is None and one.line(0x0805) == 3
     assert one.arcs.tolist() == [[-1, 1], [1, 2], [2, 3], [3, 4], [4, 5], [5, -5]]

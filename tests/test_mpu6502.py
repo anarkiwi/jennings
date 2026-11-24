@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from jennings.devices.mpu6502 import MPU
+from helpers import load_regs, mk_p, regs
 from jennings.memory import NATIVE, NativeMemory, ObservableMemory
 from jennings.opcodes import OPCODES, MODE_LEN
 
@@ -25,22 +26,12 @@ RMW_MN = {"ASL", "ROL", "LSR", "ROR", "DEC", "INC", "SLO", "RLA", "SRE", "RRA", 
 RMW_COST = {"zp": 5, "zpx": 6, "abs": 6, "absx": 7, "absy": 7, "indx": 8, "indy": 8}
 
 
-def _flags(p):
-    return (p & 1, (p >> 1) & 1, (p >> 2) & 1, (p >> 3) & 1, (p >> 6) & 1, (p >> 7) & 1)
-
-
-def _mk_p(rng):
-    b = rng.integers(0, 2, 6)
-    return int(b[0] | (b[1] << 1) | (b[2] << 2) | 0x20 | (b[4] << 6) | (b[5] << 7))
-
-
 def _state(mpu):
-    return (mpu.a, mpu.x, mpu.y, mpu.sp) + _flags(mpu.p) + (mpu.pc & 0xFFFF,)
+    return regs(mpu) + (mpu.pc & 0xFFFF,)
 
 
 def _run(mpu, mem, a, x, y, sp, p):
-    mpu.memory[:] = mem
-    mpu.a, mpu.x, mpu.y, mpu.sp, mpu.p, mpu.pc = a, x, y, sp, p, PC
+    load_regs(mpu, mem, a, x, y, sp, p, PC)
     mpu.processorCycles = 0
     mpu.step()
     return _state(mpu), mpu.processorCycles, bytes(mpu.memory)
@@ -65,7 +56,7 @@ def test_legal_opcodes_match_py65(new_mem):
             mem = bytearray(bytes(rng.integers(0, 256, 0x10000, dtype=np.uint8)))
             mem[PC] = op
             a, x, y, sp = (int(v) for v in rng.integers(0, 256, 4))
-            p = _mk_p(rng)
+            p = mk_p(rng)
             mem = bytes(mem)
             try:
                 rst, rcyc, rmem = _run(ref, bytearray(mem), a, x, y, sp, p)

@@ -217,17 +217,16 @@ class MPU:
     def irq(self):
         if self._vm.reg[_FI]:
             return
-        self._push_word(self.pc)
-        self._push((self.p & ~self.BREAK) | self.UNUSED)
-        self._vm.reg[_FI] = 1
-        self.pc = self.WordAt(self.IRQ)
-        self.processorCycles += 7
+        self._interrupt(self.IRQ)
 
     def nmi(self):
+        self._interrupt(self.NMI)
+
+    def _interrupt(self, vector):
         self._push_word(self.pc)
         self._push((self.p & ~self.BREAK) | self.UNUSED)
         self._vm.reg[_FI] = 1
-        self.pc = self.WordAt(self.NMI)
+        self.pc = self.WordAt(vector)
         self.processorCycles += 7
 
     def ByteAt(self, addr):

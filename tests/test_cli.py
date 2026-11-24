@@ -17,14 +17,17 @@ PRG = Path(__file__).parent / "fixtures" / "sidplayer" / "sidplayer.prg"
 ENGINES = ["python", "native"] if NATIVE else ["python"]
 
 
+def _main(capsys, status, *argv):
+    assert cli.main([str(a) for a in argv]) == status
+    return capsys.readouterr()
+
+
 def run(capsys, *argv):
-    assert cli.main([str(a) for a in argv]) == 0
-    return capsys.readouterr().out
+    return _main(capsys, 0, *argv).out
 
 
 def fail(capsys, *argv):
-    assert cli.main([str(a) for a in argv]) == 1
-    return capsys.readouterr().err
+    return _main(capsys, 1, *argv).err
 
 
 def assemble(org, src):

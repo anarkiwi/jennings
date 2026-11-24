@@ -6,10 +6,10 @@ control class and page-cross penalty) is emitted as straight-line Rust.
 
 from __future__ import annotations
 
-import argparse
 import sys
 from pathlib import Path
 
+import gen_common
 from deity_informant.lifter import OPS, bus_only, template
 
 OUT = Path(__file__).resolve().parent.parent / "crates/jennings-core/src/cpu_gen.rs"
@@ -174,17 +174,7 @@ def generate() -> str:
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--check", action="store_true", help="fail if the checked-in file is stale")
-    args = ap.parse_args(argv)
-    src = generate()
-    if args.check:
-        if OUT.read_text() != src:
-            print("%s is stale; run tools/gen_cpu.py" % OUT, file=sys.stderr)
-            return 1
-        return 0
-    OUT.write_text(src)
-    return 0
+    return gen_common.main(argv, __doc__, OUT, generate, "gen_cpu.py")
 
 
 if __name__ == "__main__":

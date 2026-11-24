@@ -27,7 +27,7 @@ dependencies = ["deity-informant>=0.40.20", "tqdm>=4.60"]
 superopt = ["z3-solver>=4.12", "numpy>=1.23"]
 coverage = ["numpy>=1.23", "coverage>=7.4", "pyelftools>=0.31", "tqdm>=4.60", "networkx>=3.0"]
 cuda = ["z3-solver>=4.12", "numpy>=1.23", "cupy-cuda12x>=13"]
-dev = ["pytest", "pytest-xdist", "pytest-cov", "coverage>=7.4", "pyelftools>=0.31", "tqdm>=4.60", "build", "black", "pylint", "py65", "numpy", "z3-solver>=4.12", "networkx>=3.0"]
+dev = ["pytest", "pytest-xdist", "pytest-cov", "coverage>=7.4", "pyelftools>=0.31", "tqdm>=4.60", "build", "black", "pylint", "py65", "numpy", "z3-solver>=4.12", "networkx>=3.0", "pysayme"]
 
 [project.scripts]
 jennings = "jennings.cli:main"
@@ -55,6 +55,17 @@ features = ["pyo3/extension-module"]
 [tool.coverage.run]
 source = ["jennings"]
 omit = ["jennings/superopt/cuda.py"]
+
+[tool.pysayme]
+roots = ["jennings", "tests", "tools"]
+behaviour = true
+# py65 is the test oracle jennings is compatible with, never a dependency of the package.
+ignore-dists = ["py65"]
+
+[tool.pysayme.allow]
+"jennings/decoding.py:_bytes -> numpy.ctypeslib:as_array" = "np.frombuffer of a bytes-like image or np.asarray of any other; as_array wraps ctypes objects"
+"tests/test_coverage_report.py:_analysis -> coverage:Coverage.analysis" = "wraps analysis2 and branch_stats for the plugin's file, not the deprecated analysis()"
+"tools/bench.py:ORG -> deity_informant.hello_world:ORG" = "arbitrary load address that happens to equal the example's"
 
 [tool.black]
 line-length = 100

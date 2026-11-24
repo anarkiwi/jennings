@@ -10,6 +10,7 @@ import pytest
 
 from deity_informant import MAGIC
 from jennings.devices.mpu6502 import MPU, ILLEGAL_OPCODES
+from helpers import load_regs, mk_p, regs
 
 py65 = pytest.importorskip("py65.devices.mpu6502")
 
@@ -17,22 +18,12 @@ PC = 0x0800
 ZP = 0x40
 
 
-def _flags(p):
-    return (p & 1, (p >> 1) & 1, (p >> 2) & 1, (p >> 3) & 1, (p >> 6) & 1, (p >> 7) & 1)
-
-
-def _mk_p(rng):
-    b = rng.integers(0, 2, 6)
-    return int(b[0] | (b[1] << 1) | (b[2] << 2) | 0x20 | (b[4] << 6) | (b[5] << 7))
-
-
 def _load(mpu, mem, a, x, y, sp, p):
-    mpu.memory[:] = mem
-    mpu.a, mpu.x, mpu.y, mpu.sp, mpu.p, mpu.pc = a, x, y, sp, p, PC
+    load_regs(mpu, mem, a, x, y, sp, p, PC)
 
 
 def _state(mpu):
-    return (mpu.a, mpu.x, mpu.y, mpu.sp) + _flags(mpu.p) + (mpu.memory[ZP],)
+    return regs(mpu) + (mpu.memory[ZP],)
 
 
 _RMW = {
@@ -53,7 +44,7 @@ def test_rmw_illegal_equals_decomposition(op, new_mem):
     rng = np.random.default_rng(op)
     for _ in range(300):
         a, x, y, sp = (int(v) for v in rng.integers(0, 256, 4))
-        p = _mk_p(rng)
+        p = mk_p(rng)
         base = bytearray(0x10000)
         base[ZP] = int(rng.integers(0, 256))
         vimg = bytearray(base)
