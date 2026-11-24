@@ -5,11 +5,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
 import gen_cpu  # pylint: disable=wrong-import-position
+from helpers import check_flags_a_stale_file, check_regeneration_is_a_noop
 
 
 def test_regeneration_is_a_noop():
-    assert gen_cpu.OUT.read_text() == gen_cpu.generate()
-    assert gen_cpu.main(["--check"]) == 0
+    check_regeneration_is_a_noop(gen_cpu)
 
 
 def test_every_opcode_has_a_generated_fn():
@@ -24,9 +24,4 @@ def test_sha_indy_has_no_operand_bound_h_plus_1():
 
 
 def test_check_flags_a_stale_file(monkeypatch):
-    monkeypatch.setattr(gen_cpu, "OUT", gen_cpu.OUT.with_name("missing-stale.rs"))
-    gen_cpu.OUT.write_text("stale")
-    try:
-        assert gen_cpu.main(["--check"]) == 1
-    finally:
-        gen_cpu.OUT.unlink()
+    check_flags_a_stale_file(gen_cpu, monkeypatch, "missing-stale.rs")

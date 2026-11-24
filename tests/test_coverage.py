@@ -6,7 +6,7 @@ import pytest
 from deity_informant import lift
 from deity_informant.vm import run_sub
 
-from jennings.assembler import Assembler
+from helpers import build_mpu, load_program, run_to
 from jennings.coverage import (
     EXEC,
     FALLTHRU,
@@ -23,31 +23,8 @@ from jennings.devices.mpu6502 import MPU
 ORG = 0x0800
 
 
-def _load(mpu, statements, org=ORG):
-    asm = Assembler(mpu)
-    pc = org
-    for st in statements:
-        code = asm.assemble(st, pc)
-        assert code is not None, st
-        mpu.memory[pc : pc + len(code)] = code
-        pc += len(code)
-    return pc
-
-
 def _mpu(statements, org=ORG, **mem):
-    mpu = CoverageMPU(pc=org)
-    end = _load(mpu, statements, org)
-    for addr, val in mem.items():
-        mpu.memory[int(addr[1:], 16)] = val
-    return mpu, end
-
-
-def _run_to(mpu, end, limit=1000):
-    for _ in range(limit):
-        if mpu.pc == end:
-            return mpu
-        mpu.step()
-    raise AssertionError("did not reach %04X" % end)
+    return build_mpu(statements, org, CoverageMPU, **mem)
 
 
 BRANCH = ["LDA $10", "BEQ $0806", "LDX #$01", "NOP"]
@@ -56,7 +33,7 @@ BRANCH = ["LDA $10", "BEQ $0806", "LDX #$01", "NOP"]
 @pytest.mark.parametrize("value,flag", [(0, TAKEN), (1, FALLTHRU)])
 def test_branch_direction(value, flag):
     mpu, _ = _mpu(BRANCH, m10=value)
-    _run_to(mpu, 0x0807)
+    run_to(mpu, 0x0807)
     f = mpu.cov.flags
     assert f[0x0802] == EXEC | flag
     assert bool(f[0x0804] & EXEC) == (flag == FALLTHRU)
@@ -69,7 +46,7 @@ def test_branch_merge_both_directions():
     covs = []
     for value in (0, 1):
         mpu, _ = _mpu(BRANCH, m10=value)
-        covs.append(_run_to(mpu, 0x0807).cov)
+        covs.append(run_to(mpu, 0x0807).cov)
     total = CoverageMap()
     total |= covs[0]
     total.merge(covs[1])
@@ -89,7 +66,7 @@ def test_zero_offset_branch(p, flag):
 
 def test_loop_hits_and_branch_flags():
     mpu, end = _mpu(["LDX #$03", "DEX", "BNE $0802"])
-    _run_to(mpu, end)
+    run_to(mpu, end)
     assert mpu.cov.hits[0x0802] == 3 and mpu.cov.hits[0x0800] == 1
     assert mpu.cov.flags[0x0803] == EXEC | TAKEN | FALLTHRU
 
@@ -98,7 +75,7 @@ def test_data_read_write_flags():
     mpu, end = _mpu(
         ["STA $2000", "INC $30", "LDY #$01", "LDA ($40),Y"], m40=0x00, m41=0x30, m30=0x7F
     )
-    _run_to(mpu, end)
+    run_to(mpu, end)
     f = mpu.cov.flags
     assert f[0x2000] == WRITE
     assert f[0x0030] == READ | WRITE
@@ -112,7 +89,7 @@ def test_data_read_write_flags():
 def test_pha_pha_rts_dispatch_edge():
     mpu, _ = _mpu(["LDA #$08", "PHA", "LDA #$0F", "PHA", "RTS"])
     mpu.memory[0x0810] = 0xEA
-    _run_to(mpu, 0x0810)
+    run_to(mpu, 0x0810)
     assert mpu.cov.edges == {(0x0806, 0x0810)}
     assert mpu.cov.flags[0x01FF] == WRITE and mpu.cov.flags[0x01FE] == WRITE
 
@@ -140,7 +117,7 @@ def test_jmp_indirect_page_wrap_pointer_read():
 def test_jsr_rts():
     mpu, end = _mpu(["JSR $0900", "NOP"])
     mpu.memory[0x0900] = 0x60
-    _run_to(mpu, end)
+    run_to(mpu, end)
     assert mpu.cov.edges == {(0x0900, 0x0803)}
     assert mpu.cov.flags[0x0900] == EXEC and mpu.cov.hits[0x0900] == 1
 
@@ -215,9 +192,9 @@ def test_jam_and_reset_keeps_map():
 def test_save_load_roundtrip(tmp_path):
     mpu = CoverageMPU(pc=ORG)
     _vectors(mpu)
-    _load(mpu, ["LDA #$08", "PHA", "LDA #$0F", "PHA", "RTS"])
+    load_program(mpu, ["LDA #$08", "PHA", "LDA #$0F", "PHA", "RTS"], ORG)
     mpu.memory[0x0810] = 0xEA
-    _run_to(mpu, 0x0810)
+    run_to(mpu, 0x0810)
     mpu.irq()
     path = tmp_path / "cov.npz"
     mpu.cov.save(path)

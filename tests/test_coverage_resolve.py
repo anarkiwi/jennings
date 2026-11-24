@@ -167,6 +167,16 @@ def test_variable_or_written_tables_and_plain_returns_resolve_nothing():
     assert not lst.resolved.size
 
 
+def _run_through_h1(text):
+    """Run ``text`` with ``$10`` = 1 until ``h1`` is done: ``(resolved listing, labels)``."""
+    mem, labels, span = _prog(text)
+    mpu = CoverageMPU(memory=mem.tolist(), pc=ORG)
+    mpu.memory[0x10] = 1
+    while mpu.pc != labels["h1"] + 1:
+        mpu.step()
+    return Listing.disassemble(mem, [ORG], mpu.cov, ranges=[span], resolve=True), labels
+
+
 def test_resolution_follows_into_newly_decoded_code_and_marks_executed_targets_once():
     text = (
         "LDA $10; AND #1; TAX; LDA lo,X; STA $20; LDA hi,X; STA $21; jmp: JMP ($20);"
@@ -174,12 +184,7 @@ def test_resolution_follows_into_newly_decoded_code_and_marks_executed_targets_o
         "g0: INX; RTS; g1: DEX; RTS;"
         "lo: .byte <h0, <h1; hi: .byte >h0, >h1; lo2: .byte <g0-1, <g1-1; hi2: .byte >g0-1, >g1-1"
     )
-    mem, labels, span = _prog(text)
-    mpu = CoverageMPU(memory=mem.tolist(), pc=ORG)
-    mpu.memory[0x10] = 1
-    while mpu.pc != labels["h1"] + 1:
-        mpu.step()
-    lst = Listing.disassemble(mem, [ORG], mpu.cov, ranges=[span], resolve=True)
+    lst, labels = _run_through_h1(text)
     want = {("jmp", "h0"), ("jmp", "h1"), ("rts", "g0"), ("rts", "g1")}
     assert _edges(lst) == {(labels[a], labels[b]) for a, b in want}
     rows = lst.source.splitlines()
@@ -280,10 +285,5 @@ def test_run_read_bytes_reject_targets_unless_also_written(touch, taken):
         f"{touch}; LDA $10; AND #1; TAX; LDA lo,X; STA $20; LDA hi,X; STA $21; JMP ($20);"
         "h0: LDA #$00; RTS; h1: INY; RTS; lo: .byte <h0, <h1; hi: .byte >h0, >h1"
     )
-    mem, labels, span = _prog(text)
-    mpu = CoverageMPU(memory=mem.tolist(), pc=ORG)
-    mpu.memory[0x10] = 1
-    while mpu.pc != labels["h1"] + 1:
-        mpu.step()
-    lst = Listing.disassemble(mem, [ORG], mpu.cov, ranges=[span], resolve=True)
+    lst, labels = _run_through_h1(text)
     assert (lst.line(labels["h0"]) is not None) == taken

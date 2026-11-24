@@ -6,7 +6,6 @@ import random
 
 import numpy as np
 import pytest
-from deity_informant import PcodeVM
 
 import jennings
 from jennings import dataflow, decoding, isa
@@ -37,6 +36,7 @@ from jennings.decoding import (
 from jennings.devices.mpu6502 import MPU
 from jennings.disassembler import Disassembler
 from jennings.opcodes import MEM_MODES, OPCODES
+from helpers import step_observed
 
 PC = 0x0400
 OPERANDS = [(0x00, 0x00), (0x7F, 0x12), (0x80, 0xFF), (0xFF, 0x7F), (0x34, 0xC0)]
@@ -90,32 +90,8 @@ def test_decode_many_mask_and_containers():
     )
 
 
-class _Observed(PcodeVM):
-    __slots__ = ("log",)
-
-    def __init__(self, *args):
-        super().__init__(*args)
-        self.log = ([], [])
-
-    def _rd(self, addr, sz):
-        self.log[0].extend((addr + i) & 0xFFFF for i in range(sz))
-        return PcodeVM._rd(self, addr, sz)
-
-    def _wr(self, addr, val, sz):
-        self.log[1].extend((addr + i) & 0xFFFF for i in range(sz))
-        PcodeVM._wr(self, addr, val, sz)
-
-
 def _observe(mem, state):
-    mpu = MPU(memory=bytearray(mem), pc=PC)
-    vm = _Observed(b"")
-    for attr in ("mem", "reg", "uniq", "cycles", "volatile", "vicirq", "ciaicr", "wlog"):
-        setattr(vm, attr, getattr(mpu._vm, attr))
-    vm.volatile, vm.dummies = False, False
-    mpu._vm = vm
-    mpu.a, mpu.x, mpu.y, mpu.p, mpu.sp = state
-    mpu.step()
-    return vm.log
+    return step_observed(mem, state, PC)[1].log
 
 
 def _loc(n, data):

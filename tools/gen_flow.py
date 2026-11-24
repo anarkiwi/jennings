@@ -7,10 +7,10 @@ and of each output's explicit inputs (loads not depending on their addresses).
 
 from __future__ import annotations
 
-import argparse
 import sys
 from pathlib import Path
 
+import gen_common
 from deity_informant.lifter import template
 
 from jennings.dataflow import REGISTERS, flow
@@ -100,12 +100,16 @@ pub(crate) static FLOW: [Flow; 256] = [
 """
 
 
+def _slice(v, fmt):
+    return "&[%s]" % ", ".join(fmt % m for m in v)
+
+
 def _words(v):
-    return "&[%s]" % ", ".join("0x%x" % m for m in v)
+    return _slice(v, "0x%x")
 
 
 def _pairs(v):
-    return "&[%s]" % ", ".join("(%d, 0x%x)" % o for o in v)
+    return _slice(v, "(%d, 0x%x)")
 
 
 def generate() -> str:
@@ -122,17 +126,7 @@ def generate() -> str:
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--check", action="store_true", help="fail if the checked-in file is stale")
-    args = ap.parse_args(argv)
-    src = generate()
-    if args.check:
-        if OUT.read_text() != src:
-            print("%s is stale; run tools/gen_flow.py" % OUT, file=sys.stderr)
-            return 1
-        return 0
-    OUT.write_text(src)
-    return 0
+    return gen_common.main(argv, __doc__, OUT, generate, "gen_flow.py")
 
 
 if __name__ == "__main__":

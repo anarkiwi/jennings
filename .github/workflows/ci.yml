@@ -21,6 +21,8 @@ jobs:
         run: pylint jennings/
       - name: Test
         run: pytest tests/ -n auto --cov=jennings --cov-fail-under=85
+      - name: Duplicates
+        run: pysayme check --behaviour
 
   acme:
     runs-on: ubuntu-latest

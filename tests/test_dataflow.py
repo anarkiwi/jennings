@@ -3,7 +3,7 @@
 import random
 
 import pytest
-from deity_informant import PcodeVM
+from helpers import step_observed
 
 from jennings import dataflow
 from jennings.devices.mpu6502 import MPU
@@ -15,28 +15,9 @@ PC = 0x0400
 SKIP = {"JAM", "BRK", "RTI", "RTS", "JSR", "JMP"}
 
 
-class _Observed(PcodeVM):
-    __slots__ = ("log",)
-
-    def _rd(self, addr, sz):
-        self.log[0].extend((addr + i) & 0xFFFF for i in range(sz))
-        return PcodeVM._rd(self, addr, sz)
-
-    def _wr(self, addr, val, sz):
-        self.log[1].extend((addr + i) & 0xFFFF for i in range(sz))
-        PcodeVM._wr(self, addr, val, sz)
-
-
 def _run(mem, state):
     """Step the instruction at :data:`PC`: ``(outputs, loads, stores)``."""
-    mpu = MPU(memory=bytearray(mem), pc=PC)
-    vm = _Observed(b"")
-    for attr in ("mem", "reg", "uniq", "cycles", "volatile", "vicirq", "ciaicr", "wlog"):
-        setattr(vm, attr, getattr(mpu._vm, attr))
-    vm.volatile, vm.dummies, vm.log = False, False, ([], [])
-    mpu._vm = vm
-    mpu.a, mpu.x, mpu.y, mpu.p, mpu.sp = state
-    mpu.step()
+    mpu, vm = step_observed(mem, state, PC)
     out = {"A": mpu.a, "X": mpu.x, "Y": mpu.y, "SP": mpu.sp, "PC": mpu.pc}
     out.update({f: int(bool(mpu.p & bit)) for f, bit in FLAGS.items()})
     out.update({a: mpu.memory[a] for a in vm.log[1]})

@@ -5,11 +5,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
 import gen_flow  # pylint: disable=wrong-import-position
+from helpers import check_flags_a_stale_file, check_regeneration_is_a_noop
 
 
 def test_regeneration_is_a_noop():
-    assert gen_flow.OUT.read_text() == gen_flow.generate()
-    assert gen_flow.main(["--check"]) == 0
+    check_regeneration_is_a_noop(gen_flow)
 
 
 def test_sta_indy_stores_a_through_its_pointer_bytes_and_y():
@@ -37,9 +37,4 @@ def test_a_branch_maps_its_flag_to_the_condition():
 
 
 def test_check_flags_a_stale_file(monkeypatch):
-    monkeypatch.setattr(gen_flow, "OUT", gen_flow.OUT.with_name("missing-stale-flow.rs"))
-    gen_flow.OUT.write_text("stale")
-    try:
-        assert gen_flow.main(["--check"]) == 1
-    finally:
-        gen_flow.OUT.unlink()
+    check_flags_a_stale_file(gen_flow, monkeypatch, "missing-stale-flow.rs")

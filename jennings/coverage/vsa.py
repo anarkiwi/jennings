@@ -153,9 +153,9 @@ def apply(mn, out_size, in_sizes, masks):
     if mn in ("COPY", "INT_ZEXT"):
         return masks[0]
     m0, m1 = masks
-    mask, mask0 = (1 << (8 * out_size)) - 1, (1 << (8 * in_sizes[0])) - 1
+    mask0 = (1 << (8 * in_sizes[0])) - 1
     if is_single(m0) and is_single(m1):
-        return 1 << _concrete(mn, m0.bit_length() - 1, m1.bit_length() - 1, mask, mask0)
+        return 1 << evaluate(mn, out_size, in_sizes, (m0.bit_length() - 1, m1.bit_length() - 1))
     if mn in _COMPARE:
         zero, one = _compare(mn, m0, m1, mask0)
         return zero | one << 1
@@ -164,13 +164,13 @@ def apply(mn, out_size, in_sizes, masks):
     a, b = bits(m0), bits(m1)
     out = np.zeros(1 << (8 * out_size), bool)
     if a.size * b.size <= 0x10000:
-        out[_concrete(mn, a[:, None], b, mask, mask0)] = True
+        out[evaluate(mn, out_size, in_sizes, (a[:, None], b))] = True
     elif a.size <= b.size:
         for v in a.tolist():
-            out[_concrete(mn, v, b, mask, mask0)] = True
+            out[evaluate(mn, out_size, in_sizes, (v, b))] = True
     else:
         for v in b.tolist():
-            out[_concrete(mn, a, v, mask, mask0)] = True
+            out[evaluate(mn, out_size, in_sizes, (a, v))] = True
     return from_bool(out)
 
 
@@ -255,11 +255,7 @@ def _flag_masks(op, f, scalars):
             )
             for a in args
         ]
-        if mn in ("COPY", "INT_ZEXT"):
-            env[k] = vals[0]
-        else:
-            mask0 = (1 << (8 * in_sizes[0])) - 1
-            env[k] = _concrete(mn, vals[0], vals[1], (1 << (8 * out_size)) - 1, mask0)
+        env[k] = evaluate(mn, out_size, in_sizes, vals)
     g = np.broadcast_to(env[prog[-1][0]], 0x100)
     return from_bool(g == 0), from_bool(g == 1)
 

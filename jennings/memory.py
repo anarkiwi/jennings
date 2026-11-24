@@ -57,17 +57,17 @@ class ObservableMemory:
     def __getattr__(self, attribute):
         return getattr(self._subject, attribute)
 
-    def subscribe_to_write(self, address_range, callback):
+    def _subscribe(self, subscribers, address_range, callback):
         for address in address_range:
-            callbacks = self._write_subscribers[address & self.physMask]
+            callbacks = subscribers[address & self.physMask]
             if callback not in callbacks:
                 callbacks.append(callback)
 
+    def subscribe_to_write(self, address_range, callback):
+        self._subscribe(self._write_subscribers, address_range, callback)
+
     def subscribe_to_read(self, address_range, callback):
-        for address in address_range:
-            callbacks = self._read_subscribers[address & self.physMask]
-            if callback not in callbacks:
-                callbacks.append(callback)
+        self._subscribe(self._read_subscribers, address_range, callback)
 
     def write(self, start_address, bytes):
         start_address &= self.physMask

@@ -19,25 +19,29 @@ def backend(request):
     return request.param
 
 
-@pytest.fixture
-def new_mem(backend):
-    """MPU memory for ``backend`` from optional bytes: None/bytearray (Python) or NativeMemory."""
+def _factory(backend, python):
+    """``make(data=None)`` building ``NativeMemory`` for the native backend, else ``python(data)``."""
 
     def make(data=None):
         if backend == "native":
             return NativeMemory(None if data is None else bytes(data))
-        return None if data is None else bytearray(data)
+        return python(data)
 
     return make
+
+
+@pytest.fixture
+def new_mem(backend):
+    """MPU memory for ``backend`` from optional bytes: None/bytearray (Python) or NativeMemory."""
+    return _factory(backend, lambda data: None if data is None else bytearray(data))
 
 
 @pytest.fixture
 def new_observable(backend):
     """An observable memory for ``backend``, optionally over ``subject``'s contents."""
-
-    def make(subject=None):
-        if backend == "native":
-            return NativeMemory(None if subject is None else bytes(subject))
-        return ObservableMemory() if subject is None else ObservableMemory(subject=subject)
-
-    return make
+    return _factory(
+        backend,
+        lambda subject: (
+            ObservableMemory() if subject is None else ObservableMemory(subject=subject)
+        ),
+    )

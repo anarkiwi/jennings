@@ -23,13 +23,14 @@ class Disassembler:
         mpu = self._mpu
         disasm, mode = mpu.disassemble[mpu.ByteAt(pc)]
 
+        def labelled(address, fmt):
+            return address, self._address_parser.label_for(address, "$" + fmt % address)
+
         def word_label():
-            address = mpu.WordAt(pc + 1)
-            return address, self._address_parser.label_for(address, "$" + self.addrFmt % address)
+            return labelled(mpu.WordAt(pc + 1), self.addrFmt)
 
         def byte_label():
-            zp = mpu.ByteAt(pc + 1)
-            return zp, self._address_parser.label_for(zp, "$" + self.byteFmt % zp)
+            return labelled(mpu.ByteAt(pc + 1), self.byteFmt)
 
         if mode == "acc":
             return 1, disasm + " A"
