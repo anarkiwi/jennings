@@ -11,9 +11,9 @@ use std::ffi::{c_int, c_void};
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering};
 
 use jennings_core::{
-    cells_digest, orbit, periods, run_to_rts, run_until, trajectory, Access, Accesses, AddrSet,
-    Bus, Census, Cpu, End, FlatBus, FlatMemory, Hooks, Learn, Periodic, RamBus, Remap, Stop, Trace,
-    Until, CONST, REG,
+    cells_digest, memo_orbit, orbit, periods, run_to_rts, run_until, trajectory, Access, Accesses,
+    AddrSet, Bus, Census, Cpu, End, FlatBus, FlatMemory, Grain, Hooks, Learn, Periodic, RamBus,
+    Remap, Stop, Trace, Until, CONST, REG,
 };
 use pyo3::buffer::PyBuffer;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -742,6 +742,20 @@ macro_rules! remapped {
     };
 }
 
+fn ending(e: End) -> &'static str {
+    match e {
+        End::Closed => "closed",
+        End::Open => "open",
+        End::Volatile => "volatile",
+        End::Jam => "jam",
+        End::Stopped => "stop",
+    }
+}
+
+fn le(v: &[u64]) -> Vec<u8> {
+    v.iter().flat_map(|k| k.to_le_bytes()).collect()
+}
+
 fn reason(s: Stop) -> &'static str {
     match s {
         Stop::Cycles => "cycles",
@@ -1172,19 +1186,117 @@ impl Core {
                 || stop.load(Ordering::Relaxed) && stop.swap(false, Ordering::Relaxed),
             ))
         })?;
-        let end = match o.end {
-            End::Closed => "closed",
-            End::Open => "open",
-            End::Volatile => "volatile",
-            End::Jam => "jam",
-            End::Stopped => "stop",
-        };
-        let le = |v: &[u64]| v.iter().flat_map(|k| k.to_le_bytes()).collect::<Vec<u8>>();
         Ok((
-            end,
+            ending(o.end),
             o.states,
             PyBytes::new(py, &le(&o.accesses)),
             PyBytes::new(py, &le(&o.edges)),
+        ))
+    }
+
+    /// `orbit` without emulating what it has seen (`jennings_core::memo_orbit`): the calls
+    /// are cut into units at `grain` (0 a whole call, 1 at subroutine entries and returns, 2
+    /// also at backward branch targets, 3 also inside units that come to be many), each
+    /// memoised on the registers and written memory it reads, and a repeated state is
+    /// confirmed by comparing states. `(end, states, accesses, edges, stats)` as `orbit`
+    /// gives them, `stats` a dict of `jennings_core::MemoStats`. The memory must have nothing
+    /// mapped, watched or observed.
+    #[pyo3(signature = (pc, acc, max_cycles, limit, keep=None, volatile=None, remap=None, cells=None, grain=3))]
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    fn memo_orbit<'py>(
+        &self,
+        py: Python<'py>,
+        pc: u16,
+        acc: i64,
+        max_cycles: u64,
+        limit: usize,
+        keep: Option<&Bound<'py, PyAny>>,
+        volatile: Option<&Bound<'py, PyAny>>,
+        remap: Option<&Bound<'py, PyRemap>>,
+        cells: Option<Vec<u32>>,
+        grain: u8,
+    ) -> PyResult<(
+        &'static str,
+        usize,
+        Bound<'py, PyBytes>,
+        Bound<'py, PyBytes>,
+        Bound<'py, PyDict>,
+    )> {
+        let grain = match grain {
+            0 => Grain::Call,
+            1 => Grain::Sub,
+            2 => Grain::Loop,
+            3 => Grain::Split,
+            _ => return Err(PyValueError::new_err("grain is 0, 1, 2 or 3")),
+        };
+        let (mut kept, mut regs, mut vol) = (AddrSet::default(), Vec::new(), AddrSet::default());
+        match cells.map(locations).transpose()? {
+            Some(cl) => {
+                for c in cl {
+                    if c < REG {
+                        kept.insert(c as u16);
+                    } else if !regs.contains(&(c - REG)) {
+                        regs.push(c - REG);
+                    }
+                }
+            }
+            None => {
+                for (lo, hi) in keep.map_or(Ok(vec![(0, 0x10000)]), spans)? {
+                    kept.insert_range(lo, hi);
+                }
+            }
+        }
+        for (lo, hi) in volatile.map_or(Ok(vec![]), spans)? {
+            vol.insert_range(lo, hi);
+        }
+        let rm = remap.map(|r| &r.get().0);
+        let got = self.drive(py, true, |cpu, bus, stop| {
+            let mut ram = RamBus::of(bus.inner.mem)?;
+            Some(memo_orbit(
+                cpu,
+                &mut ram,
+                pc,
+                acc as u8,
+                max_cycles,
+                limit,
+                rm,
+                &vol,
+                &kept,
+                &regs,
+                grain,
+                || stop.load(Ordering::Relaxed) && stop.swap(false, Ordering::Relaxed),
+            ))
+        })?;
+        let Some((o, st)) = got else {
+            return Err(PyValueError::new_err(
+                "memo_orbit needs a memory with nothing mapped, watched or observed",
+            ));
+        };
+        let stats = PyDict::new(py);
+        for (name, v) in [
+            ("calls", st.calls),
+            ("hits", st.hits),
+            ("misses", st.misses),
+            ("steps", st.steps),
+            ("entries", st.entries),
+            ("live", st.live),
+            ("flushes", st.flushes),
+            ("splits", st.splits),
+            ("raw", st.raw),
+            ("dropped", st.dropped),
+            ("collisions", st.collisions),
+            ("bytes", st.bytes),
+        ] {
+            stats.set_item(name, v)?;
+        }
+        stats.set_item("roots", st.roots)?;
+        stats.set_item("fanout", st.fanout)?;
+        Ok((
+            ending(o.end),
+            o.states,
+            PyBytes::new(py, &le(&o.accesses)),
+            PyBytes::new(py, &le(&o.edges)),
+            stats,
         ))
     }
 

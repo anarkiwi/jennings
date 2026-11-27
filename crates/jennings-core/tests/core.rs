@@ -1,9 +1,9 @@
 use std::cell::RefCell;
 
 use jennings_core::{
-    access_key, cells_digest, learn, orbit, periods, run_to_rts, run_until, trajectory, Access,
-    Accesses, AddrSet, Bus, Census, Cpu, End, FlatMemory, Hooks, Learn, NoHooks, Period, Periodic,
-    RamBus, Remap, Stop, Until, AS_IS, CONST, REG, ZERO,
+    access_key, cells_digest, learn, memo_orbit, orbit, periods, run_to_rts, run_until, trajectory,
+    Access, Accesses, AddrSet, Bus, Census, Cpu, End, FlatMemory, Grain, Hooks, Learn, NoHooks,
+    Period, Periodic, RamBus, Remap, Stop, Until, AS_IS, CONST, REG, ZERO,
 };
 
 fn ram(prog: &[(u16, &[u8])]) -> Box<[u8; 0x10000]> {
@@ -605,6 +605,125 @@ fn orbit_runs_under_the_remap() {
     // INC reads 0 and stores nothing: every call starts from the same state.
     assert_eq!((o.end, o.states, m[0x10]), (End::Closed, 1, 0));
     assert!(o.accesses.contains(&access_key(0x1000, true, 0x10)));
+}
+
+/// [`memo_orbit`] of `m` from `$1000` over page zero at each grain, each equal to [`orbit`]
+/// there in what it finds and the state it leaves.
+fn memo_orbits(
+    m: &[u8; 0x10000],
+    limit: usize,
+    remap: Option<&Remap>,
+    vol: &AddrSet,
+    stop_after: Option<usize>,
+) -> jennings_core::Orbit {
+    let mut polls = 0;
+    let stopped = |polls: &mut usize| {
+        *polls += 1;
+        stop_after.is_some_and(|n| *polls > n)
+    };
+    let (mut want_m, mut want_c) = (Box::new(*m), Cpu::new());
+    let want = orbit(
+        &mut want_c,
+        &mut *want_m,
+        0x1000,
+        0,
+        1000,
+        limit,
+        remap,
+        vol,
+        zero_page,
+        || stopped(&mut polls),
+    );
+    let keep: AddrSet = (0..0x100).collect();
+    for grain in [Grain::Call, Grain::Sub, Grain::Loop, Grain::Split] {
+        let (mut got_m, mut got_c, mut polls) = (Box::new(*m), Cpu::new(), 0);
+        let (got, stats) = memo_orbit(
+            &mut got_c,
+            &mut *got_m,
+            0x1000,
+            0,
+            1000,
+            limit,
+            remap,
+            vol,
+            &keep,
+            &[],
+            grain,
+            || stopped(&mut polls),
+        );
+        assert_eq!(got, want, "{grain:?}");
+        assert!(got_m == want_m && got_c == want_c, "{grain:?}");
+        assert_eq!(stats.dropped, 0);
+        assert!(stats.calls >= want.states as u64 - (want.end != End::Closed) as u64);
+    }
+    want
+}
+
+#[test]
+fn memo_orbit_is_the_orbit() {
+    let none = AddrSet::default();
+    let m = counter();
+    assert_eq!(memo_orbits(&m, 100, None, &none, None).end, End::Closed);
+    assert_eq!(memo_orbits(&m, 2, None, &none, None).end, End::Open);
+    assert_eq!(memo_orbits(&m, 3, None, &none, None).end, End::Closed);
+    let vol: AddrSet = [0x10].into_iter().collect();
+    assert_eq!(memo_orbits(&m, 100, None, &vol, None).end, End::Volatile);
+    let jam = ram(&[(0x1000, &[0x02])]);
+    assert_eq!(memo_orbits(&jam, 100, None, &none, None).end, End::Jam);
+    assert_eq!(memo_orbits(&m, 100, None, &none, Some(0)).end, End::Stopped);
+    let mut r = Remap::default();
+    let mut t = vec![AS_IS; 0x10000];
+    t[0x10] = ZERO;
+    r.insert(0x1000, &t);
+    let o = memo_orbits(&m, 100, Some(&r), &none, None);
+    assert_eq!((o.end, o.states), (End::Closed, 1));
+}
+
+/// $1000 LDX #2 ; DEC $10,X ; BPL +9 ; LDA $20,X ; STA $10,X ; INC $30,X ; DEX ; BPL -13 ;
+/// INC $40 ; RTS: three counters of periods `$20,X` + 1 and a frame counter.
+fn voices(periods: [u8; 3]) -> Box<[u8; 0x10000]> {
+    let mut m = ram(&[(
+        0x1000,
+        &[
+            0xA2, 0x02, 0xD6, 0x10, 0x10, 0x06, 0xB5, 0x20, 0x95, 0x10, 0xF6, 0x30, 0xCA, 0x10,
+            0xF3, 0xE6, 0x40, 0x60,
+        ],
+    )]);
+    m[0x20..0x23].copy_from_slice(&periods);
+    m
+}
+
+#[test]
+fn memo_orbit_closes_where_independent_counters_realign() {
+    let m = voices([2, 4, 6]);
+    let o = memo_orbits(&m, 100_000, None, &AddrSet::default(), None);
+    // Counters of 3, 5 and 7 calls each step a byte: 256 * 105 calls.
+    assert_eq!((o.end, o.states), (End::Closed, 26880));
+    let (mut c, keep) = (Cpu::new(), (0..0x100).collect());
+    let mut by = |grain| {
+        let mut ram = m.clone();
+        let none = AddrSet::default();
+        memo_orbit(
+            &mut c,
+            &mut *ram,
+            0x1000,
+            0,
+            1000,
+            100_000,
+            None,
+            &none,
+            &keep,
+            &[],
+            grain,
+            || false,
+        )
+        .1
+    };
+    let (call, looped) = (by(Grain::Call), by(Grain::Loop));
+    assert_eq!(call.hits + call.misses, call.calls);
+    assert!(looped.entries < call.entries && looped.steps < call.steps);
+    assert!(looped.hits > 3 * looped.calls && looped.live <= looped.entries);
+    assert_eq!((call.dropped, looped.dropped, looped.collisions), (0, 0, 0));
 }
 
 #[test]
