@@ -59,7 +59,7 @@ def main(argv=None):
     ap.add_argument(
         "--exclude", type=_span, action="append", metavar="LO:HI", help="hex, default stack and I/O"
     )
-    ap.add_argument("--taint", action="append", choices=sorted(V._TAINT), help="default calls")
+    ap.add_argument("--taint", action="append", choices=V.TAINTS, help="default calls")
     ap.add_argument("--closure", type=int, metavar="LIMIT", help="also run to state closure")
     ap.add_argument("--save", action="store_true", help="write STATE.cert.json")
     args = ap.parse_args(argv)

@@ -29,6 +29,7 @@ __all__ = [
     "CONTROL",
     "VALUE",
     "ACCESSES",
+    "SITE_BITS",
     "Components",
     "Cycles",
     "Flows",
@@ -44,6 +45,11 @@ __all__ = [
     "cycles",
     "widen",
     "cover_calls",
+    "cover",
+    "drive",
+    "edge_pairs",
+    "excluded",
+    "spans",
 ]
 
 STACK = range(0x100, 0x200)
@@ -54,7 +60,8 @@ LOAD, STORE, CONTROL, VALUE = "r", "w", "b", "v"
 #: A census access's kind, by its number in ``pc << 19 | kind << 16 | address``.
 ACCESSES = ("load", "stack load", "store", "stack store", "read", "write")
 _KINDS = (LOAD, STORE, CONTROL, VALUE)
-_BITS = 18
+#: A learner site key is ``(pc << 2 | kind) << SITE_BITS | loc``.
+SITE_BITS = 18
 _PER = ("stored", "addressed", "gated")
 
 
@@ -156,11 +163,13 @@ def machine(state):
     return m
 
 
-def _drive(run, calls, desc):
-    """``run(n)`` over ``calls`` calls in chunks, with progress; raises if a call fails."""
-    with tqdm(
-        total=calls, desc=desc, unit="call", disable=calls <= CHUNK, mininterval=1
-    ) as progress:
+def drive(run, calls, desc, update=None):
+    """``run(n)`` over ``calls`` calls in chunks of at most :data:`CHUNK`, each returning how
+    its last call stopped; raises :class:`RuntimeError` where that is not ``"sp"`` (its RTS).
+
+    Progress is a bar named ``desc``, or ``update(n)`` after each chunk where given."""
+
+    def chunks(update):
         done = 0
         while done < calls:
             n = min(CHUNK, calls - done)
@@ -168,11 +177,37 @@ def _drive(run, calls, desc):
             if stop != "sp":
                 raise RuntimeError("a call after %d ended at %r, not its RTS" % (done, stop))
             done += n
-            progress.update(n)
+            update(n)
+
+    if update is not None:
+        chunks(update)
+        return
+    with tqdm(
+        total=calls, desc=desc, unit="call", disable=calls <= CHUNK, mininterval=1
+    ) as progress:
+        chunks(progress.update)
 
 
-def _excluded(loc, exclude):
-    return loc < REG and any(loc in r for r in exclude)
+def excluded(locs, bounds):
+    """Whether each of the locations ``locs`` is an address in one of the half-open
+    ``(lo, hi)`` ``bounds`` (as :func:`spans` gives them)."""
+    locs = np.asarray(locs, np.int64)
+    out = np.zeros(locs.shape, bool)
+    for lo, hi in bounds:
+        out |= (locs >= lo) & (locs < hi) & (locs < REG)
+    return out
+
+
+def spans(exclude):
+    """``exclude`` (``range`` objects or ``(lo, hi)`` pairs) as sorted half-open ``(lo, hi)``
+    tuples; a range of another step than 1 as one span per address in it."""
+    out = []
+    for r in exclude:
+        if isinstance(r, range):
+            out.extend([(r.start, r.stop)] if r.step == 1 else [(a, a + 1) for a in r])
+        else:
+            out.append((int(r[0]), int(r[1])))
+    return tuple(sorted(out))
 
 
 def closures(deps, cells):
@@ -209,8 +244,9 @@ def _tainted(comps):
     return set().union(*sites) & set(comps.persistent)
 
 
-def _pairs(edges):
-    e = np.frombuffer(edges, np.uint64)
+def edge_pairs(keys):
+    """``(pc, next)`` of edge keys ``pc << 16 | next`` (an array, or uint64 bytes)."""
+    e = np.frombuffer(keys, np.uint64) if isinstance(keys, bytes) else np.asarray(keys, np.int64)
     return list(zip((e >> 16).tolist(), (e & 0xFFFF).tolist()))
 
 
@@ -243,7 +279,7 @@ class Calls:
             raise self.failed
         m, kw = self.machine, self.kw
         try:
-            _drive(
+            drive(
                 lambda n: m.census(
                     self.census, self.pc, kw["acc"], kw["max_cycles"], n, kw["remap"]
                 ),
@@ -334,7 +370,7 @@ def _prefix(cen, calls):
         first("exits", np.uint16),
         first("written", np.uint16),
     )
-    cd = control_dependence(_pairs(edges.tobytes()) + [(x, -1) for x in exits.tolist()])
+    cd = control_dependence(edge_pairs(edges.tobytes()) + [(x, -1) for x in exits.tolist()])
     seen = (len(edges), len(exits), len(written))
     return {p: sorted(b) for p, b in cd.items()}, written.tolist(), seen
 
@@ -381,7 +417,7 @@ def _learn_on(state, pc, cen, calls, explicit_, kw, run=None):
         run = _Run(Learner(cd, written, explicit_), machine(state), seen)
     acc, max_cycles, remap = kw["acc"], kw["max_cycles"], kw["remap"]
     learner, m = run.learner, run.machine
-    _drive(
+    drive(
         lambda n: m.learn(learner, pc, acc, max_cycles, n, remap, census=cen),
         calls - run.calls,
         "explicit" if explicit_ else "learn",
@@ -394,7 +430,7 @@ def _sites(got):
     """``{(pc, kind): frozenset}`` of a ``Learner`` result's sites."""
     s = np.frombuffer(got["sites"], np.uint64)
     sites = {}
-    for key, loc in zip((s >> _BITS).tolist(), (s & ((1 << _BITS) - 1)).tolist()):
+    for key, loc in zip((s >> SITE_BITS).tolist(), (s & ((1 << SITE_BITS) - 1)).tolist()):
         sites.setdefault((key >> 2, _KINDS[key & 3]), set()).add(loc)
     return {k: frozenset(v) for k, v in sites.items()}
 
@@ -402,11 +438,8 @@ def _sites(got):
 def _components(got, calls, exclude):
     """:class:`Components` of a ``Learner`` result over ``calls`` calls, ``exclude`` never
     persistent."""
-    persistent = tuple(
-        loc
-        for loc in np.frombuffer(got["persistent"], np.uint32).tolist()
-        if not _excluded(loc, exclude)
-    )
+    locs = np.frombuffer(got["persistent"], np.uint32)
+    persistent = tuple(locs[~excluded(locs, spans(exclude))].tolist())
     deps = {k: v - {k} for k, v in _by_loc(got["deps"]).items() if v - {k}}
     cls, g = closures(deps, persistent)
     comps = Components(
@@ -415,7 +448,7 @@ def _components(got, calls, exclude):
         closures=cls,
         feed=frozenset(),
         feeding=(),
-        edges=frozenset(_pairs(got["edges"])),
+        edges=frozenset(edge_pairs(got["edges"])),
         sites=_sites(got),
         calls=calls,
     )
@@ -459,7 +492,7 @@ def trajectory(state, pc, cells, calls, *, acc=0, max_cycles=MAX_CYCLES, remap=N
         rows.append(r)
         return stop
 
-    _drive(run, calls + 1, "trajectory")
+    drive(run, calls + 1, "trajectory")
     return np.concatenate(rows)
 
 
@@ -568,3 +601,60 @@ def cover_calls(
             return calls, comps
         run = _learn_on(state, pc, cen, calls, False, kw, run)
         comps = _components(run.learner.learned(), calls, exclude)
+
+
+# pylint: disable-next=too-many-arguments
+def cover(
+    state,
+    pc,
+    limit,
+    *,
+    acc=0,
+    max_cycles=MAX_CYCLES,
+    remap=None,
+    exclude=(STACK, IO),
+    first=CHUNK,
+    start=None,
+):
+    """``(calls, comps, ran)``: the cover point of ``pc`` called from ``state``, the feed
+    locations' first repeat as :func:`cover_calls` settles it, with the :class:`Components`
+    and the :class:`Calls` it was measured on.
+
+    The components are learned over ``first`` calls (at most ``limit``) and the feed
+    locations' first repeat found on calls recording the persistent locations;
+    :func:`cover_calls` is run over twice that plus the calls learned, and the components it
+    gives are taken on until it gives the same repeat and feed locations. Where it finds a
+    conflict no persistent location explains, the components are learned again over more
+    calls. ``calls`` is None where the feed locations do not repeat within ``limit`` calls.
+
+    ``start(cells)``, where given, is :class:`Calls` recording ``cells`` to take the first of
+    those runs on from, or None to run them anew. Raises :class:`RuntimeError` where a call
+    does not return, or where the feed locations do not settle within ``limit`` calls."""
+    kw = {"acc": acc, "max_cycles": max_cycles, "remap": remap}
+    learned, seen = min(first, limit), set()
+    comps = learn(state, pc, learned, exclude=exclude, **kw)
+    while True:
+        seen.add((comps.feed, learned))
+        ran = start(comps.persistent) if start is not None else None
+        start = None
+        ran = ran or Calls(state, pc, comps.persistent, **kw)
+        calls = ran.repeat(comps.feed, limit, learned)
+        if ran.failed is not None:
+            raise ran.failed
+        if calls is None or not comps.persistent:
+            return calls, comps, ran
+        try:
+            n, wider = cover_calls(
+                state, pc, comps, min(limit, 2 * calls + learned), exclude=exclude, ran=ran, **kw
+            )
+        except RuntimeError:
+            if ran.failed is not None or learned >= limit:
+                raise
+            learned = min(limit, max(8 * learned, 2 * calls))
+            comps = learn(state, pc, learned, exclude=exclude, **kw)
+            continue
+        if n == calls and wider.feed == comps.feed:
+            return calls, comps, ran
+        learned, comps = max(learned, wider.calls), wider
+        if (comps.feed, learned) in seen:
+            raise RuntimeError("the feed locations do not settle within %d calls" % limit)

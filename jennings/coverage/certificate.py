@@ -16,6 +16,7 @@ import networkx as nx
 import numpy as np
 from tqdm import tqdm
 
+from jennings import memo
 from jennings.coverage import components as C
 from jennings.devices.mpu6502 import REG, Census, Learner, periods_of
 
@@ -26,6 +27,7 @@ __all__ = [
     "Closure",
     "CARRIED",
     "REGISTERS",
+    "TAINTS",
     "state_digest",
     "remap_digest",
     "certify",
@@ -206,15 +208,11 @@ def remap_digest(tables, pointer_opcodes=()):
 
 
 def _spans(exclude):
-    """``exclude`` (``range`` objects or ``(lo, hi)`` pairs) as sorted ``(lo, hi)`` tuples."""
-    out = []
-    for r in exclude:
-        if isinstance(r, range):
-            if r.step != 1:
-                raise ValueError("an excluded range has step 1")
-            r = (r.start, r.stop)
-        out.append((int(r[0]), int(r[1])))
-    return tuple(sorted(out))
+    """``exclude`` (``range`` objects of step 1 or ``(lo, hi)`` pairs) as sorted ``(lo, hi)``
+    tuples."""
+    if any(isinstance(r, range) and r.step != 1 for r in exclude):
+        raise ValueError("an excluded range has step 1")
+    return C.spans(exclude)
 
 
 def _remap_id(remap, remap_id):
@@ -259,8 +257,7 @@ def _edge_keys(edges):
 
 
 def _edges(keys):
-    keys = np.asarray(keys, np.int64)
-    return tuple(zip((keys >> 16).tolist(), (keys & 0xFFFF).tolist()))
+    return tuple(C.edge_pairs(keys))
 
 
 def _census_accesses(ran, calls):
@@ -315,47 +312,31 @@ def certify(
     exclude=(C.STACK, C.IO),
     learn=C.CHUNK,
 ):
-    """The :class:`Certificate` of the cover point of ``pc`` called from ``state``.
-
-    :func:`~jennings.coverage.components.cover_calls` is run over twice the feed locations'
-    first repeat until it gives that repeat and those locations; an :class:`Open` where they
-    do not repeat within ``limit`` calls. A call that does not return raises.
+    """The :class:`Certificate` of the cover point of ``pc`` called from ``state``, as
+    :func:`~jennings.coverage.components.cover` finds it; an :class:`Open` where the feed
+    locations do not repeat within ``limit`` calls. Raises :class:`RuntimeError` where a call
+    does not return or the feed locations do not settle.
 
     Args:
         state: as :func:`~jennings.coverage.components.machine` takes it.
         acc, max_cycles, remap, exclude: as
-            :func:`~jennings.coverage.components.cover_calls` takes them.
+            :func:`~jennings.coverage.components.cover` takes them.
         remap_id: the :func:`remap_digest` of ``remap``, given with it.
-        learn: the calls the components are first learned over.
+        learn: the calls the components are first learned over (``cover``'s ``first``).
     """
-    kw = {"acc": acc, "max_cycles": max_cycles, "remap": remap}
     remap_id, spans = _remap_id(remap, remap_id), _spans(exclude)
-    exclude = tuple(range(lo, hi) for lo, hi in spans)
-    learned, seen = min(learn, limit), set()
-    comps = C.learn(state, pc, learned, exclude=exclude, **kw)
-    while True:
-        seen.add((comps.feed, learned))
-        ran = C.Calls(state, pc, comps.persistent, **kw)
-        calls = ran.repeat(comps.feed, limit, learned)
-        if ran.failed is not None:
-            raise ran.failed
-        if calls is None:
-            return _open(comps, ran)
-        try:
-            n, wider = C.cover_calls(
-                state, pc, comps, min(limit, 2 * calls + learned), exclude=exclude, ran=ran, **kw
-            )
-        except RuntimeError:
-            if ran.failed is not None or learned >= limit:
-                raise
-            learned = min(limit, max(8 * learned, 2 * calls))
-            comps = C.learn(state, pc, learned, exclude=exclude, **kw)
-            continue
-        if n == calls and wider.feed == comps.feed:
-            break
-        learned, comps = max(learned, wider.calls), wider
-        if (comps.feed, learned) in seen:
-            raise RuntimeError("the feed locations do not settle within %d calls" % limit)
+    calls, comps, ran = C.cover(
+        state,
+        pc,
+        limit,
+        acc=acc,
+        max_cycles=max_cycles,
+        remap=remap,
+        exclude=tuple(range(lo, hi) for lo, hi in spans),
+        first=learn,
+    )
+    if calls is None:
+        return _open(comps, ran)
     feed = tuple(sorted(comps.feed))
     preperiod = _first_repeat(ran.rows(calls + 1, feed), calls)
     return Certificate(
@@ -422,28 +403,26 @@ def _taint_calls(state, cert, written, remap):
     The calls are cut into one run per processor, each tainted from the entry a plain replay
     reaches it at: a call's taint starts from its own entry, so the runs share nothing."""
     args = (cert.pc, cert.acc, cert.max_cycles)
-    jobs = max(1, min(os.cpu_count() or 1, cert.calls // C.CHUNK))
+    jobs = max(1, min(len(os.sched_getaffinity(0)), cert.calls // C.CHUNK))
     cuts = [cert.calls * k // jobs for k in range(jobs + 1)]
     m, starts = C.machine(state), []
     for a, b in zip(cuts, cuts[1:]):
         starts.append(C.machine(m))
-        if b < cert.calls and m.trajectory(*args, b - a, [cert.pc], remap)[0] != "sp":
-            raise RuntimeError("a call before %d ended not at its RTS" % b)
+        if b < cert.calls:
+            C.drive(lambda n: m.trajectory(*args, n, [cert.pc], remap)[0], b - a, "replay")
 
     with tqdm(
         total=cert.calls, desc="verify", unit="call", disable=cert.calls <= C.CHUNK, mininterval=1
     ) as progress:
         lock = threading.Lock()
 
+        def update(n):
+            with lock:
+                progress.update(n)
+
         def taint(k):
-            learner, left = Learner({}, written), cuts[k + 1] - cuts[k]
-            while left:
-                n = min(C.CHUNK, left)
-                if starts[k].learn(learner, *args, n, remap) != "sp":
-                    raise RuntimeError("a call of run %d ended not at its RTS" % k)
-                left -= n
-                with lock:
-                    progress.update(n)
+            learner, m = Learner({}, written), starts[k]
+            C.drive(lambda n: m.learn(learner, *args, n, remap), cuts[k + 1] - cuts[k], "", update)
             return learner.learned()
 
         with ThreadPoolExecutor(jobs) as pool:
@@ -453,7 +432,7 @@ def _taint_calls(state, cert, written, remap):
 def _taint_classes(state, cert, written, remap):
     """As :func:`_taint_calls`, over the first call of each class of a census of the calls."""
     cen, m = Census([]), C.machine(state)
-    C._drive(
+    C.drive(
         lambda n: m.census(cen, cert.pc, cert.acc, cert.max_cycles, n, remap),
         cert.calls,
         "classes",
@@ -468,13 +447,8 @@ def _taint_classes(state, cert, written, remap):
 
 
 _TAINT = {"calls": _taint_calls, "classes": _taint_classes}
-
-
-def _excluded(locs, spans):
-    out = np.zeros(len(locs), bool)
-    for lo, hi in spans:
-        out |= (locs >= lo) & (locs < hi)
-    return out
+#: The taints :func:`verify` takes.
+TAINTS = tuple(_TAINT)
 
 
 def _outside(got, cert, written):
@@ -496,14 +470,14 @@ def _outside(got, cert, written):
         return np.where(loc < REG, np.isin(loc, written), np.isin(loc, persistent))
 
     s = np.frombuffer(got["sites"], np.uint64).astype(np.int64)
-    key, loc = s >> C._BITS, s & ((1 << C._BITS) - 1)
+    key, loc = s >> C.SITE_BITS, s & ((1 << C.SITE_BITS) - 1)
     at = (key & 3 != 3) & state(loc) & ~np.isin(loc, held)
     key, loc = key[at], loc[at]
     d = np.frombuffer(got["deps"], np.uint64).astype(np.int64)
     dst, src = d >> 32, d & 0xFFFFFFFF
     at = np.isin(dst, held) & (src != dst) & state(src) & ~np.isin(src, held)
     dst, src = dst[at], src[at]
-    ex_s, ex_d = _excluded(loc, cert.exclude), _excluded(src, cert.exclude)
+    ex_s, ex_d = C.excluded(loc, cert.exclude), C.excluded(src, cert.exclude)
     assumed = np.union1d(loc[ex_s], src[ex_d])
     return (
         list(zip(key[~ex_s].tolist(), loc[~ex_s].tolist())),
@@ -599,12 +573,19 @@ def verify(state, certificate, *, remap=None, remap_id=None, taint="calls"):
     return Verdict(True, **found)
 
 
+def _orbit(m, cert, limit, **state):
+    """:meth:`~jennings.devices.mpu6502.NativeMPU.orbit` of ``cert``'s calls on ``m``."""
+    return memo.orbit(m, cert.pc, cert.acc, cert.max_cycles, limit, **state)[:4]
+
+
 def closure(state, certificate, limit, *, remap=None, remap_id=None):
     """The :class:`Closure` of ``certificate``'s calls from ``state`` within ``limit`` calls.
 
     The state is every register a call hands the next, the stack page and the memory the calls
     store to. The calls run in stages, each from ``state`` over more calls than the last; a
-    stage that stores to an address not yet in the state is run again with it."""
+    stage that stores to an address not yet in the state is run again with it. Each stage is
+    :func:`jennings.memo.orbit`, which gives what
+    :meth:`~jennings.devices.mpu6502.NativeMPU.orbit` gives."""
     cert = certificate
     why = _mismatch(state, cert, _remap_id(remap, remap_id))
     if why:
@@ -617,8 +598,8 @@ def closure(state, certificate, limit, *, remap=None, remap_id=None):
     ) as progress:
         while True:
             cells = np.union1d(stores, np.arange(C.STACK.start, C.STACK.stop)).tolist()
-            end, states, acc, edges = C.machine(state).orbit(
-                cert.pc, cert.acc, cert.max_cycles, n, cells=cells + list(REGISTERS), remap=remap
+            end, states, acc, edges = _orbit(
+                C.machine(state), cert, n, cells=cells + list(REGISTERS), remap=remap
             )
             acc, edges = np.asarray(acc, np.int64), np.asarray(edges, np.int64)
             new = np.setdiff1d(acc[acc >> 16 & 1 == 1] & 0xFFFF, stores)
