@@ -742,13 +742,17 @@ Without control dependence there are no implicit flows, so a second call of a cl
 nothing ([Learning once per class](#learning-once-per-class)); this trusts the census to
 class calls exactly and to restore their entry states, which the default does not.
 
-**closure** is a separate, exact cross-check that does not use the taint: `orbit` from the
+**closure** is a separate, exact cross-check that does not use the taint: the calls from the
 certified state until the whole state repeats or `limit` calls ran, the state being X, Y, SP,
 the flags, the stack page and every address the calls store to (a run that stores to an
 address outside that set is run again with it), and reports the accesses and edges beyond the
-certificate. It runs in stages of four times the calls each, from the start, and can take
-many times the cover calls; `Closure.calls` counts write-only memory too, so it can exceed a
-closure of the feed locations by the calls that first write it.
+certificate. It runs in stages of four times the calls each, from the start, each stage
+`jennings.memo.orbit` ([memo.md](memo.md)), which gives what `NativeMPU.orbit` gives without
+emulating what it has seen; tests hold the two equal on the closure. `Closure.calls` counts
+write-only memory too (the SID registers a play routine stores to, say), so it can exceed a
+closure of the feed locations by the calls that first write it, and exceed
+`tools/memo_orbit.py`'s count, whose state is all RAM outside the volatile ranges and no
+registers.
 
 **Open** is what `certify` returns where the feed locations do not repeat within `limit`:
 `calls` entries seen without a repeat, `unrepeated` the sets of mutually dependent feed

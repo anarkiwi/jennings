@@ -10,6 +10,7 @@ import pytest
 
 import test_components as T
 from jennings.coverage import certificate as V
+from jennings.coverage.elf import load_elf
 from jennings.coverage import components as C
 from jennings.devices.mpu6502 import Learner, Remap
 from jennings.memory import NATIVE
@@ -386,7 +387,7 @@ def test_tainting_every_call_in_runs_is_tainting_them_in_one(name, monkeypatch):
     one = Learner({}, written)
     C.machine(ram).learn(one, *args, cert.calls)
     monkeypatch.setattr(C, "CHUNK", max(1, cert.calls // 5))
-    monkeypatch.setattr(V.os, "cpu_count", lambda: 4)
+    monkeypatch.setattr(V.os, "sched_getaffinity", lambda _pid: range(4))
     got = V._taint_calls(ram, cert, written, None).learned()
     for key, kind in V._LEARNED.items():
         want = np.unique(np.frombuffer(one.learned()[key], kind))
@@ -449,8 +450,89 @@ def test_a_register_read_in_one_run_and_written_in_another_is_state(reg, reads_f
         accesses=V._census_accesses(ran, calls),
         edges=V._edges(np.unique(ran.seen("edges", calls)[0])),
     )
-    monkeypatch.setattr(V.os, "cpu_count", lambda: 2)
+    monkeypatch.setattr(V.os, "sched_getaffinity", lambda _pid: range(2))
     for taint in ("calls", "classes"):
         got = V.verify(ram, cert, taint=taint)
         assert got.failed in ("address", "control"), (taint, got)
         assert got.detail.endswith("is tainted by %s, outside the feed set" % reg), got.detail
+
+
+LATE_IO = """
+    inc $d400
+    lda $d400
+    cmp #20
+    bne +
+    lda #1
+    sta f
++   lda c
+    clc
+    adc f
+    adc #1
+    and #3
+    sta c
+    tax
+    lda tab,x
+    rts
+c   !byte 0
+f   !byte 0
+tab !byte 1, 2, 3, 4
+"""
+
+
+def test_a_conflict_relearning_does_not_explain_raises_at_the_limit(monkeypatch):
+    """I/O changes how ``c`` steps at call 19: no persistent location tells the entries apart,
+    so the components are learned again over more calls, up to the limit, and then it raises."""
+    ram, _ = T.image(LATE_IO)
+    learned, learn = [], C.learn
+    monkeypatch.setattr(C, "learn", lambda *a, **k: learned.append(a[2]) or learn(*a, **k))
+    with pytest.raises(RuntimeError, match="conflicts no persistent cell explains"):
+        V.certify(ram, PLAY, 1000, learn=16)
+    assert learned == [16, 128, 1000]
+
+
+def test_feed_locations_that_do_not_settle_raise(monkeypatch):
+    """A cover_calls that keeps widening the feed set to one it had (forced here: no routine
+    is known to do so) ends the search rather than looping."""
+    ram, _ = T.image(T.SWEEP)
+    cover_calls = C.cover_calls
+
+    def unsettled(state, pc, comps, limit, **kw):
+        calls, wider = cover_calls(state, pc, comps, limit, **kw)
+        return calls + 1, wider
+
+    monkeypatch.setattr(C, "cover_calls", unsettled)
+    with pytest.raises(RuntimeError, match="do not settle within 5000 calls"):
+        V.certify(ram, PLAY, 5000)
+
+
+def _brute(m, cert, limit, **state):
+    return m.orbit(cert.pc, cert.acc, cert.max_cycles, limit, **state)
+
+
+@pytest.mark.parametrize("name", [*SOURCES, "IO_STATE"])
+def test_closure_through_the_memo_is_the_brute_force_closure(name, monkeypatch):
+    src = globals()[name] if name == "IO_STATE" else getattr(T, name)
+    ram, _, cert = certified(src, learn=64)
+    early = dataclasses.replace(cert, period=1, preperiod=0)
+    for c in (cert, early):
+        for limit in (c.calls, 3000):
+            got = V.closure(ram, c, limit)
+            with monkeypatch.context() as mp:
+                mp.setattr(V, "_orbit", _brute)
+                assert V.closure(ram, c, limit) == got, (c.period, limit)
+
+
+SIDPLAYER = Path(__file__).parent / "fixtures" / "sidplayer" / "sidplayer.prg.elf"
+
+
+@pytest.mark.parametrize("song", [0, 1])
+def test_a_play_routine_closes_alike_through_the_memo_and_by_brute_force(song, monkeypatch):
+    mem, syms = load_elf(SIDPLAYER)
+    m = C.machine(bytes(mem.tolist()))
+    assert m.trajectory(syms["init"], song, C.MAX_CYCLES, 1, [0], None)[0] == "sp"
+    cert = V.certify(m, syms["play"], 100_000)
+    assert V.verify(m, cert).ok
+    got = V.closure(m, cert, 100_000)
+    assert got.ok and got.calls >= cert.calls
+    monkeypatch.setattr(V, "_orbit", _brute)
+    assert V.closure(m, cert, 100_000) == got

@@ -5,7 +5,9 @@
         [--limit N] [--brute] IMAGE...
 
 One row per image: the end and calls, the memo's counts, its bytes and the seconds taken; the
-host's load average heads the rows.
+host's load average heads the rows. The state is all RAM outside ``--volatile`` and no
+registers, not :func:`jennings.coverage.certificate.closure`'s (the registers a call hands
+the next, the stack page and the memory stored to, volatile or not).
 """
 
 import argparse

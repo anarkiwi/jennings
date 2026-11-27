@@ -1046,3 +1046,58 @@ def test_forked_calls_are_the_calls_run_anew():
     assert wide.holds(comps.persistent) and not ran.holds([0x10])
     assert C.cover_calls(ram, PLAY, comps, 600, ran=wide) == C.cover_calls(ram, PLAY, comps, 600)
     assert wide.rows(5, [0x10]).shape == (5, 1)
+
+
+@pytest.mark.parametrize("name", ["COUNTERS", "TABLE", "SWEEP", "LATE", "SONG"])
+def test_cover_is_cover_calls_settled_and_takes_calls_on_from_a_start(name):
+    ram, _ = image(globals()[name])
+    calls, comps, ran = C.cover(ram, PLAY, 5000, first=64)
+    want, wider = C.cover_calls(ram, PLAY, C.learn(ram, PLAY, max(calls, 64)), 5000)
+    assert (calls, comps.feed) == (want, wider.feed) and ran.holds(comps.persistent)
+    asked = []
+
+    def start(cells):
+        asked.append(cells)
+        return C.Calls(ram, PLAY, cells).run(3)
+
+    again = C.cover(ram, PLAY, 5000, first=64, start=start)
+    assert (again[0], again[1].feed) == (calls, comps.feed) and len(asked) == 1
+    assert C.cover(ram, PLAY, 5000, first=64, start=lambda _cells: None)[0] == calls
+
+
+def test_cover_of_calls_that_carry_nothing_is_one_call_and_of_no_repeat_is_none():
+    ram, _ = image("    lda #1\n    sta $0400\n    rts\n")
+    calls, comps, _ran = C.cover(ram, PLAY, 100)
+    assert calls == 1 and not comps.persistent and not comps.feed
+    ram, _ = image(SWEEP)
+    calls, comps, ran = C.cover(ram, PLAY, 500)
+    assert calls is None and ran.calls == 501 and comps.feed
+    with pytest.raises(RuntimeError, match="'cycles'"):
+        C.cover(image("loop jmp loop\n")[0], PLAY, 100, max_cycles=1000)
+
+
+def test_spans_and_excluded_take_ranges_and_pairs():
+    assert C.spans([C.IO, (0x100, 0x200), range(4, 10, 3)]) == (
+        (4, 5),
+        (7, 8),
+        (0x100, 0x200),
+        (0xD000, 0xE000),
+    )
+    locs = [3, 4, 0x1FF, 0x200, 0xD400, REG + 1]
+    got = C.excluded(locs, C.spans([C.STACK, C.IO, (4, 5), (REG, REG + 16)]))
+    assert got.tolist() == [False, True, True, False, True, False], "registers never excluded"
+
+
+def test_edge_pairs_of_keys_and_their_bytes():
+    keys = np.array([0x1000 << 16 | 0x1003, 0xFFFF << 16], np.uint64)
+    assert C.edge_pairs(keys) == C.edge_pairs(keys.tobytes()) == [(0x1000, 0x1003), (0xFFFF, 0)]
+
+
+def test_drive_runs_in_chunks_reports_progress_and_raises_on_a_call_that_fails(monkeypatch):
+    monkeypatch.setattr(C, "CHUNK", 3)
+    ran, done = [], []
+    C.drive(lambda n: ran.append(n) or "sp", 8, "", done.append)
+    assert ran == done == [3, 3, 2]
+    C.drive(lambda n: "sp", 8, "bar")
+    with pytest.raises(RuntimeError, match="a call after 3 ended at 'jam', not its RTS"):
+        C.drive(lambda n: "jam" if ran.append(n) or len(ran) > 4 else "sp", 8, "")
