@@ -731,8 +731,10 @@ What is assumed, not checked:
   and is not state.
 
 The calls are tainted in one run per processor, each from the entry a plain replay reaches
-it at: a call's taint starts from its own entry, so the runs share nothing and their results
-are unioned.
+it at: a call's taint starts from its own entry, so the runs share nothing and what each
+learns per call (sites, dependences, edges, the memory written, the registers read before
+written and those written) is unioned. Persistence is not per call: a register one run reads
+before writing and another writes is state, so it is taken from those unions.
 
 `verify(..., taint="classes")` taints one call per class instead: a `Census` of the calls,
 each class's first call restored (`NativeMPU.restore`) and tainted by the same plain learner.

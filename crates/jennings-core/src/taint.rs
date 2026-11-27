@@ -244,6 +244,10 @@ pub struct Learned {
     pub exits: Vec<u16>,
     /// The memory some call wrote.
     pub written: Vec<u16>,
+    /// The registers of [`STATE_REGS`] ([`REG`] + index) some call reads before writing.
+    pub registers_read: Vec<u32>,
+    /// The registers some call wrote.
+    pub registers_written: Vec<u32>,
 }
 
 impl Learn {
@@ -772,6 +776,12 @@ impl Learn {
                     && (l < REG || STATE_REGS >> (l - REG) & 1 != 0)
             })
             .collect();
+        let registers_read = (REG..LOCS as u32)
+            .filter(|&l| self.read_first[l as usize] && STATE_REGS >> (l - REG) & 1 != 0)
+            .collect();
+        let registers_written = (REG..LOCS as u32)
+            .filter(|&l| self.wrote[l as usize])
+            .collect();
         let pairs = |v: &[u32]| -> Vec<u64> {
             let mut out = Vec::new();
             for (l, &d) in v.iter().enumerate() {
@@ -810,6 +820,8 @@ impl Learn {
             written: (0..=0xFFFFu16)
                 .filter(|&a| self.wrote[a as usize])
                 .collect(),
+            registers_read,
+            registers_written,
         }
     }
 }

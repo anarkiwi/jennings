@@ -391,4 +391,66 @@ def test_tainting_every_call_in_runs_is_tainting_them_in_one(name, monkeypatch):
     for key, kind in V._LEARNED.items():
         want = np.unique(np.frombuffer(one.learned()[key], kind))
         assert np.array_equal(np.frombuffer(got[key], kind), want), key
+    persistent = np.frombuffer(one.learned()["persistent"], np.uint32)
+    want = persistent[persistent >= C.REG].tobytes()
+    assert got["persistent"] == want, "the registers one learner has persistent"
     assert V.verify(ram, cert).ok
+
+
+PHASED = """
+    lda hi
+    cmp #$10
+    bcs late
+    %s
+    jmp count
+late
+    %s
+count
+    inc lo
+    bne +
+    inc hi
++   lda hi
+    and #$1f
+    sta hi
+    rts
+lo  !byte 0
+hi  !byte 0
+"""
+#: A register's read before any write of it, and its write, by name.
+READS = {
+    "X": ("lda $2000,x", "ldx #5"),
+    "Y": ("lda $2000,y", "ldy #5"),
+    "V": ("bvs *+3\n nop", "clv"),
+}
+
+
+@pytest.mark.parametrize("reads_first", [True, False], ids=["read-then-write", "write-then-read"])
+@pytest.mark.parametrize("reg", READS)
+def test_a_register_read_in_one_run_and_written_in_another_is_state(reg, reads_first, monkeypatch):
+    """The first 4096 calls of 8192 run one phase, the rest the other: tainted in two runs,
+    one only reads the register before writing it and the other only writes it, and the
+    register is persistent as it is to one learner over both, so what it taints is outside
+    the feed set."""
+    read, write = READS[reg]
+    ram, s = T.image(PHASED % ((read, write) if reads_first else (write, read)))
+    calls = 8192
+    ran = C.Calls(ram, PLAY)
+    ran.run(calls)
+    cert = V.Certificate(
+        state=V.state_digest(ram),
+        pc=PLAY,
+        acc=0,
+        max_cycles=C.MAX_CYCLES,
+        exclude=V._spans((C.STACK, C.IO)),
+        remap=None,
+        feed=(s["lo"], s["hi"]),
+        preperiod=0,
+        period=calls,
+        accesses=V._census_accesses(ran, calls),
+        edges=V._edges(np.unique(ran.seen("edges", calls)[0])),
+    )
+    monkeypatch.setattr(V.os, "cpu_count", lambda: 2)
+    for taint in ("calls", "classes"):
+        got = V.verify(ram, cert, taint=taint)
+        assert got.failed in ("address", "control"), (taint, got)
+        assert got.detail.endswith("is tainted by %s, outside the feed set" % reg), got.detail
