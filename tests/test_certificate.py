@@ -372,3 +372,23 @@ def test_the_tool_certifies_and_verifies_state_dumps(tmp_path, capsys):
     assert V.verify(Path(paths[0]).read_bytes(), saved).ok
     assert cover_verify.main(["--pc", "%x" % PLAY, "--exclude", "100:200", paths[0]]) == 0
     assert "| 15 |" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("name", ["COUNTERS", "SMC", "SONG", "VOICES"])
+def test_tainting_every_call_in_runs_is_tainting_them_in_one(name, monkeypatch):
+    """The calls cut into several runs, each tainted from its own entry, learn what one
+    learner over all of them does, and the verdict is the same."""
+    ram, _, cert = certified(getattr(T, name))
+    args = (cert.pc, cert.acc, cert.max_cycles)
+    acc = np.asarray(C.machine(ram).orbit(*args, cert.calls)[2], np.int64)
+    stores = acc[acc >> 16 & 1 == 1] & 0xFFFF
+    written = np.union1d(stores, np.arange(C.STACK.start, C.STACK.stop)).tolist()
+    one = Learner({}, written)
+    C.machine(ram).learn(one, *args, cert.calls)
+    monkeypatch.setattr(C, "CHUNK", max(1, cert.calls // 5))
+    monkeypatch.setattr(V.os, "cpu_count", lambda: 4)
+    got = V._taint_calls(ram, cert, written, None).learned()
+    for key, kind in V._LEARNED.items():
+        want = np.unique(np.frombuffer(one.learned()[key], kind))
+        assert np.array_equal(np.frombuffer(got[key], kind), want), key
+    assert V.verify(ram, cert).ok
