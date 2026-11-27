@@ -68,7 +68,8 @@ accesses, dynamic edges), reports it through coverage.py on listings that can fo
 jumps through constant tables, derives self-modifying-code and interrupt-vector obligations,
 explains one-way branches, and records per-test coverage from pytest. `jennings.coverage.components`
 splits a repeatedly called routine into autonomous components by native data and control taint,
-measures each one's cycle and gives the calls that cover every access and edge it can make. See
+measures each one's cycle and gives the calls that cover every access and edge it can make;
+`jennings.coverage.certificate` records that claim and verifies it by replay. See
 [docs/coverage.md](docs/coverage.md).
 
 ## Command line
