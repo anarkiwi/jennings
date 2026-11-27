@@ -653,3 +653,103 @@ learned.
 `NativeMPU.orbit(..., cells=locations)` hashes only those locations (addresses and
 `REG + index`) for the state, e.g. `comps.feed`, where RAM holding stale scratch would not
 repeat.
+
+### Certificates and their verification
+
+`jennings.coverage.certificate` puts a cover claim in a record that is checked without the
+learner that made it.
+
+```python
+from jennings.coverage import certificate as V
+
+cert = V.certify(ram, play, 2_000_000)       # a Certificate, or an Open
+verdict = V.verify(ram, cert)                # Verdict: ok, failed, detail, ...
+json.dumps(cert.to_dict()); V.Certificate.from_dict(d)
+V.closure(ram, cert, 20_000_000).ok          # opt-in: run to the whole state's first repeat
+```
+
+**certify** learns the components over `learn` calls, follows the feed locations to their
+first repeat (`Calls.repeat`) and runs `cover_calls` over twice as many calls, again until it
+returns that repeat and those feed locations. The `Certificate` holds only the claim:
+
+| field | |
+|---|---|
+| `state` | `state_digest`: SHA-256 of the RAM and X, Y, SP, P the calls start from |
+| `pc`, `acc`, `max_cycles` | the entry, A at each call, the cycles a call may take |
+| `exclude` | `(lo, hi)` address ranges taken to hold no state between calls |
+| `remap` | `remap_digest` of the `Remap`'s tables and pointer opcodes, None without one |
+| `feed` | the locations every address and control transfer is a function of |
+| `preperiod`, `period` | the feed locations at the entry of call `preperiod` are those at the entry of call `preperiod + period`; `calls` is their sum |
+| `accesses` | `{(pc, LOAD or STORE): addresses}` of the data accesses of those calls, as each instruction names them (before any remap) |
+| `edges` | `(pc, next)` of consecutive instructions within one of those calls |
+
+A `Remap` cannot be read back, so it is identified by the `remap_id` given with it.
+
+**verify** replays the calls from the same state and returns a `Verdict` naming the first
+condition that fails (`failed`, with `detail`):
+
+| `failed` | condition |
+|---|---|
+| `input` | the state's digest and the remap's are the certificate's, the period at least 1 |
+| `replay` | every call returns (`trajectory` stops at each RTS, `orbit` sees no jam) |
+| `repeat` | the feed locations, SP and B at the entries of calls `preperiod` and `preperiod + period` are equal byte for byte (`trajectory` rows), and `orbit` hashing those locations finds no repeat before |
+| `accesses`, `edges` | every data access and edge `orbit` records over the calls is in the certificate |
+| `address`, `control` | no state outside the feed set taints the address of a data load or store, or a control transfer (a branch's condition and offset, a jump's target, a return's frame, an opcode byte) |
+| `autonomy` | no state outside the feed set taints a feed location's (or SP's or B's) end-of-call value |
+
+The taint is a `Learner` with no control dependence over every one of the calls, started from
+the certified state without a census: each location tainted by data and by its instruction's
+opcode and operand bytes. Its memory may be written where the replay stored or in the stack
+page; a tainting location is state where the learner's calls did write it (memory by its
+`written`, X, Y and the flags by its `persistent`), and otherwise holds one value at every
+entry. The learner's edges must be the replay's. `Verdict.accesses` and `Verdict.edges` list
+what the certificate has that no replayed call does; `Verdict.assumed` lists the state in
+`exclude` that taints an address, a control transfer or a feed location.
+
+Why these conditions give the claim. Take two calls whose feed locations, SP and B are equal
+at entry, the first of them among the calls tainted. Memory no tainted call writes is the same
+at both, and A is set at each. Instruction by instruction the second call is at the same PC
+with the same opcode and operands (their taint is in the feed set or constant), accesses the
+same addresses and holds the same value wherever the taint of that value is in the feed set
+or constant: each output of an instruction is a function of its inputs, which the taint
+unions. So it makes the same accesses, takes the same edges, writes the same addresses and
+leaves the same feed locations, SP and B. No control dependence is needed: a location whose
+update is skipped under a branch is covered by that branch's condition being in the feed
+set. Call `preperiod + period` equals call `preperiod` at entry, so by induction every later
+call repeats one of the `period` before it, and writes no address they did not.
+
+What is assumed, not checked:
+
+- the routine has no input: a call is `run_to_rts` on flat RAM with `A = acc` (and `remap`),
+  so I/O registers read back what was stored and nothing changes between calls;
+- the native core is the machine, and `flow_gen.rs` names every input of each opcode's
+  outputs and addresses (`tools/gen_flow.py` reads both off the P-Code the core is generated
+  from);
+- locations in `exclude` (by default the stack page and I/O) carry no state from call to
+  call. `Verdict.assumed` is every such location the claim leans on; where it is empty the
+  exclusion assumed nothing. The return frame `run_to_rts` pushes is rewritten at each call
+  and is not state.
+
+`verify(..., taint="classes")` taints one call per class instead: a `Census` of the calls,
+each class's first call restored (`NativeMPU.restore`) and tainted by the same plain learner.
+Without control dependence there are no implicit flows, so a second call of a class adds
+nothing ([Learning once per class](#learning-once-per-class)); this trusts the census to
+class calls exactly and to restore their entry states, which the default does not.
+
+**closure** is a separate, exact cross-check that does not use the taint: `orbit` from the
+certified state until the whole state repeats or `limit` calls ran, the state being X, Y, SP,
+the flags, the stack page and every address the calls store to (a run that stores to an
+address outside that set is run again with it), and reports the accesses and edges beyond the
+certificate. It runs in stages of four times the calls each, from the start, and can take
+many times the cover calls; `Closure.calls` counts write-only memory too, so it can exceed a
+closure of the feed locations by the calls that first write it.
+
+**Open** is what `certify` returns where the feed locations do not repeat within `limit`:
+`calls` entries seen without a repeat, `unrepeated` the sets of mutually dependent feed
+locations that did not repeat although everything they depend on did, and `period` the least
+common multiple of the periods of the sets that did (with their dependences), which the feed
+locations' period is a multiple of. Feed locations that each repeat but not yet together
+give no `unrepeated` set and a `period` to set the limit by.
+
+`tools/cover_verify.py --pc ADDR STATE...` certifies and verifies 64 KiB state dumps and
+prints calls, seconds and verdicts (`--taint`, `--closure LIMIT`, `--save`).
