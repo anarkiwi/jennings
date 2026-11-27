@@ -100,6 +100,10 @@ mpu = MPU(memory=mem)                     # mpu.native is True
 mpu.run_to_rts(play, 0, 200_000)
 ```
 
+`jennings.memo.orbit` gives the orbit of a repeatedly called, input-free routine (calls to
+the first repeated state, every data access and control edge) without emulating what it has
+already seen. See [docs/memo.md](docs/memo.md).
+
 ## Compatibility
 
 Mirrors the py65 API surface used in practice: `devices.mpu6502.MPU`

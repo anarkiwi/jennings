@@ -2,6 +2,7 @@
 
 from deity_informant import PcodeVM
 
+from jennings.acme import assemble
 from jennings.assembler import Assembler
 from jennings.devices.mpu6502 import MPU
 
@@ -108,3 +109,11 @@ def check_flags_a_stale_file(gen, monkeypatch, name):
         assert gen.main(["--check"]) == 1
     finally:
         gen.OUT.unlink()
+
+
+def image(src, ram=None):
+    """64 KiB RAM with ``src`` (ACME, ``* = $1000`` prepended) assembled at ``$1000``."""
+    out, syms = assemble("* = $1000\n" + src, cpu="6510")
+    ram = bytearray(0x10000) if ram is None else bytearray(ram)
+    ram[0x1000 : 0x1000 + len(out)] = out
+    return ram, syms

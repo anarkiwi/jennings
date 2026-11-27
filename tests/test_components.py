@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from deity_informant.lifter import template
-from jennings.acme import assemble
+from helpers import image
 from jennings.coverage import components as C
 from jennings.coverage.cfg import LEN
 from jennings.dataflow import REGISTERS, flow
@@ -22,14 +22,6 @@ PLAY = 0x1000
 STATE = {REG + i for i, n in REGISTERS.items() if n in ("X", "Y", "C", "Z", "I", "D", "V", "N")}
 NAME = {n: REG + i for i, n in REGISTERS.items()}
 FLAGS = [NAME[f] for f in "CZIDVN"]
-
-
-def image(src, ram=None):
-    """64 KiB RAM with ``src`` (ACME, ``* = $1000`` prepended) assembled at ``PLAY``."""
-    out, syms = assemble("* = $1000\n" + src, cpu="6510")
-    ram = bytearray(0x10000) if ram is None else bytearray(ram)
-    ram[PLAY : PLAY + len(out)] = out
-    return ram, syms
 
 
 def seen(ram, calls):

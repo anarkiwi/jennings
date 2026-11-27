@@ -305,6 +305,12 @@ pub struct Redirect<'a, B: Bus> {
 }
 
 impl<B: Bus> Redirect<'_, B> {
+    /// The bus whose accesses are redirected.
+    #[inline(always)]
+    pub(crate) fn inner(&mut self) -> &mut B {
+        self.inner
+    }
+
     #[inline(always)]
     fn read_as(&mut self, addr: u16, plain: impl FnOnce(&mut B, u16) -> u8) -> u8 {
         match Bus::target(self, addr) {
