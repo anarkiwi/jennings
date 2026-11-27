@@ -7,6 +7,9 @@ repeat of the whole state.
 
 import hashlib
 import math
+import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 import networkx as nx
@@ -381,15 +384,62 @@ def _mismatch(state, cert, remap_id):
     return None
 
 
+#: The element type of each array a learner's result holds.
+_LEARNED = {
+    "sites": np.uint64,
+    "deps": np.uint64,
+    "edges": np.uint64,
+    "written": np.uint16,
+    "persistent": np.uint32,
+}
+
+
+class _Learned:  # pylint: disable=too-few-public-methods
+    """The union of learners' results, as one learner's."""
+
+    def __init__(self, parts):
+        self._got = {
+            k: np.unique(np.concatenate([np.frombuffer(p[k], t) for p in parts])).tobytes()
+            for k, t in _LEARNED.items()
+        }
+
+    def learned(self):
+        """The arrays of :data:`_LEARNED`, each the sorted union of the learners'."""
+        return self._got
+
+
 def _taint_calls(state, cert, written, remap):
-    """A data-only :class:`~jennings.devices.mpu6502.Learner` over every certified call."""
-    learner, m = Learner({}, written), C.machine(state)
-    C._drive(
-        lambda n: m.learn(learner, cert.pc, cert.acc, cert.max_cycles, n, remap),
-        cert.calls,
-        "verify",
-    )
-    return learner
+    """Data-only :class:`~jennings.devices.mpu6502.Learner` results over every certified call.
+
+    The calls are cut into one run per processor, each tainted from the entry a plain replay
+    reaches it at: a call's taint starts from its own entry, so the runs share nothing."""
+    args = (cert.pc, cert.acc, cert.max_cycles)
+    jobs = max(1, min(os.cpu_count() or 1, cert.calls // C.CHUNK))
+    cuts = [cert.calls * k // jobs for k in range(jobs + 1)]
+    m, starts = C.machine(state), []
+    for a, b in zip(cuts, cuts[1:]):
+        starts.append(C.machine(m))
+        if b < cert.calls and m.trajectory(*args, b - a, [cert.pc], remap)[0] != "sp":
+            raise RuntimeError("a call before %d ended not at its RTS" % b)
+
+    with tqdm(
+        total=cert.calls, desc="verify", unit="call", disable=cert.calls <= C.CHUNK, mininterval=1
+    ) as progress:
+        lock = threading.Lock()
+
+        def taint(k):
+            learner, left = Learner({}, written), cuts[k + 1] - cuts[k]
+            while left:
+                n = min(C.CHUNK, left)
+                if starts[k].learn(learner, *args, n, remap) != "sp":
+                    raise RuntimeError("a call of run %d ended not at its RTS" % k)
+                left -= n
+                with lock:
+                    progress.update(n)
+            return learner.learned()
+
+        with ThreadPoolExecutor(jobs) as pool:
+            return _Learned(list(pool.map(taint, range(jobs))))
 
 
 def _taint_classes(state, cert, written, remap):

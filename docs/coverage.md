@@ -730,6 +730,10 @@ What is assumed, not checked:
   exclusion assumed nothing. The return frame `run_to_rts` pushes is rewritten at each call
   and is not state.
 
+The calls are tainted in one run per processor, each from the entry a plain replay reaches
+it at: a call's taint starts from its own entry, so the runs share nothing and their results
+are unioned.
+
 `verify(..., taint="classes")` taints one call per class instead: a `Census` of the calls,
 each class's first call restored (`NativeMPU.restore`) and tainted by the same plain learner.
 Without control dependence there are no implicit flows, so a second call of a class adds
