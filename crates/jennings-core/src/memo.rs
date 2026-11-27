@@ -25,13 +25,36 @@ const FLAGS: u16 = 0x6F00;
 const SEED: u64 = 0x9E37_79B9_7F4A_7C15;
 const PROFILE: usize = 16;
 const RECENT: u32 = 12;
-/// The units of one start PC from which cutting them is considered, doubling for that start
-/// PC each time no cut fits, and beyond which they are emulated rather than memoised.
-const CROWD: u32 = 1024;
-const RAW: u32 = 1 << 16;
-/// A run of reads is saturated where the units sharing it are this many times its distinct
-/// values.
-const SATURATED: u32 = 8;
+
+/// When the units of one start PC are cut and when they are given up on. Every value gives
+/// the same [`Orbit`] and leaves the same state; each trades only work and memory.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Tuning {
+    /// The units of one start PC at which cutting them is first considered, doubling for that
+    /// start PC each time no cut fits. Lower walks the trie for a cut sooner and more often,
+    /// on less evidence of where the reads part; higher stores more units whole before a cut
+    /// lets them share.
+    pub(crate) crowd: u32,
+    /// The units of one start PC beyond which, no cut having fitted, it is emulated rather
+    /// than memoised. Lower stops paying for stores and lookups that rarely hit sooner, and
+    /// emulates what could have been replayed; higher holds more units and longer lookups.
+    pub(crate) raw: u32,
+    /// A cut must leave the runs of reads on each side saturated: the units sharing them at
+    /// least this many times their distinct values. Higher cuts only where units would be
+    /// shared often, so more units are stored whole; lower cuts more readily, each cut
+    /// emptying the memo and leaving shorter units that cost more lookups per call.
+    pub(crate) saturated: u32,
+}
+
+impl Default for Tuning {
+    fn default() -> Self {
+        Tuning {
+            crowd: 1024,
+            raw: 1 << 16,
+            saturated: 8,
+        }
+    }
+}
 
 /// Where calls are cut into the units that are memoised.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -69,7 +92,8 @@ pub struct MemoStats {
     pub splits: u64,
     /// Start PCs whose units are no longer memoised, being too many to find cheaply.
     pub raw: u64,
-    /// Units not stored because the trie held a unit that ends elsewhere on the same reads.
+    /// Units not stored because the trie held one on the same reads: a stored unit emulated
+    /// because replaying it would pass the call's cycle limit, whose call then returned.
     pub dropped: u64,
     /// Candidate repeats whose states differed.
     pub collisions: u64,
@@ -335,8 +359,9 @@ impl Trie {
 
     /// An instruction to cut the units starting at `pc` at: one that at least half of them
     /// reach, where the distinct runs of reads before its first read or from it on are more
-    /// than one and few for the units ([`SATURATED`]), the one with the fewest of both.
-    fn cut_for(&self, pc: u16) -> Option<u16> {
+    /// than one and few for the units (`saturated`, as [`Tuning::saturated`]), the one with
+    /// the fewest of both.
+    fn cut_for(&self, pc: u16, saturated: u32) -> Option<u16> {
         let root = self.roots[pc as usize];
         if root == NONE {
             return None;
@@ -347,7 +372,7 @@ impl Trie {
         let score = |s: &Site| s.before + s.after.len() as u32;
         let fits = |s: &Site| {
             let (before, after) = (s.before, s.after.len() as u32);
-            s.units * 2 >= units && before.min(after) > 1 && before.min(after) * SATURATED <= units
+            s.units * 2 >= units && before.min(after) > 1 && before.min(after) * saturated <= units
         };
         let sites = probe.sites.iter().filter(|s| *s.0 != pc && fits(s.1));
         sites.min_by_key(|s| (score(s.1), *s.0)).map(|s| *s.0)
@@ -558,14 +583,15 @@ pub struct Memo<'a, B: Bus> {
     uses: [(u16, u16); 256],
     held: Box<[u32]>,
     crowd: Box<[u32]>,
+    tuning: Tuning,
     trie: Trie,
     stats: MemoStats,
 }
 
 impl<'a, B: Bus> Memo<'a, B> {
     /// A memo over `bus` whose tracked state is the memory in `keep` and the registers
-    /// `cells` ([`REG`] offsets).
-    fn new(bus: &'a mut B, keep: &AddrSet, cells: &[u32]) -> Self {
+    /// `cells` ([`REG`] offsets), cutting and giving up on crowded units as `tuning` says.
+    fn new(bus: &'a mut B, keep: &AddrSet, cells: &[u32], tuning: Tuning) -> Self {
         let mut seed = SEED;
         let mut weight = vec![0u64; 0x10000].into_boxed_slice();
         for (a, w) in weight.iter_mut().enumerate() {
@@ -603,7 +629,8 @@ impl<'a, B: Bus> Memo<'a, B> {
             start_steps: 0,
             uses: std::array::from_fn(|op| reg_use(op as u8)),
             held: vec![0; 0x10000].into_boxed_slice(),
-            crowd: vec![CROWD; 0x10000].into_boxed_slice(),
+            crowd: vec![tuning.crowd; 0x10000].into_boxed_slice(),
+            tuning,
             trie: Trie::new(),
             stats: MemoStats::default(),
         };
@@ -812,19 +839,23 @@ impl<'a, B: Bus> Memo<'a, B> {
     }
 
     /// An instruction to cut the units of the start PC grown crowded at (with `split`); where
-    /// none fits they are left to grow to twice as many, and past [`RAW`] the start PC is
-    /// returned to be emulated.
+    /// none fits they are left to grow to twice as many, and past [`Tuning::raw`] the start PC
+    /// is returned to be emulated.
     fn relieve(&mut self, split: bool) -> (Option<u16>, Option<u16>) {
         let Some(pc) = self.crowded.take() else {
             return (None, None);
         };
-        let site = if split { self.trie.cut_for(pc) } else { None };
+        let site = if split {
+            self.trie.cut_for(pc, self.tuning.saturated)
+        } else {
+            None
+        };
         if site.is_some() {
             return (site, None);
         }
         let crowd = &mut self.crowd[pc as usize];
         *crowd = crowd.saturating_mul(2);
-        if *crowd <= RAW {
+        if *crowd <= self.tuning.raw {
             return (None, None);
         }
         self.trie.roots[pc as usize] = NONE;
@@ -1181,9 +1212,32 @@ pub fn memo_orbit<B: Bus>(
     keep: &AddrSet,
     cells: &[u32],
     grain: Grain,
+    stopped: impl FnMut() -> bool,
+) -> (Orbit, MemoStats) {
+    let tuning = Tuning::default();
+    memo_orbit_tuned(
+        cpu, bus, pc, acc, max_cycles, limit, remap, volatile, keep, cells, grain, tuning, stopped,
+    )
+}
+
+/// [`memo_orbit`] cutting and giving up on crowded units as `tuning` says.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn memo_orbit_tuned<B: Bus>(
+    cpu: &mut Cpu,
+    bus: &mut B,
+    pc: u16,
+    acc: u8,
+    max_cycles: u64,
+    limit: usize,
+    remap: Option<&Remap>,
+    volatile: &AddrSet,
+    keep: &AddrSet,
+    cells: &[u32],
+    grain: Grain,
+    tuning: Tuning,
     mut stopped: impl FnMut() -> bool,
 ) -> (Orbit, MemoStats) {
-    let mut memo = Memo::new(bus, keep, cells);
+    let mut memo = Memo::new(bus, keep, cells, tuning);
     match remap {
         Some(r) => {
             let mut over = Accesses::remapped(&mut memo, r);
@@ -1415,7 +1469,7 @@ mod tests {
         let mut ram = Box::new([0u8; 0x10000]);
         ram[..vals.len()].copy_from_slice(vals);
         let none = AddrSet::default();
-        let mut memo = Memo::new(&mut *ram, &none, &[]);
+        let mut memo = Memo::new(&mut *ram, &none, &[], Tuning::default());
         memo.trie = Trie {
             roots: t.roots.clone(),
             code: t.code.clone(),
@@ -1488,13 +1542,13 @@ mod tests {
                 assert!(t.insert(5, &key, &unit));
             }
         }
-        assert_eq!(t.cut_for(5), Some(2));
-        assert_eq!(t.cut_for(6), None);
+        assert_eq!(t.cut_for(5, 8), Some(2));
+        assert_eq!(t.cut_for(6, 8), None);
         let mut flat = Trie::new();
         for a in 0..=255 {
             assert!(flat.insert(5, &[item(1, 0, a), item(2, 1, a)], &unit));
         }
-        assert_eq!(flat.cut_for(5), None);
+        assert_eq!(flat.cut_for(5, 8), None);
     }
 
     #[test]
@@ -1505,5 +1559,236 @@ mod tests {
         assert!(hashes.iter().all(|&h| !s.insert(h)));
         assert!(s.insert(0) && !s.insert(1) && !s.insert(0));
         assert_eq!(s.len, 5001);
+    }
+
+    const PLAY: u16 = 0x1000;
+    const MAX_CYCLES: u64 = 10_000;
+    const GRAINS: [Grain; 4] = [Grain::Call, Grain::Sub, Grain::Loop, Grain::Split];
+
+    /// $1000 INC $10 ; LDA $10 ; AND #3 ; STA $10 ; NOP ; INC $11 ; LDA $11 ; CMP #5 ;
+    /// BNE + ; LDA #0 ; STA $11 ; + RTS: counters of periods 4 and 5 read at two instructions.
+    const COUNTERS: &[u8] = &[
+        0xE6, 0x10, 0xA5, 0x10, 0x29, 0x03, 0x85, 0x10, 0xEA, 0xE6, 0x11, 0xA5, 0x11, 0xC9, 0x05,
+        0xD0, 0x04, 0xA9, 0x00, 0x85, 0x11, 0x60,
+    ];
+
+    /// $1000 INC $10 ; RTS: one counter, read by the call's first instruction.
+    const COUNTER: &[u8] = &[0xE6, 0x10, 0x60];
+
+    /// $1000 LDX $10 ; LDA $1020,X ; STA $12 ; INX ; TXA ; AND #7 ; STA $10 ; ADC $11 ;
+    /// STA $11 ; RTS, then the table at $1020: an index walking a table into a sum that also
+    /// reads the carry the call before left.
+    fn table() -> Vec<u8> {
+        let mut code = vec![
+            0xA6, 0x10, 0xBD, 0x20, 0x10, 0x85, 0x12, 0xE8, 0x8A, 0x29, 0x07, 0x85, 0x10, 0x65,
+            0x11, 0x85, 0x11, 0x60,
+        ];
+        code.resize(0x20, 0);
+        code.extend([3, 1, 4, 1, 5, 9, 2, 6]);
+        code
+    }
+
+    /// $1000 LDX #2 ; - JSR tick ; DEX ; BPL - ; RTS ; NOP ; tick DEC $10,X ; BPL + ;
+    /// LDA $18,X ; STA $10,X ; + RTS: three counters of periods `$18,X` + 1 ticked by a
+    /// subroutine.
+    const VOICES: &[u8] = &[
+        0xA2, 0x02, 0x20, 0x0A, 0x10, 0xCA, 0x10, 0xFA, 0x60, 0xEA, 0xD6, 0x10, 0x10, 0x04, 0xB5,
+        0x18, 0x95, 0x10, 0x60,
+    ];
+
+    /// $1000 LDY $10 ; INY ; - INC $11 ; DEY ; BNE - ; INC $10 ; LDA $10 ; AND #7 ; STA $10 ;
+    /// RTS: a backward loop whose trip count is state.
+    const LOOP: &[u8] = &[
+        0xA4, 0x10, 0xC8, 0xE6, 0x11, 0x88, 0xD0, 0xFB, 0xE6, 0x10, 0xA5, 0x10, 0x29, 0x07, 0x85,
+        0x10, 0x60,
+    ];
+
+    /// RAM holding `code` at [`PLAY`] and the bytes `data`.
+    fn image(code: &[u8], data: &[(u16, u8)]) -> Box<[u8; 0x10000]> {
+        let mut m = Box::new([0u8; 0x10000]);
+        m[PLAY as usize..PLAY as usize + code.len()].copy_from_slice(code);
+        for &(a, v) in data {
+            m[a as usize] = v;
+        }
+        m
+    }
+
+    /// The memory an orbit here takes as its state: page zero, the stack and the code's page.
+    fn tracked() -> Vec<u32> {
+        (0..0x200).chain(PLAY as u32..PLAY as u32 + 0x100).collect()
+    }
+
+    /// The brute-force [`crate::orbit::orbit`] of `m` over [`tracked`], the RAM and registers
+    /// it leaves.
+    fn brute(m: &[u8; 0x10000], limit: usize, max_cycles: u64) -> (Orbit, Box<[u8; 0x10000]>, Cpu) {
+        let (mut ram, mut cpu, cells) = (Box::new(*m), Cpu::new(), tracked());
+        let peek = &mut |b: &mut [u8; 0x10000], a: u16| b[a as usize];
+        let digest = |c: &Cpu, b: &mut [u8; 0x10000]| crate::cells_digest(c, b, peek, &cells);
+        let none = AddrSet::default();
+        let o = crate::orbit::orbit(
+            &mut cpu,
+            &mut *ram,
+            PLAY,
+            0,
+            max_cycles,
+            limit,
+            None,
+            &none,
+            digest,
+            || false,
+        );
+        (o, ram, cpu)
+    }
+
+    /// [`memo_orbit_tuned`] of `m` over [`tracked`] after asserting it is the brute-force
+    /// orbit and leaves the RAM and registers that leaves.
+    fn agree(
+        m: &[u8; 0x10000],
+        limit: usize,
+        max_cycles: u64,
+        grain: Grain,
+        tuning: Tuning,
+    ) -> MemoStats {
+        let want = brute(m, limit, max_cycles);
+        let (mut ram, mut cpu) = (Box::new(*m), Cpu::new());
+        let keep: AddrSet = tracked().into_iter().map(|a| a as u16).collect();
+        let none = AddrSet::default();
+        let (got, stats) = memo_orbit_tuned(
+            &mut cpu,
+            &mut *ram,
+            PLAY,
+            0,
+            max_cycles,
+            limit,
+            None,
+            &none,
+            &keep,
+            &[],
+            grain,
+            tuning,
+            || false,
+        );
+        assert_eq!(got, want.0, "{grain:?} {tuning:?}");
+        assert!(ram == want.1, "{grain:?} {tuning:?}: RAM");
+        assert_eq!(cpu, want.2, "{grain:?} {tuning:?}");
+        stats
+    }
+
+    /// $1000 INC $10 ; LDA $10 ; AND #3 ; STA $10 ; EOR #3 ; STA $11 ; RTS: `$10` counts up
+    /// as `$11` counts down, so their sum, and every other tracked byte, is the same at each
+    /// call's entry after the first.
+    const SEESAW: &[u8] = &[
+        0xE6, 0x10, 0xA5, 0x10, 0x29, 0x03, 0x85, 0x10, 0x49, 0x03, 0x85, 0x11, 0x60,
+    ];
+
+    #[test]
+    fn colliding_state_hashes_are_told_apart_by_the_states() {
+        let m = image(SEESAW, &[(0x11, 3)]);
+        for (limit, end, states) in [(100, End::Closed, 5), (3, End::Open, 4)] {
+            let want = brute(&m, limit, MAX_CYCLES);
+            assert_eq!((want.0.end, want.0.states), (end, states));
+            for grain in GRAINS {
+                let (mut ram, mut cpu) = (Box::new(*m), Cpu::new());
+                let keep: AddrSet = tracked().into_iter().map(|a| a as u16).collect();
+                let none = AddrSet::default();
+                let mut memo = Memo::new(&mut *ram, &keep, &[], Tuning::default());
+                for w in memo.weight.iter_mut().filter(|w| **w != 0) {
+                    *w = SEED | 1;
+                }
+                memo.rehash();
+                let (got, stats) = walk(
+                    &mut cpu,
+                    &mut memo,
+                    PLAY,
+                    0,
+                    MAX_CYCLES,
+                    limit,
+                    &none,
+                    grain,
+                    &mut || false,
+                );
+                assert!(stats.collisions > 0, "{grain:?} {limit}");
+                assert_eq!(got, want.0, "{grain:?} {limit}");
+                assert!(ram == want.1, "{grain:?} {limit}: RAM");
+                assert_eq!(cpu, want.2, "{grain:?} {limit}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_start_pc_with_more_units_than_raw_is_emulated_from_then_on() {
+        let m = image(COUNTER, &[]);
+        let tuning = Tuning {
+            crowd: 2,
+            raw: 8,
+            ..Tuning::default()
+        };
+        for grain in [Grain::Call, Grain::Sub, Grain::Split] {
+            let stats = agree(&m, 40, MAX_CYCLES, grain, tuning);
+            assert_eq!((stats.raw, stats.splits), (1, 0), "{grain:?}");
+            assert!(stats.misses < 20 && stats.live == 0, "{grain:?}");
+        }
+        let stats = agree(&m, 40, MAX_CYCLES, Grain::Split, Tuning::default());
+        assert_eq!(stats.raw, 0);
+        assert!(stats.misses > 30);
+    }
+
+    #[test]
+    fn crowded_units_are_split_between_independent_counters() {
+        let m = image(COUNTERS, &[]);
+        let tuning = Tuning {
+            crowd: 8,
+            raw: 1 << 16,
+            saturated: 2,
+        };
+        let split = agree(&m, 100, MAX_CYCLES, Grain::Split, tuning);
+        assert!(split.splits >= 1 && split.raw == 0);
+        let whole = agree(&m, 100, MAX_CYCLES, Grain::Loop, tuning);
+        assert_eq!(whole.splits, 0);
+        // Cut between the counters, the halves recur within the period and are replayed.
+        assert!(split.hits > whole.hits);
+    }
+
+    #[test]
+    fn a_unit_replayed_past_the_cycle_limit_is_emulated_and_dropped() {
+        // $1000 INC $10 ; JSR $1006 ; RTS ; $1006 RTS: the call's last RTS starts within the
+        // limit and ends past it, so its stored unit is emulated again on the same reads.
+        let m = image(&[0xE6, 0x10, 0x20, 0x06, 0x10, 0x60, 0x60], &[]);
+        let stats = agree(&m, 20, 20, Grain::Sub, Tuning::default());
+        assert!(stats.dropped > 0);
+        assert_eq!(agree(&m, 20, 30, Grain::Sub, Tuning::default()).dropped, 0);
+    }
+
+    #[test]
+    fn where_units_are_cut_changes_nothing_found() {
+        let tunings = [
+            Tuning::default(),
+            Tuning {
+                crowd: 2,
+                raw: 4,
+                saturated: 1,
+            },
+            Tuning {
+                crowd: 3,
+                raw: 1 << 20,
+                saturated: 64,
+            },
+        ];
+        let routines = [
+            image(COUNTERS, &[]),
+            image(&table(), &[]),
+            image(VOICES, &[(0x18, 2), (0x19, 3), (0x1A, 4)]),
+            image(LOOP, &[]),
+        ];
+        let (mut splits, mut raw) = (0, 0);
+        for m in &routines {
+            for grain in GRAINS {
+                for tuning in tunings {
+                    let stats = agree(m, 150, MAX_CYCLES, grain, tuning);
+                    (splits, raw) = (splits + stats.splits, raw + stats.raw);
+                }
+            }
+        }
+        assert!(splits > 0 && raw > 0);
     }
 }

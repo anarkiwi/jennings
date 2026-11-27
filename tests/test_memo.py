@@ -5,7 +5,7 @@ import random
 import numpy as np
 import pytest
 
-from helpers import image
+from helpers import COUNTERS, image
 from jennings import memo
 from jennings.devices.mpu6502 import REG, NativeMPU, Remap
 from jennings.memory import NATIVE, NativeMemory
@@ -38,23 +38,6 @@ def agree(ram, limit, max_cycles=MAX_CYCLES, **kw):
         assert got[4]["dropped"] == 0, grain
         stats[grain] = got[4]
     return want, stats
-
-
-COUNTERS = """
-    inc c3
-    lda c3
-    cmp #3
-    bne +
-    lda #0
-    sta c3
-+   dec c5
-    bpl +
-    lda #4
-    sta c5
-+   rts
-c3 !byte 0
-c5 !byte 4
-"""
 
 
 def test_independent_counters_close_at_their_common_period():
