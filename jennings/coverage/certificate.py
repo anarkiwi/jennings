@@ -384,27 +384,35 @@ def _mismatch(state, cert, remap_id):
     return None
 
 
-#: The element type of each array a learner's result holds.
+#: The element type of each array of a learner's result that is a union over its calls.
 _LEARNED = {
     "sites": np.uint64,
     "deps": np.uint64,
     "edges": np.uint64,
     "written": np.uint16,
-    "persistent": np.uint32,
+    "registers_read": np.uint32,
+    "registers_written": np.uint32,
 }
 
 
 class _Learned:  # pylint: disable=too-few-public-methods
-    """The union of learners' results, as one learner's."""
+    """The union of learners' results, as one learner's over all their calls.
+
+    Each array of :data:`_LEARNED` is the union of the learners'. ``persistent`` is not a union
+    of theirs, being the registers some call reads before writing that some call, maybe
+    another learner's, writes; it holds only registers (the memory some call writes is
+    ``written``)."""
 
     def __init__(self, parts):
-        self._got = {
-            k: np.unique(np.concatenate([np.frombuffer(p[k], t) for p in parts])).tobytes()
+        got = {
+            k: np.unique(np.concatenate([np.frombuffer(p[k], t) for p in parts]))
             for k, t in _LEARNED.items()
         }
+        got["persistent"] = np.intersect1d(got["registers_read"], got["registers_written"])
+        self._got = {k: v.tobytes() for k, v in got.items()}
 
     def learned(self):
-        """The arrays of :data:`_LEARNED`, each the sorted union of the learners'."""
+        """The arrays of :data:`_LEARNED` and ``persistent``, each sorted."""
         return self._got
 
 

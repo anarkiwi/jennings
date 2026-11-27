@@ -1545,14 +1545,15 @@ impl PyLearner {
     }
 
     /// ``{"persistent", "deps", "edges", "sites", "stored", "addressed", "gated", "exits",
-    /// "written"}`` as little-endian arrays: uint32 locations read before written by some call
-    /// and written by some; uint64 ``loc << 32 | src``, the end-of-call ``loc`` depending on
+    /// "written", "registers_read", "registers_written"}`` as little-endian arrays: uint32 locations
+    /// read before written by some call and written by some; uint64 ``loc << 32 | src``, the end-of-call ``loc`` depending on
     /// entry ``src`` (``loc`` itself included); uint64 ``pc << 16 | next``; uint64
     /// ``(pc << 2 | kind) << 18 | loc``, ``loc`` tainting a load's (0) or store's (1) address,
     /// where control goes (2) or a data store's byte (3) at ``pc``; explicit only, uint64
     /// ``loc << 32 | src`` over every data store to memory ``loc``, ``src`` tainting its byte,
     /// its address, or the conditions it is stored under; uint16 PCs that ended a call; uint16
-    /// addresses some call wrote.
+    /// addresses some call wrote; uint32 registers ``persistent`` may hold that some call
+    /// reads before writing; uint32 registers some call wrote.
     fn learned<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         let l = self.0.learned();
         let d = PyDict::new(py);
@@ -1568,6 +1569,10 @@ impl PyLearner {
         d.set_item("gated", PyBytes::new(py, &le64(&l.gated)))?;
         d.set_item("exits", PyBytes::new(py, &le16(&l.exits)))?;
         d.set_item("written", PyBytes::new(py, &le16(&l.written)))?;
+        let le32 = |v: &[u32]| v.iter().flat_map(|k| k.to_le_bytes()).collect::<Vec<u8>>();
+        d.set_item("registers_read", PyBytes::new(py, &le32(&l.registers_read)))?;
+        let regs = le32(&l.registers_written);
+        d.set_item("registers_written", PyBytes::new(py, &regs))?;
         Ok(d)
     }
 }
