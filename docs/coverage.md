@@ -929,3 +929,46 @@ and counts what a plain orbit to the whole state's first repeat adds to each cer
 a row per segment: its start, what it depends on, what is held and free, its state and its
 cycle. `tools/cover_sites.py STATE --pc ADDR CELL...` lists and disassembles the instructions
 that load or store given cells.
+
+### Counters and state nothing follows
+
+`jennings.coverage.counters` reads two things off the flows of a routine's instructions, not off
+the values its cells take.
+
+```python
+from jennings.coverage import counters as K
+
+K.loose(ram, play)        # (0x1AFF, 0x1B17): state that taints no address and no control
+K.recognise(ram, play)    # Counter(cell, steps, use, sites, period, indexed), ...
+memo.orbit(mpu, play, 0, max_cycles, limit, fibre="auto")
+```
+
+**loose** learns the components over `calls` calls and gives the memory cells that are
+persistent and outside the feed set: they carry state from call to call, and by the taint
+nothing they hold reaches an address, a control transfer or a feed location, only themselves
+and bytes stored. That is what a memoising orbit gains from setting apart: the rest of the
+state repeats without them. `jennings.memo.orbit(..., fibre="auto")` takes them as its fibre
+([memo.md](memo.md#fibre-and-tape)); the fibre changes how much is run, never what is found, so
+nothing rests on the taint being complete.
+
+**recognise** gives the cells every store steps by a constant. From `explicit` over the calls,
+a counter's stored bytes depend by data on the cell alone, so a carry into an `ADC` is a
+constant (the decimal flag may be read where it is clear at entry and no call writes it);
+from the calls' accesses, no store site's bytes are stored to; and each site is seen to add a
+constant: `INC` or `DEC` of the cell (zero page or absolute), or `STA` of it straight after an
+`LDA`, `CLC` or `SEC` (in either order) and `ADC` or `SBC` of an immediate. A `Counter` has
+
+| field | |
+|---|---|
+| `steps` | `(pc, step)` per store site, the step a signed byte |
+| `use` | `unread` (its value taints nothing else), `read` (bytes stored only), `compared` (where control goes) or `index` (an address) |
+| `sites` | `(pc, kind)` of the instructions its value taints, other than its own stores |
+| `period` | `256 / gcd(steps per call, 256)` calls, where every call arrives at each store site the same number of times; None where the calls differ in that |
+| `indexed` | `(pc, first, step, count)` per load or store it indexes whose addresses over the calls are that arithmetic progression |
+
+`period` is arithmetic on the steps, with no call run for it; the tests hold it equal to the
+period measured on a trajectory. What is not recognised is not a counter here: a cell reset by
+a store of a constant, one stepped by another cell's value or with a carry that is state, one
+stored through an index. Those are left to stepping, which every orbit does anyway: nothing
+skips a call on the strength of a `Counter`.
+
