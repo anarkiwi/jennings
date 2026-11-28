@@ -1,9 +1,10 @@
 # Memoising orbit
 
-`jennings.memo.orbit(mpu, pc, acc, max_cycles, limit, grain="split", keep=None, volatile=None,
-remap=None, cells=None)` returns what `NativeMPU.orbit` returns for the same arguments
-([native.md](native.md#drivers)), `(end, states, accesses, edges)`, plus a dict of counts, without
-emulating what it has already seen. It rests on determinism alone: it learns no dependences
+`jennings.memo.orbit(mpu, pc, acc, max_cycles, limit, grain="split", fibre=None, keep=None,
+volatile=None, remap=None, cells=None)` returns what `NativeMPU.orbit` returns for the same
+arguments ([native.md](native.md#drivers)), `(end, states, accesses, edges)`, plus a dict of
+counts, without emulating what it has already seen. `fibre` changes only how much is run
+([below](#fibre-and-tape)). It rests on determinism alone: it learns no dependences
 and does not use `jennings.coverage.components`. `NativeMPU.orbit` is the oracle the
 tests compare it with. The core is `jennings_core::memo_orbit` (`crates/jennings-core/src/memo.rs`).
 
@@ -124,16 +125,16 @@ jams. The memory and registers left behind are those the brute-force orbit leave
 
 ## Fibre and tape
 
-The `fibre` of `jennings_core::memo_orbit_fibre` is a list of addresses. Those of them that are
-tracked memory are set apart from the rest of the memory the calls write, the base: the written
-tracked cells outside the fibre. The written cells outside the tracked state are the third kind,
-outside cells. When the base's entry state repeats after some calls while the fibre goes on
-changing, as it does where the fibre holds the slow counters of a routine whose other state has a
-short period, the calls of one period of the base are recorded as a tape, and later calls are run by
-the tape: only the parts of a call that read the fibre are in question, and what such a part does
-from given fibre bytes is run once and then looked up. The orbit, the memory and the registers left
-are those without a fibre, whatever the cells are: a fibre that does not fit costs time, not
-exactness. `fibre` is for the caller to choose; nothing chooses it.
+`fibre` is a list of addresses. Those of them that are tracked memory are set apart from the
+rest of the memory the calls write, the base: the written tracked cells outside the fibre. The
+written cells outside the tracked state are the third kind, outside cells. When the base's entry
+state repeats after some calls while the fibre goes on changing, as it does where the fibre holds
+the slow counters of a routine whose other state has a short period, the calls of one period of
+the base are recorded as a tape, and later calls are run by the tape: only the parts of a call
+that read the fibre are in question, and what such a part does from given fibre bytes is run
+once and then looked up. The orbit, the memory and the registers left are those without a fibre,
+whatever the cells are: a fibre that does not fit costs time, not exactness. `fibre` is for the
+caller to choose; nothing chooses it.
 
 ### Recording
 
@@ -259,7 +260,15 @@ hashes then being equal, as equal states' hashes always are.
 | `splits`, `raw` | cuts added inside crowded units, start PCs no longer memoised |
 | `dropped` | units not stored because a unit on the same reads was stored: 0 unless a call's final `RTS` straddles `max_cycles` (above) |
 | `collisions` | candidate repeats whose states differed |
-| `bytes` | bytes held by the memo and the hash set |
+| `bytes` | bytes held by the memo, the hash set and the largest tape |
+| `tape_period`, `tape_from` | the period of the base the last tape was recorded for, the call it was first run from |
+| `tape_calls`, `tape_known` | calls run by a tape, and their segments, each looked up |
+| `tape_learned` | calls of a tape run as ordinary calls to learn their segments |
+| `tape_failed`, `tape_limited` | those of them with a segment that did not rejoin, and those run so for the cycle limit |
+| `tape_passes` | times a tape was run from its last call on to its first |
+| `tape_retaped` | recordings started again with more registers live or more cells near |
+| `tape_lost` | tapes, or searches for a period, given up |
+| `tape_bytes` | bytes of the largest tape |
 | `roots` | `(pc, units)`: the start PCs holding most units |
 | `fanout` | `(location, nodes, values)`: the locations that tell most held units apart |
 

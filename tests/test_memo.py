@@ -1,43 +1,72 @@
 """jennings.memo: the memoising orbit against the brute-force orbit it must equal."""
 
 import random
+import sys
+from pathlib import Path
 
 import numpy as np
 import pytest
 
 from helpers import COUNTERS, image
 from jennings import memo
+from jennings.coverage.elf import load_elf
 from jennings.devices.mpu6502 import REG, NativeMPU, Remap
 from jennings.memory import NATIVE, NativeMemory
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
+import memo_orbit  # noqa: E402  pylint: disable=wrong-import-position
 
 pytestmark = pytest.mark.skipif(not NATIVE, reason="native core not built")
 
 PLAY = 0x1000
 MAX_CYCLES = 100_000
+#: The state :mod:`memo_orbit` takes: all RAM but the I/O area, which is volatile.
+RAM = {"keep": [range(0xD000), range(0xE000, 0x10000)], "volatile": [range(0xD000, 0xE000)]}
 
 
 def machine(ram):
     return NativeMPU(memory=NativeMemory(bytes(ram)))
 
 
+def found(mpu, got):
+    """What an orbit of ``mpu`` that returned ``got`` found and left."""
+    return (got[0], got[1], got[2].tolist(), got[3].tolist()), memo_orbit.left(mpu)
+
+
+def brute_force(ram, limit, max_cycles=MAX_CYCLES, pc=PLAY, **kw):
+    """What the brute-force orbit of ``ram`` finds and leaves (:func:`found`)."""
+    mpu = machine(ram)
+    return found(mpu, mpu.orbit(pc, 0, max_cycles, limit, **kw))
+
+
 def agree(ram, limit, max_cycles=MAX_CYCLES, **kw):
     """The brute-force orbit of ``ram`` as ``(end, states, accesses, edges)`` and the memo's
     stats per grain, after asserting each grain's memo orbit equals it and leaves the memory
     and registers it leaves."""
-    brute = machine(ram)
-    end, states, acc, edges = brute.orbit(PLAY, 0, max_cycles, limit, **kw)
-    want = end, states, acc.tolist(), edges.tolist()
+    want = brute_force(ram, limit, max_cycles, **kw)
     stats = {}
     for grain in memo.GRAINS:
         mpu = machine(ram)
         got = memo.orbit(mpu, PLAY, 0, max_cycles, limit, grain=grain, **kw)
-        assert (got[0], got[1], got[2].tolist(), got[3].tolist()) == want, grain
-        assert bytes(mpu.memory) == bytes(brute.memory), grain
-        regs = [(m.a, m.x, m.y, m.sp, m.p, m.pc, m.processorCycles) for m in (mpu, brute)]
-        assert regs[0] == regs[1], grain
+        assert found(mpu, got) == want, grain
         assert got[4]["dropped"] == 0, grain
         stats[grain] = got[4]
-    return want, stats
+    return want[0], stats
+
+
+def apart(ram, limit, fibres, grains=memo.GRAINS, max_cycles=MAX_CYCLES, pc=PLAY, **kw):
+    """The memo's stats per fibre and grain with each of ``fibres`` set apart, after
+    asserting each orbit finds and leaves what the brute-force orbit of ``ram`` does."""
+    want = brute_force(ram, limit, max_cycles, pc, **kw)
+    stats = {}
+    for fibre in fibres:
+        for grain in grains:
+            mpu = machine(ram)
+            got = memo.orbit(mpu, pc, 0, max_cycles, limit, grain, list(fibre), **kw)
+            assert found(mpu, got)[0][:2] == want[0][:2], (grain, fibre)
+            assert found(mpu, got) == want, (grain, fibre)
+            stats[tuple(fibre), grain] = got[4]
+    return want[0], stats
 
 
 def test_independent_counters_close_at_their_common_period():
@@ -343,3 +372,174 @@ def test_memory_with_a_watch_is_refused():
         memo.orbit(mpu, PLAY, 0, MAX_CYCLES, 10)
     with pytest.raises(ValueError):
         mpu._core.memo_orbit(PLAY, 0, MAX_CYCLES, 10, grain=4)
+
+
+def test_a_slow_counter_set_apart_leaves_a_tape_of_the_voices_period():
+    ram, s = image(VOICES)
+    frame = [s["frame"]]
+    fibres = [frame, frame + [s["note"]], [s["count"]], [0x5000], [s["frame"], 0x5000, 0xD400]]
+    (end, states, _, _), stats = apart(ram, 300_000, fibres, ["sub", "split"], **RAM)
+    assert (end, states) == ("closed", 256256 + 1)
+    for grain in ("sub", "split"):
+        # The voices repeat every 4004 calls and the frame counter is all a tape leaves to run.
+        tape = stats[tuple(frame), grain]
+        assert (tape["tape_period"], tape["tape_lost"]) == (4004, 0), grain
+        assert tape["tape_calls"] > 240_000 and tape["tape_passes"] > 60, grain
+        assert tape["tape_learned"] <= 256 + 8 and tape["tape_failed"] == 0, grain
+        assert tape["hits"] * 8 < stats[(0x5000,), grain]["hits"], grain
+        # A cell never written is no fibre, so the state closes before any base repeats.
+        assert stats[(0x5000,), grain]["tape_from"] == 0, grain
+        assert stats[(s["frame"], 0x5000, 0xD400), grain]["tape_calls"] > 240_000, grain
+    # A voice's count set apart leaves a base that takes the frame counter to repeat.
+    assert stats[(s["count"],), "split"]["tape_calls"] == 0
+
+
+def test_no_fibre_is_the_orbit_without_a_tape():
+    ram, s = image(VOICES)
+    runs = []
+    for fibre in (None, [], [s["frame"]]):
+        mpu = machine(ram)
+        got = memo.orbit(mpu, PLAY, 0, MAX_CYCLES, 20_000, "split", fibre, **RAM)
+        runs.append((found(mpu, got), got[4]))
+    assert runs[0] == runs[1] and runs[0][0] == runs[2][0]
+    assert runs[0][1]["tape_period"] == 0 and runs[2][1]["tape_calls"] > 0
+    with pytest.raises(OverflowError):
+        memo.orbit(machine(ram), PLAY, 0, MAX_CYCLES, 10, fibre=[0x10000])
+
+
+@pytest.mark.parametrize("seed", range(40))
+def test_random_routines_agree_with_the_orbit_whatever_is_set_apart(seed):
+    ram, s = image(_soup(random.Random(seed)))
+    cells = [s["c0"], s["c1"], s["c2"], s["c3"]]
+    table = list(range(s["t"], s["t"] + 260))
+    fibres = [cells[:1], cells[1:3], table[:3], [cells[3], 0x4000], cells + table]
+    fibres += [[0x1FE, 0x1FF, s["imm0"] + 1], range(0x10000)]
+    kw = [{}, {"keep": [range(s["c0"], s["c0"] + 4)]}, {"cells": [s["c1"], REG + 1, REG + 8]}]
+    apart(ram, 400, fibres, **kw[seed % 3])
+
+
+def test_random_routines_record_tapes_and_give_them_up():
+    counts = {"tape_learned": 0, "tape_failed": 0, "tape_lost": 0}
+    counts |= {"tape_retaped": 0, "tape_passes": 0}
+    for seed in range(40):
+        ram, s = image(_soup(random.Random(seed)))
+        for fibre in ([s["c0"]], [s["c1"], s["c2"]], [s["c3"], s["t"]]):
+            stats = memo.orbit(machine(ram), PLAY, 0, MAX_CYCLES, 400, "split", fibre)[4]
+            counts = {k: v + stats[k] for k, v in counts.items()}
+    assert all(v > 0 for v in counts.values()), counts
+
+
+DELAY = """
+    jsr slow
+    jsr wait
+    rts
+slow
+    inc f
+    lda f
+    and #7
+    sta f
+    tax
+-   dex
+    bpl -
+    rts
+wait
+    inc b
+    lda b
+    cmp #3
+    bne +
+    lda #0
+    sta b
++   tay
+-   dey
+    bpl -
+    rts
+f !byte 0
+b !byte 0
+"""
+
+
+@pytest.mark.parametrize("max_cycles", range(100, 126, 2))
+def test_a_call_cut_short_by_the_cycle_limit_is_cut_short_under_a_tape(max_cycles):
+    ram, s = image(DELAY)
+    _, stats = apart(ram, 300, [[s["f"]], [s["b"]]], ["sub"], max_cycles)
+    assert stats[(s["f"],), "sub"]["tape_period"] == 3
+
+
+def test_a_call_past_the_cycle_limit_is_not_run_by_the_tape():
+    ram, s = image(DELAY)
+    (end, states, _, _), stats = apart(ram, 300, [[s["f"]]], ["sub"], 112)
+    # The longest call's last RTS straddles the limit, so it returns and the state closes.
+    assert (end, states) == ("closed", 25)
+    assert stats[(s["f"],), "sub"]["tape_limited"] == 1
+    (end, _, _, _), stats = apart(ram, 300, [[s["f"]]], ["sub"], 108)
+    assert end == "open" and stats[(s["f"],), "sub"]["tape_limited"] > 0
+
+
+def test_a_fibre_under_a_remap_and_with_registers_as_cells():
+    ram, s = image("""
+    jsr step
+    jsr tock
+    ldx idx
+    lda table,x
+    sta out,x
+    rts
+step
+    inc idx
+    lda idx
+    and #7
+    sta idx
+    rts
+tock
+    dec slow
+    bpl +
+    lda #4
+    sta slow
++   rts
+idx   !byte 0
+slow  !byte 0
+table !byte 1, 2, 3, 4, 5, 6, 7, 8
+out   !fill 9, 0
+""")
+    table = np.full(0x10000, -1, np.int32)
+    table[np.arange(s["table"], s["table"] + 8)] = s["table"]
+    remap = Remap({s["step"] - 7: table}, [])
+    cells = list(range(0x100, 0x200)) + list(range(s["idx"], s["out"] + 9))
+    cells += [REG + r for r in (0, 1, 2, 3, 8, 9, 10, 11, 13, 14)]
+    for kw in ({"remap": remap}, {"cells": cells}, {"cells": cells, "remap": remap}):
+        (end, states, _, _), stats = apart(ram, 1000, [[s["slow"]], [s["idx"]]], ["sub"], **kw)
+        assert end == "closed" and states >= 40, kw
+        assert stats[(s["slow"],), "sub"]["tape_known"] > 0, kw
+
+
+SIDPLAYER = Path(__file__).parent / "fixtures" / "sidplayer" / "sidplayer.prg.elf"
+
+
+@pytest.mark.parametrize("song", [0, 1])
+def test_a_play_routine_closes_alike_whatever_is_set_apart(song):
+    mem, syms = load_elf(SIDPLAYER)
+    mpu = machine(mem.tolist())
+    assert mpu.trajectory(syms["init"], song, 10 * MAX_CYCLES, 1, [0], None)[0] == "sp"
+    ram = bytes(mpu.memory)
+    voices = {name: [syms[name] + v for v in range(3)] for name in ("pat_pos", "seq_pos")}
+    voices |= {name: [syms[name] + v for v in range(3)] for name in ("dur_left", "vib_phase")}
+    fibres = [[syms["tick"]], voices["dur_left"], voices["vib_phase"], voices["seq_pos"]]
+    fibres += [voices["seq_pos"] + voices["pat_pos"], [syms["tmp"], syms["frame"]]]
+    fibres += [range(syms["speed"], syms["speed"] + 0x60), range(0x10000)]
+    (end, states, _, _), stats = apart(ram, 5000, fibres, pc=syms["play"], **RAM)
+    assert (end, states) == ("closed", (2065, 977)[song])
+    # Its durations set apart, the rest repeats within a few calls at times, but not for long.
+    tape = stats[tuple(voices["dur_left"]), "split"]
+    assert tape["tape_from"] > 0 and tape["tape_lost"] > 0
+
+
+def test_the_tool_checks_each_fibre_against_the_orbit_without_one(tmp_path, capsys):
+    ram, s = image(VOICES)
+    path = tmp_path / "voices.bin"
+    path.write_bytes(ram)
+    args = ["--pc", "0x1000", "--volatile", "0xd000:0xe000", "--limit", "9000", "--brute"]
+    args += ["--fibre", f"{s['frame']:#x}", "--fibre", f"{s['count']:#x},0x5000", str(path)]
+    assert memo_orbit.main(args) == 0
+    rows = [line.split() for line in capsys.readouterr().out.splitlines()[1:-1]]
+    assert [row[1] for row in rows] == ["end", "fibre", "fibre"]
+    assert all(row[-2:] == ["same", "True"] for row in rows)
+    assert int(rows[1][rows[1].index("tape_calls") + 1]) > 0
