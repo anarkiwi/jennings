@@ -11,9 +11,9 @@ use std::ffi::{c_int, c_void};
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering};
 
 use jennings_core::{
-    cells_digest, memo_orbit, orbit, periods, run_to_rts, run_until, trajectory, Access, Accesses,
-    AddrSet, Bus, Census, Cpu, End, FlatBus, FlatMemory, Grain, Hooks, Learn, Periodic, RamBus,
-    Remap, Stop, Trace, Until, CONST, REG,
+    cells_digest, memo_orbit, memo_orbit_fibre, orbit, periods, run_to_rts, run_until, trajectory,
+    Access, Accesses, AddrSet, Bus, Census, Cpu, End, FlatBus, FlatMemory, Grain, Hooks, Learn,
+    Periodic, RamBus, Remap, Stop, Trace, Until, CONST, REG,
 };
 use pyo3::buffer::PyBuffer;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -1200,8 +1200,9 @@ impl Core {
     /// memoised on the registers and written memory it reads, and a repeated state is
     /// confirmed by comparing states. `(end, states, accesses, edges, stats)` as `orbit`
     /// gives them, `stats` a dict of `jennings_core::MemoStats`. The memory must have nothing
-    /// mapped, watched or observed.
-    #[pyo3(signature = (pc, acc, max_cycles, limit, keep=None, volatile=None, remap=None, cells=None, grain=3))]
+    /// mapped, watched or observed. `fibre`, addresses, sets those tracked cells apart
+    /// (`jennings_core::memo_orbit_fibre`).
+    #[pyo3(signature = (pc, acc, max_cycles, limit, keep=None, volatile=None, remap=None, cells=None, grain=3, fibre=None))]
     #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     fn memo_orbit<'py>(
         &self,
@@ -1215,6 +1216,7 @@ impl Core {
         remap: Option<&Bound<'py, PyRemap>>,
         cells: Option<Vec<u32>>,
         grain: u8,
+        fibre: Option<Vec<u16>>,
     ) -> PyResult<(
         &'static str,
         usize,
@@ -1252,20 +1254,17 @@ impl Core {
         let rm = remap.map(|r| &r.get().0);
         let got = self.drive(py, true, |cpu, bus, stop| {
             let mut ram = RamBus::of(bus.inner.mem)?;
-            Some(memo_orbit(
-                cpu,
-                &mut ram,
-                pc,
-                acc as u8,
-                max_cycles,
-                limit,
-                rm,
-                &vol,
-                &kept,
-                &regs,
-                grain,
-                || stop.load(Ordering::Relaxed) && stop.swap(false, Ordering::Relaxed),
-            ))
+            let (ram, acc) = (&mut ram, acc as u8);
+            let stopped = || stop.load(Ordering::Relaxed) && stop.swap(false, Ordering::Relaxed);
+            Some(match fibre.as_deref().unwrap_or_default() {
+                [] => memo_orbit(
+                    cpu, ram, pc, acc, max_cycles, limit, rm, &vol, &kept, &regs, grain, stopped,
+                ),
+                apart => memo_orbit_fibre(
+                    cpu, ram, pc, acc, max_cycles, limit, rm, &vol, &kept, &regs, grain, apart,
+                    stopped,
+                ),
+            })
         })?;
         let Some((o, st)) = got else {
             return Err(PyValueError::new_err(
@@ -1286,6 +1285,17 @@ impl Core {
             ("dropped", st.dropped),
             ("collisions", st.collisions),
             ("bytes", st.bytes),
+            ("tape_period", st.tape_period),
+            ("tape_from", st.tape_from),
+            ("tape_calls", st.tape_calls),
+            ("tape_known", st.tape_known),
+            ("tape_learned", st.tape_learned),
+            ("tape_failed", st.tape_failed),
+            ("tape_limited", st.tape_limited),
+            ("tape_passes", st.tape_passes),
+            ("tape_retaped", st.tape_retaped),
+            ("tape_lost", st.tape_lost),
+            ("tape_bytes", st.tape_bytes),
         ] {
             stats.set_item(name, v)?;
         }

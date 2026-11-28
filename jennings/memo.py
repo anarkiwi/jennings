@@ -13,19 +13,14 @@ GRAINS = ("call", "sub", "loop", "split")
 
 
 # pylint: disable-next=too-many-arguments,too-many-positional-arguments
-def orbit(mpu, pc, acc, max_cycles, limit, grain="split", **state):
+def orbit(mpu, pc, acc, max_cycles, limit, grain="split", fibre=None, **state):
     """``(end, states, accesses, edges, stats)`` of calls of ``pc`` on the native ``mpu``.
 
-    The first four are those of :meth:`~jennings.devices.mpu6502.NativeMPU.orbit` with the
-    same arguments (``state``: its ``keep``, ``volatile``, ``remap`` and ``cells``); ``stats``
-    counts the work: ``calls`` run (those run again to confirm a
-    repeat included), units ``hits`` replayed and ``misses`` emulated, ``steps`` instructions
-    emulated, ``entries`` units stored, ``live`` units held, ``flushes`` of the memo, ``splits``
-    made, ``raw`` start PCs no longer memoised, ``dropped`` units, ``collisions`` of the state
-    hash, ``bytes`` held, and the ``roots`` and ``fanout`` that tell where the held units are
-    (``docs/memo.md``). ``grain`` is one of :data:`GRAINS`. The memory must have nothing
-    mapped, watched or observed.
+    All but ``stats``, and the memory and registers left, are those of ``mpu.orbit`` with the
+    same ``state`` (its ``keep``, ``volatile``, ``remap`` and ``cells``). ``grain`` is one of
+    :data:`GRAINS`, ``fibre`` addresses of tracked cells to set apart (``docs/memo.md``).
     """
     core = mpu._core
-    *found, stats = core.memo_orbit(pc, acc, max_cycles, limit, grain=GRAINS.index(grain), **state)
+    state["grain"] = GRAINS.index(grain)
+    *found, stats = core.memo_orbit(pc, acc, max_cycles, limit, fibre=fibre, **state)
     return found[0], found[1], memoryview(found[2]).cast("Q"), memoryview(found[3]).cast("Q"), stats
