@@ -28,7 +28,7 @@ pub use bus::Bus;
 pub use census::Census;
 pub use cpu::Cpu;
 pub use flat::{Access, FlatBus, FlatMemory, Hooks, NoHooks, RamBus};
-pub use memo::{memo_orbit, Grain, MemoStats};
+pub use memo::{memo_orbit, memo_orbit_fibre, Grain, MemoStats};
 pub use orbit::{orbit, End, Orbit};
 pub use period::{periods, Period};
 pub use run::{run_to_rts, run_until, AddrSet, Periodic, Stop, Trace, Until};

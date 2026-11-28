@@ -10,6 +10,11 @@
 //!
 //! The state a call starts from is hashed incrementally to find candidate repeats; a repeat is
 //! confirmed by running the calls again from the first state and comparing the states.
+//!
+//! With some tracked cells set apart as a fibre, calls are run by a tape of one period of
+//! the rest of the written memory ([`fibre`]).
+
+mod fibre;
 
 use crate::access::{Accesses, Redirect, Remap};
 use crate::bus::Bus;
@@ -18,6 +23,7 @@ use crate::flow_gen::FLOW;
 use crate::orbit::{End, Keys, Orbit};
 use crate::run::{AddrSet, Stop};
 use crate::taint::{Fx, FxMap, FxSet, Kind, REG};
+use fibre::{Fibre, Notes};
 
 const NONE: u32 = u32::MAX;
 const SP: u16 = 1 << 3;
@@ -44,6 +50,24 @@ pub(crate) struct Tuning {
     /// shared often, so more units are stored whole; lower cuts more readily, each cut
     /// emptying the memo and leaving shorter units that cost more lookups per call.
     pub(crate) saturated: u32,
+    /// The bytes of base cells a tape may hold as frames, which sets how many calls apart
+    /// they are. Lower holds less and runs more calls again to reach the state a call
+    /// starts from; higher holds a frame for more of the tape's calls.
+    pub(crate) frames: usize,
+    /// The calls a tape may run to learn segments, beyond twice its period, before it is
+    /// given up where they are more than half of its calls. Lower gives up sooner on a
+    /// fibre whose segments rarely recur; higher learns for longer first.
+    pub(crate) grace: u64,
+    /// The calls run before the base is next looked at after a tape is given up, at
+    /// least; doubled for each tape given up. Lower tries again sooner.
+    pub(crate) rest: usize,
+    /// The longest period of the base a tape is recorded for, and the calls its entry
+    /// states are remembered over while it is looked for. Lower holds less and misses
+    /// longer periods.
+    pub(crate) span: usize,
+    /// The segment results a tape may hold; past that none is added and segments not
+    /// held are run each time.
+    pub(crate) known: usize,
 }
 
 impl Default for Tuning {
@@ -52,6 +76,11 @@ impl Default for Tuning {
             crowd: 1024,
             raw: 1 << 16,
             saturated: 8,
+            frames: 16 << 20,
+            grace: 4096,
+            rest: 1024,
+            span: 1 << 22,
+            known: 1 << 20,
         }
     }
 }
@@ -97,8 +126,30 @@ pub struct MemoStats {
     pub dropped: u64,
     /// Candidate repeats whose states differed.
     pub collisions: u64,
-    /// Bytes the memo and the set of state hashes hold.
+    /// Bytes the memo, the set of state hashes and the largest tape hold.
     pub bytes: u64,
+    /// The period of the base the last tape was recorded for.
+    pub tape_period: u64,
+    /// The call the last tape was first run from.
+    pub tape_from: u64,
+    /// Calls run by a tape without emulating or replaying a unit.
+    pub tape_calls: u64,
+    /// Segments of those calls, each answered by what it was learned to do.
+    pub tape_known: u64,
+    /// Calls of a tape run as ordinary calls to learn what their segments do.
+    pub tape_learned: u64,
+    /// Calls among those whose segment did not rejoin the tape.
+    pub tape_failed: u64,
+    /// Calls among those run so because the tape's call would pass the cycle limit.
+    pub tape_limited: u64,
+    /// Times a tape was run from its last call on to its first.
+    pub tape_passes: u64,
+    /// Recordings started again with more registers live or more cells near.
+    pub tape_retaped: u64,
+    /// Tapes given up.
+    pub tape_lost: u64,
+    /// Bytes of the largest tape.
+    pub tape_bytes: u64,
     /// `(pc, units)`: the start PCs the memo holds most units of, most first.
     pub roots: Vec<(u16, u32)>,
     /// `(location, nodes, values)`: the locations whose bytes tell the most held units apart,
@@ -556,7 +607,8 @@ fn splitmix(x: &mut u64) -> u64 {
 /// write's change added to the hash of the tracked state, and the memo of closed units.
 ///
 /// `bus` must be plain memory: a read gives the byte last written and nothing else changes.
-pub struct Memo<'a, B: Bus> {
+/// `T` compiles in what a tape needs noted ([`fibre`]).
+pub struct Memo<'a, B: Bus, const T: bool> {
     bus: &'a mut B,
     weight: Box<[u64]>,
     reg_cells: Vec<(u32, u64)>,
@@ -586,12 +638,14 @@ pub struct Memo<'a, B: Bus> {
     tuning: Tuning,
     trie: Trie,
     stats: MemoStats,
+    fib: Notes,
 }
 
-impl<'a, B: Bus> Memo<'a, B> {
+impl<'a, B: Bus, const T: bool> Memo<'a, B, T> {
     /// A memo over `bus` whose tracked state is the memory in `keep` and the registers
-    /// `cells` ([`REG`] offsets), cutting and giving up on crowded units as `tuning` says.
-    fn new(bus: &'a mut B, keep: &AddrSet, cells: &[u32], tuning: Tuning) -> Self {
+    /// `cells` ([`REG`] offsets), cutting and giving up on crowded units as `tuning` says,
+    /// the tracked cells among `fibre` set apart.
+    fn new(bus: &'a mut B, keep: &AddrSet, cells: &[u32], tuning: Tuning, fibre: &[u16]) -> Self {
         let mut seed = SEED;
         let mut weight = vec![0u64; 0x10000].into_boxed_slice();
         for (a, w) in weight.iter_mut().enumerate() {
@@ -603,6 +657,11 @@ impl<'a, B: Bus> Memo<'a, B> {
         let reg_cells = cells
             .iter()
             .map(|&r| (r, splitmix(&mut seed) | 1))
+            .collect();
+        let apart: Vec<u16> = fibre
+            .iter()
+            .copied()
+            .filter(|&a| keep.contains(a))
             .collect();
         let mut m = Memo {
             bus,
@@ -633,6 +692,7 @@ impl<'a, B: Bus> Memo<'a, B> {
             tuning,
             trie: Trie::new(),
             stats: MemoStats::default(),
+            fib: Notes::new(&apart),
         };
         m.rehash();
         m
@@ -677,6 +737,9 @@ impl<'a, B: Bus> Memo<'a, B> {
     #[inline]
     fn on_read(&mut self, addr: u16, v: u8) -> u8 {
         let a = addr as usize;
+        if T && self.fib.logging {
+            self.fib.rlog.push(addr);
+        }
         if self.open && self.mark[a] != self.stamp {
             self.mark[a] = self.stamp;
             if self.ever[a] {
@@ -693,11 +756,15 @@ impl<'a, B: Bus> Memo<'a, B> {
         let a = addr as usize;
         if !self.ever[a] {
             self.ever[a] = true;
+            self.fib.dead = true;
             if self.unkeyed[a] {
                 (self.stale, self.attention) = (true, true);
             }
         }
         let old = self.bus.peek(addr);
+        if T && self.fib.logging {
+            self.fib.wlog.push((addr, old));
+        }
         let d = (v as u64).wrapping_sub(old as u64);
         self.hash = self.hash.wrapping_add(self.weight[a].wrapping_mul(d));
         if self.open {
@@ -768,6 +835,69 @@ impl<'a, B: Bus> Memo<'a, B> {
         }
     }
 
+    /// Note for the tape the stored unit at `at`, which [`Memo::lookup`] found for `cpu`:
+    /// what it is keyed on and, where a tape is recorded, what it does.
+    #[inline(never)]
+    fn note_hit(&mut self, at: usize, cpu: &Cpu) {
+        let (bus, code, fib) = (&mut *self.bus, &self.trie.code[..], &mut self.fib);
+        let now = regs(cpu);
+        if fib.rec {
+            fib.begin(cpu.pc, now);
+        }
+        let mut n = self.trie.roots[cpu.pc as usize] as usize;
+        loop {
+            let head = code[n];
+            let end = n + 1 + (head >> 2) as usize;
+            for &it in &code[n + 1..end] {
+                fib.read(it >> 8);
+            }
+            if head & 3 == LEAF {
+                fib.uses(0, code[at + 1] as u16);
+                break;
+            }
+            let loc = code[end];
+            fib.read(loc);
+            let (mem, reg) = (bus.peek(loc as u16), now[loc as usize & 15]);
+            let v = if loc < REG { mem } else { reg } as u32;
+            n = if head & 3 == FEW {
+                let count = code[end + 1] as usize;
+                let i = (0..count).find(|&i| code[end + 2 + 2 * i] == v);
+                code[end + 3 + 2 * i.expect("found")] as usize
+            } else {
+                self.trie.tables[code[end + 1] as usize][v as usize] as usize
+            };
+        }
+        if fib.rec {
+            let unit = &code[at..];
+            fib.write(&unit[UNIT + 1..UNIT + 1 + unit[UNIT] as usize]);
+            let cycles = unit[5] as u64 | (unit[6] as u64) << 32;
+            let steps = unit[7] as u64 | (unit[8] as u64) << 32;
+            fib.end(unit[1] as u16, cycles, steps);
+        }
+    }
+
+    /// Note for the tape the unit being closed, which took `cycles` and `steps`.
+    fn note_miss(&mut self, cycles: u64, steps: u64) {
+        for i in 0..self.key.len() {
+            self.fib.read(self.key[i] as u32 >> 8);
+        }
+        for i in 0..self.wrote.len() {
+            let a = self.wrote[i];
+            let w = (a as u32) << 8 | self.bus.peek(a) as u32;
+            self.fib.write(&[w]);
+        }
+        self.fib.end(self.written, cycles, steps);
+    }
+
+    /// The part of the hash of the tracked state that `cells` are.
+    fn cells_hash(&mut self, cells: &[u16]) -> u64 {
+        let weigh = |h: u64, &a: &u16| {
+            let v = self.bus.peek(a) as u64;
+            h.wrapping_add(self.weight[a as usize].wrapping_mul(v))
+        };
+        cells.iter().fold(0, weigh)
+    }
+
     /// The cycles the stored unit at `at` takes.
     #[inline(always)]
     fn cycles(&self, at: usize) -> u64 {
@@ -782,6 +912,9 @@ impl<'a, B: Bus> Memo<'a, B> {
         for &w in writes {
             let (addr, v) = ((w >> 8) as u16, w as u8);
             let old = self.bus.peek(addr);
+            if T && self.fib.logging {
+                self.fib.wlog.push((addr, old));
+            }
             if old != v {
                 let d = (v as u64).wrapping_sub(old as u64);
                 self.hash = self
@@ -815,6 +948,9 @@ impl<'a, B: Bus> Memo<'a, B> {
         self.start_steps = cpu.steps;
         self.open = true;
         self.stats.misses += 1;
+        if T && self.fib.rec {
+            self.fib.begin(cpu.pc, regs(cpu));
+        }
     }
 
     /// The instruction at `cpu`'s PC is about to run: its opcode, and with a unit open the
@@ -822,8 +958,15 @@ impl<'a, B: Bus> Memo<'a, B> {
     #[inline(always)]
     fn instruction(&mut self, cpu: &Cpu) -> u8 {
         self.site = cpu.pc;
+        if T && self.fib.rec {
+            self.fib.broken |= !self.open;
+        }
         let op = self.bus.fetch(cpu.pc);
         self.on_read(cpu.pc, op);
+        if T && self.fib.logging {
+            self.fib
+                .uses(self.uses[op as usize].0, self.uses[op as usize].1);
+        }
         if self.open {
             let (reads, writes) = self.uses[op as usize];
             let mut new = reads & !self.touched;
@@ -870,6 +1013,9 @@ impl<'a, B: Bus> Memo<'a, B> {
         self.open = false;
         let (cycles, now) = (cpu.cycles - self.start_cycles, regs(cpu));
         let steps = cpu.steps - self.start_steps;
+        if T && self.fib.rec {
+            self.note_miss(cycles, steps);
+        }
         self.unit.clear();
         self.unit.extend([
             cpu.pc as u32,
@@ -900,7 +1046,7 @@ impl<'a, B: Bus> Memo<'a, B> {
     }
 }
 
-impl<B: Bus> Bus for Memo<'_, B> {
+impl<B: Bus, const T: bool> Bus for Memo<'_, B, T> {
     #[inline(always)]
     fn read(&mut self, addr: u16) -> u8 {
         let v = self.bus.read(addr);
@@ -955,20 +1101,20 @@ impl<B: Bus> Bus for Memo<'_, B> {
 }
 
 /// A bus over a [`Memo`]: the memo itself, or its accesses redirected.
-trait Over<'a, B: Bus + 'a>: Bus {
-    fn memo(&mut self) -> &mut Memo<'a, B>;
+trait Over<'a, B: Bus + 'a, const T: bool>: Bus {
+    fn memo(&mut self) -> &mut Memo<'a, B, T>;
 }
 
-impl<'a, B: Bus> Over<'a, B> for Memo<'a, B> {
+impl<'a, B: Bus, const T: bool> Over<'a, B, T> for Memo<'a, B, T> {
     #[inline(always)]
-    fn memo(&mut self) -> &mut Memo<'a, B> {
+    fn memo(&mut self) -> &mut Memo<'a, B, T> {
         self
     }
 }
 
-impl<'a, B: Bus> Over<'a, B> for Redirect<'_, Memo<'a, B>> {
+impl<'a, B: Bus, const T: bool> Over<'a, B, T> for Redirect<'_, Memo<'a, B, T>> {
     #[inline(always)]
-    fn memo(&mut self) -> &mut Memo<'a, B> {
+    fn memo(&mut self) -> &mut Memo<'a, B, T> {
         self.inner()
     }
 }
@@ -1075,14 +1221,15 @@ struct Run<'t, 'r, I: Bus, S: FnMut() -> bool> {
     max_cycles: u64,
     start_sp: Option<u8>,
     stopped: &'r mut S,
+    fx: Fibre,
 }
 
 impl<'a, I: Bus, S: FnMut() -> bool> Run<'_, '_, I, S> {
     /// Empty the memo if it is stale, else relieve its crowded start PC.
     #[inline(never)]
-    fn attend<B: Bus + 'a>(&mut self)
+    fn attend<B: Bus + 'a, const T: bool>(&mut self)
     where
-        I: Over<'a, B>,
+        I: Over<'a, B, T>,
     {
         let memo = self.tap.inner.memo();
         memo.open = false;
@@ -1104,9 +1251,24 @@ impl<'a, I: Bus, S: FnMut() -> bool> Run<'_, '_, I, S> {
     }
 
     /// One call from `cpu`, as [`crate::run_to_rts`] runs it.
-    fn call<B: Bus + 'a>(&mut self, cpu: &mut Cpu) -> Stop
+    fn call<B: Bus + 'a, const T: bool>(&mut self, cpu: &mut Cpu) -> Stop
     where
-        I: Over<'a, B>,
+        I: Over<'a, B, T>,
+    {
+        let (cycles, steps) = (cpu.cycles, cpu.steps);
+        let (sp_above, end) = self.setup(cpu);
+        let stop = self.go(cpu, sp_above, end, None);
+        if T && self.tap.inner.memo().fib.rec {
+            self.record(cpu, stop, cycles, steps);
+        }
+        stop
+    }
+
+    /// Start a call from `cpu`: the SP its return is above and the cycles it must end by.
+    #[inline(always)]
+    fn setup<B: Bus + 'a, const T: bool>(&mut self, cpu: &mut Cpu) -> (i32, u64)
+    where
+        I: Over<'a, B, T>,
     {
         let memo = self.tap.inner.memo();
         memo.stats.calls += 1;
@@ -1117,6 +1279,9 @@ impl<'a, I: Bus, S: FnMut() -> bool> Run<'_, '_, I, S> {
             self.start_sp = Some(cpu.sp);
         }
         let sp_above = cpu.sp as i32 - 1;
+        if T && memo.fib.rec {
+            memo.fib.entry(cpu.sp);
+        }
         for byte in [0x00, 0x01] {
             Bus::write(memo, 0x100 | cpu.sp as u16, byte);
             cpu.sp = cpu.sp.wrapping_sub(1);
@@ -1124,7 +1289,24 @@ impl<'a, I: Bus, S: FnMut() -> bool> Run<'_, '_, I, S> {
         cpu.a = self.acc;
         cpu.pc = self.pc;
         let end = cpu.cycles.saturating_add(self.max_cycles).saturating_add(1);
+        (sp_above, end)
+    }
+
+    /// Run the call from `cpu` to its end, or with `until` `(pc, n)` to the `n`th time a
+    /// unit would then start at `pc`, where it is first not counted ([`Stop::Pc`]).
+    #[inline(always)]
+    fn go<B: Bus + 'a, const T: bool>(
+        &mut self,
+        cpu: &mut Cpu,
+        sp_above: i32,
+        end: u64,
+        until: Option<(u16, u32)>,
+    ) -> Stop
+    where
+        I: Over<'a, B, T>,
+    {
         let (mut prev, mut use_memo, mut hits): (Option<u16>, bool, u64) = (None, true, 0);
+        let (mut first, mut left) = (true, until.map_or(0, |u| u.1));
         let stop = loop {
             if cpu.sp as i32 > sp_above {
                 break Stop::Sp;
@@ -1146,10 +1328,24 @@ impl<'a, I: Bus, S: FnMut() -> bool> Run<'_, '_, I, S> {
                         self.attend();
                     }
                 }
+                if T {
+                    if let Some((pc, _)) = until {
+                        if at == pc && !first {
+                            left -= 1;
+                            if left == 0 {
+                                break Stop::Pc;
+                            }
+                        }
+                        first = false;
+                    }
+                }
                 if self.cut[at as usize] == CUT {
                     let memo = self.tap.inner.memo();
                     if let Some(unit) = memo.lookup(cpu) {
                         if cpu.cycles + memo.cycles(unit) < end {
+                            if T && (memo.fib.rec | memo.fib.logging) {
+                                memo.note_hit(unit, cpu);
+                            }
                             memo.replay(unit, cpu);
                             hits += 1;
                             prev = None;
@@ -1214,15 +1410,42 @@ pub fn memo_orbit<B: Bus>(
     grain: Grain,
     stopped: impl FnMut() -> bool,
 ) -> (Orbit, MemoStats) {
-    let tuning = Tuning::default();
-    memo_orbit_tuned(
-        cpu, bus, pc, acc, max_cycles, limit, remap, volatile, keep, cells, grain, tuning, stopped,
+    let (tuning, fibre) = (Tuning::default(), []);
+    memo_orbit_tuned::<B, false>(
+        cpu, bus, pc, acc, max_cycles, limit, remap, volatile, keep, cells, grain, tuning, &fibre,
+        stopped,
     )
 }
 
-/// [`memo_orbit`] cutting and giving up on crowded units as `tuning` says.
+/// [`memo_orbit`] with the tracked memory cells among `fibre` set apart: once the rest of
+/// the written memory repeats at a call's entry, calls are run by a tape of that period
+/// and only where they read `fibre`. The same [`Orbit`], memory and registers.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn memo_orbit_tuned<B: Bus>(
+pub fn memo_orbit_fibre<B: Bus>(
+    cpu: &mut Cpu,
+    bus: &mut B,
+    pc: u16,
+    acc: u8,
+    max_cycles: u64,
+    limit: usize,
+    remap: Option<&Remap>,
+    volatile: &AddrSet,
+    keep: &AddrSet,
+    cells: &[u32],
+    grain: Grain,
+    fibre: &[u16],
+    stopped: impl FnMut() -> bool,
+) -> (Orbit, MemoStats) {
+    let tuning = Tuning::default();
+    memo_orbit_tuned::<B, true>(
+        cpu, bus, pc, acc, max_cycles, limit, remap, volatile, keep, cells, grain, tuning, fibre,
+        stopped,
+    )
+}
+
+/// [`memo_orbit_fibre`] as `tuning` says; without `T` no tape is recorded.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn memo_orbit_tuned<B: Bus, const T: bool>(
     cpu: &mut Cpu,
     bus: &mut B,
     pc: u16,
@@ -1235,9 +1458,10 @@ pub(crate) fn memo_orbit_tuned<B: Bus>(
     cells: &[u32],
     grain: Grain,
     tuning: Tuning,
+    fibre: &[u16],
     mut stopped: impl FnMut() -> bool,
 ) -> (Orbit, MemoStats) {
-    let mut memo = Memo::new(bus, keep, cells, tuning);
+    let mut memo = Memo::<B, T>::new(bus, keep, cells, tuning, fibre);
     match remap {
         Some(r) => {
             let mut over = Accesses::remapped(&mut memo, r);
@@ -1268,7 +1492,7 @@ pub(crate) fn memo_orbit_tuned<B: Bus>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn walk<'a, B: Bus + 'a, I: Over<'a, B>>(
+fn walk<'a, B: Bus + 'a, I: Over<'a, B, T>, const T: bool>(
     cpu: &mut Cpu,
     over: &mut I,
     pc: u16,
@@ -1281,6 +1505,8 @@ fn walk<'a, B: Bus + 'a, I: Over<'a, B>>(
 ) -> (Orbit, MemoStats) {
     let mut cut = vec![0; 0x10000].into_boxed_slice();
     cut[pc as usize] = CUT;
+    let memo = over.memo();
+    let fx = Fibre::new(T && memo.fib.is_f.contains(&true), memo.tuning);
     let cutting = std::array::from_fn(|op| match FLOW[op].kind {
         Kind::Jsr | Kind::Rts => 1,
         Kind::Branch | Kind::Jmp => 2,
@@ -1303,13 +1529,29 @@ fn walk<'a, B: Bus + 'a, I: Over<'a, B>>(
         max_cycles,
         start_sp: None,
         stopped,
+        fx,
     };
     let first = (run.tap.inner.memo().snapshot(), cpu.clone());
-    let (mut seen, mut end, mut states) = (Seen::new(), End::Open, 0);
+    let (mut seen, mut end, mut states, mut at) = (Seen::new(), End::Open, 0, 0);
     'calls: for k in 0..=limit {
-        let h = run.tap.inner.memo().state_hash(cpu);
+        at = k;
+        if T && run.enter(cpu, k).is_some() {
+            end = End::Stopped;
+            break;
+        }
+        let taped = T && run.fx.taped();
+        let h = match taped {
+            true => run.tape_hash(),
+            false => run.tap.inner.memo().state_hash(cpu),
+        };
         if !seen.insert(h) {
+            if taped && run.settle(cpu, k).is_some() {
+                end = End::Stopped;
+                break;
+            }
+            let paused = run.fx.pause();
             let memo = run.tap.inner.memo();
+            let rec = std::mem::take(&mut memo.fib.rec);
             let here = (memo.snapshot(), cpu.clone(), memo.state(cpu));
             memo.restore(&first.0);
             *cpu = first.1.clone();
@@ -1327,6 +1569,8 @@ fn walk<'a, B: Bus + 'a, I: Over<'a, B>>(
             }
             run.tap.inner.memo().restore(&here.0);
             *cpu = here.1;
+            run.tap.inner.memo().fib.rec = rec;
+            run.fx.resume(paused);
             if repeats {
                 end = End::Closed;
                 break;
@@ -1337,11 +1581,15 @@ fn walk<'a, B: Bus + 'a, I: Over<'a, B>>(
         if k == limit {
             break;
         }
-        let stop = run.call(cpu);
+        let stop = match T {
+            true => run.step(cpu, k),
+            false => run.call(cpu),
+        };
         if stop == Stop::Stopped {
             end = End::Stopped;
             break;
         }
+        at = k + 1;
         if run.tap.read_volatile {
             end = End::Volatile;
             break;
@@ -1351,9 +1599,12 @@ fn walk<'a, B: Bus + 'a, I: Over<'a, B>>(
             break;
         }
     }
+    if T {
+        run.wind_up(cpu, at);
+    }
     let memo = run.tap.inner.memo();
     let mut stats = memo.stats.clone();
-    stats.bytes = (memo.trie.bytes() + seen.slots.capacity() * 8) as u64;
+    stats.bytes = (memo.trie.bytes() + seen.slots.capacity() * 8) as u64 + stats.tape_bytes;
     (stats.roots, stats.fanout) = memo.trie.profile(PROFILE);
     let orbit = Orbit {
         end,
@@ -1469,7 +1720,7 @@ mod tests {
         let mut ram = Box::new([0u8; 0x10000]);
         ram[..vals.len()].copy_from_slice(vals);
         let none = AddrSet::default();
-        let mut memo = Memo::new(&mut *ram, &none, &[], Tuning::default());
+        let mut memo = Memo::<_, false>::new(&mut *ram, &none, &[], Tuning::default(), &[]);
         memo.trie = Trie {
             roots: t.roots.clone(),
             code: t.code.clone(),
@@ -1561,13 +1812,13 @@ mod tests {
         assert_eq!(s.len, 5001);
     }
 
-    const PLAY: u16 = 0x1000;
-    const MAX_CYCLES: u64 = 10_000;
-    const GRAINS: [Grain; 4] = [Grain::Call, Grain::Sub, Grain::Loop, Grain::Split];
+    pub(super) const PLAY: u16 = 0x1000;
+    pub(super) const MAX_CYCLES: u64 = 10_000;
+    pub(super) const GRAINS: [Grain; 4] = [Grain::Call, Grain::Sub, Grain::Loop, Grain::Split];
 
     /// $1000 INC $10 ; LDA $10 ; AND #3 ; STA $10 ; NOP ; INC $11 ; LDA $11 ; CMP #5 ;
     /// BNE + ; LDA #0 ; STA $11 ; + RTS: counters of periods 4 and 5 read at two instructions.
-    const COUNTERS: &[u8] = &[
+    pub(super) const COUNTERS: &[u8] = &[
         0xE6, 0x10, 0xA5, 0x10, 0x29, 0x03, 0x85, 0x10, 0xEA, 0xE6, 0x11, 0xA5, 0x11, 0xC9, 0x05,
         0xD0, 0x04, 0xA9, 0x00, 0x85, 0x11, 0x60,
     ];
@@ -1578,7 +1829,7 @@ mod tests {
     /// $1000 LDX $10 ; LDA $1020,X ; STA $12 ; INX ; TXA ; AND #7 ; STA $10 ; ADC $11 ;
     /// STA $11 ; RTS, then the table at $1020: an index walking a table into a sum that also
     /// reads the carry the call before left.
-    fn table() -> Vec<u8> {
+    pub(super) fn table() -> Vec<u8> {
         let mut code = vec![
             0xA6, 0x10, 0xBD, 0x20, 0x10, 0x85, 0x12, 0xE8, 0x8A, 0x29, 0x07, 0x85, 0x10, 0x65,
             0x11, 0x85, 0x11, 0x60,
@@ -1591,20 +1842,20 @@ mod tests {
     /// $1000 LDX #2 ; - JSR tick ; DEX ; BPL - ; RTS ; NOP ; tick DEC $10,X ; BPL + ;
     /// LDA $18,X ; STA $10,X ; + RTS: three counters of periods `$18,X` + 1 ticked by a
     /// subroutine.
-    const VOICES: &[u8] = &[
+    pub(super) const VOICES: &[u8] = &[
         0xA2, 0x02, 0x20, 0x0A, 0x10, 0xCA, 0x10, 0xFA, 0x60, 0xEA, 0xD6, 0x10, 0x10, 0x04, 0xB5,
         0x18, 0x95, 0x10, 0x60,
     ];
 
     /// $1000 LDY $10 ; INY ; - INC $11 ; DEY ; BNE - ; INC $10 ; LDA $10 ; AND #7 ; STA $10 ;
     /// RTS: a backward loop whose trip count is state.
-    const LOOP: &[u8] = &[
+    pub(super) const LOOP: &[u8] = &[
         0xA4, 0x10, 0xC8, 0xE6, 0x11, 0x88, 0xD0, 0xFB, 0xE6, 0x10, 0xA5, 0x10, 0x29, 0x07, 0x85,
         0x10, 0x60,
     ];
 
     /// RAM holding `code` at [`PLAY`] and the bytes `data`.
-    fn image(code: &[u8], data: &[(u16, u8)]) -> Box<[u8; 0x10000]> {
+    pub(super) fn image(code: &[u8], data: &[(u16, u8)]) -> Box<[u8; 0x10000]> {
         let mut m = Box::new([0u8; 0x10000]);
         m[PLAY as usize..PLAY as usize + code.len()].copy_from_slice(code);
         for &(a, v) in data {
@@ -1614,14 +1865,25 @@ mod tests {
     }
 
     /// The memory an orbit here takes as its state: page zero, the stack and the code's page.
-    fn tracked() -> Vec<u32> {
+    pub(super) fn tracked() -> Vec<u32> {
         (0..0x200).chain(PLAY as u32..PLAY as u32 + 0x100).collect()
     }
 
     /// The brute-force [`crate::orbit::orbit`] of `m` over [`tracked`], the RAM and registers
     /// it leaves.
     fn brute(m: &[u8; 0x10000], limit: usize, max_cycles: u64) -> (Orbit, Box<[u8; 0x10000]>, Cpu) {
-        let (mut ram, mut cpu, cells) = (Box::new(*m), Cpu::new(), tracked());
+        brute_over(m, limit, max_cycles, &[])
+    }
+
+    /// [`brute`] with the registers `regs` ([`REG`] offsets) state too.
+    pub(super) fn brute_over(
+        m: &[u8; 0x10000],
+        limit: usize,
+        max_cycles: u64,
+        regs: &[u32],
+    ) -> (Orbit, Box<[u8; 0x10000]>, Cpu) {
+        let (mut ram, mut cpu, mut cells) = (Box::new(*m), Cpu::new(), tracked());
+        cells.extend(regs.iter().map(|r| REG + r));
         let peek = &mut |b: &mut [u8; 0x10000], a: u16| b[a as usize];
         let digest = |c: &Cpu, b: &mut [u8; 0x10000]| crate::cells_digest(c, b, peek, &cells);
         let none = AddrSet::default();
@@ -1653,7 +1915,7 @@ mod tests {
         let (mut ram, mut cpu) = (Box::new(*m), Cpu::new());
         let keep: AddrSet = tracked().into_iter().map(|a| a as u16).collect();
         let none = AddrSet::default();
-        let (got, stats) = memo_orbit_tuned(
+        let (got, stats) = memo_orbit_tuned::<_, false>(
             &mut cpu,
             &mut *ram,
             PLAY,
@@ -1666,6 +1928,7 @@ mod tests {
             &[],
             grain,
             tuning,
+            &[],
             || false,
         );
         assert_eq!(got, want.0, "{grain:?} {tuning:?}");
@@ -1691,7 +1954,7 @@ mod tests {
                 let (mut ram, mut cpu) = (Box::new(*m), Cpu::new());
                 let keep: AddrSet = tracked().into_iter().map(|a| a as u16).collect();
                 let none = AddrSet::default();
-                let mut memo = Memo::new(&mut *ram, &keep, &[], Tuning::default());
+                let mut memo = Memo::<_, false>::new(&mut *ram, &keep, &[], Tuning::default(), &[]);
                 for w in memo.weight.iter_mut().filter(|w| **w != 0) {
                     *w = SEED | 1;
                 }
@@ -1740,6 +2003,7 @@ mod tests {
             crowd: 8,
             raw: 1 << 16,
             saturated: 2,
+            ..Tuning::default()
         };
         let split = agree(&m, 100, MAX_CYCLES, Grain::Split, tuning);
         assert!(split.splits >= 1 && split.raw == 0);
@@ -1767,11 +2031,13 @@ mod tests {
                 crowd: 2,
                 raw: 4,
                 saturated: 1,
+                ..Tuning::default()
             },
             Tuning {
                 crowd: 3,
                 raw: 1 << 20,
                 saturated: 64,
+                ..Tuning::default()
             },
         ];
         let routines = [
