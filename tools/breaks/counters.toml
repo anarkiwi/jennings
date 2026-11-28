@@ -1,0 +1,77 @@
+# Deliberate breaks of `jennings/coverage/counters.py`, each caught by its tests:
+# `python tools/break_check.py tools/breaks/counters.toml` from the repository root.
+
+command = "python -m pytest tests/test_counters.py -x -q"
+
+[[break]]
+name = "state in the feed set is set apart too"
+file = "jennings/coverage/counters.py"
+old = "    return tuple(c for c in comps.persistent if c < REG and c not in comps.feed)"
+new = "    return tuple(c for c in comps.persistent if c < REG)"
+
+[[break]]
+name = "a cell whose stored bytes depend on other state is a counter"
+file = "jennings/coverage/counters.py"
+old = "        if taint - binary != {cell} or flows.addressed.get(cell) or code & set(by_cell):"
+new = "        if flows.addressed.get(cell) or code & set(by_cell):"
+
+[[break]]
+name = "a store that is not seen to add a constant is left out of the sites"
+file = "jennings/coverage/counters.py"
+old = "        if None not in steps.values():"
+new = """        steps = {k: v for k, v in steps.items() if v is not None}
+        if steps:"""
+
+[[break]]
+name = "a DEC steps up"
+file = "jennings/coverage/counters.py"
+old = "_STEPS = {0xE6: (1, 1), 0xEE: (1, 2), 0xC6: (-1, 1), 0xCE: (-1, 2)}"
+new = "_STEPS = {0xE6: (1, 1), 0xEE: (1, 2), 0xC6: (1, 1), 0xCE: (1, 2)}"
+
+[[break]]
+name = "the carry set is not added"
+file = "jennings/coverage/counters.py"
+old = "    carry, operand = int(ram[flag] == _SEC), int(ram[site - 1])"
+new = "    carry, operand = 0, int(ram[site - 1])"
+
+[[break]]
+name = "an SBC adds its operand"
+file = "jennings/coverage/counters.py"
+old = "    return operand + carry if ram[site - 2] == _ADC else carry - 1 - operand"
+new = "    return operand + carry"
+
+[[break]]
+name = "a period is of one step a call whatever the sites"
+file = "jennings/coverage/counters.py"
+old = "        each = sum(step * trace.arrivals[pc] for pc, step in steps.items())"
+new = "        each = 1"
+
+[[break]]
+name = "a site some calls do not arrive at still gives a period"
+file = "jennings/coverage/counters.py"
+old = "    if all(pc in trace.arrivals for pc in steps):"
+new = "    if steps:"
+
+[[break]]
+name = "a period is not reduced by what the step shares with 256"
+file = "jennings/coverage/counters.py"
+old = "        period = 256 // math.gcd(each % 256, 256)"
+new = "        period = 256"
+
+[[break]]
+name = "an index is not told from a value put out"
+file = "jennings/coverage/counters.py"
+old = "    for kind, name in ((C.VALUE, READ), (C.CONTROL, COMPARED), (C.LOAD, INDEX), (C.STORE, INDEX)):"
+new = "    for kind, name in ((C.VALUE, READ), (C.CONTROL, COMPARED)):"
+
+[[break]]
+name = "addresses of unequal steps are a progression"
+file = "jennings/coverage/counters.py"
+old = "    if at.size == 0 or (gaps.size and (gaps != gaps[0]).any()):"
+new = "    if at.size == 0:"
+
+[[break]]
+name = "the fibre asked to be chosen is none"
+file = "jennings/memo.py"
+old = "        fibre = list(_loose(mpu, pc, acc=acc, max_cycles=max_cycles, remap=state.get(\"remap\")))"
+new = "        fibre = []"

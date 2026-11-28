@@ -70,7 +70,8 @@ explains one-way branches, and records per-test coverage from pytest. `jennings.
 splits a repeatedly called routine into autonomous components by native data and control taint,
 measures each one's cycle and gives the calls that cover every access and edge it can make;
 `jennings.coverage.certificate` records that claim and verifies it by replay, and where voices
-repeat each with its own period certifies them by segments of a call instead. See
+repeat each with its own period certifies them by segments of a call instead;
+`jennings.coverage.counters` finds the counters and the state nothing follows. See
 [docs/coverage.md](docs/coverage.md).
 
 ## Command line

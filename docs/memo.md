@@ -133,8 +133,12 @@ the slow counters of a routine whose other state has a short period, the calls o
 the base are recorded as a tape, and later calls are run by the tape: only the parts of a call
 that read the fibre are in question, and what such a part does from given fibre bytes is run
 once and then looked up. The orbit, the memory and the registers left are those without a fibre,
-whatever the cells are: a fibre that does not fit costs time, not exactness. `fibre` is for the
-caller to choose; nothing chooses it.
+whatever the cells are: a fibre that does not fit costs time, not exactness.
+
+`fibre="auto"` (`memo.AUTO`) takes the cells `jennings.coverage.counters.loose` finds from the
+state the orbit starts in ([coverage.md](coverage.md#counters-and-state-nothing-follows), with
+the `coverage` extra): the memory that carries state from call to call and taints no address
+and no control transfer. Any other fibre is the caller's choice.
 
 ### Recording
 

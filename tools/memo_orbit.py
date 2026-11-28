@@ -2,7 +2,7 @@
 :meth:`~jennings.devices.mpu6502.NativeMPU.orbit`, each ``--fibre`` against it without one.
 
     python tools/memo_orbit.py --pc 0x1003 --volatile 0xd000:0xe000 [--grain split]
-        [--limit N] [--brute] [--fibre 0x1b17,0x1aff]... IMAGE...
+        [--limit N] [--brute] [--fibre 0x1b17,0x1aff|auto]... IMAGE...
 
 One row per image and fibre: the end and calls, the memo's counts, its bytes and the seconds
 taken; the host's load average heads the rows. The state is all RAM outside ``--volatile`` and
@@ -30,7 +30,7 @@ def _spans(text):
 
 
 def _cells(text):
-    return [int(v, 0) for v in text.split(",") if v]
+    return memo.AUTO if text == memo.AUTO else [int(v, 0) for v in text.split(",") if v]
 
 
 def _keep(volatile):
@@ -82,7 +82,8 @@ def run(image, args):
     rows = [{**row, "same": want and want == found}]
     for fibre in args.fibre:
         got, row = _memo(image, args, fibre)
-        rows.append({"fibre": ",".join(f"{a:04x}" for a in fibre), **row, "same": got == found})
+        name = fibre if fibre == memo.AUTO else ",".join(f"{a:04x}" for a in fibre)
+        rows.append({"fibre": name, **row, "same": got == found})
     return rows
 
 

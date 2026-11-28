@@ -51,6 +51,17 @@ The tape is 46.5 MB: 20 bytes per call (13.2 MB), 16 per segment (11.6 MB), 8 pe
 state's hash (5.3 MB) and the frames, within their 16 MiB. The set of state hashes is the other
 256 MiB, as without a fibre.
 
+`--fibre auto` on the same state, one run at load average 14: `counters.loose` gives
+`$1AFF,$1B17` in 0.11 s, and the orbit takes 6.91 s against 6.70 s for the same fibre given by
+hand and 15.65 s without one, with the same tape (661,248 calls of base period, 9,243,681
+calls run by it) and the same result. `counters.recognise` finds no counter in Commando: its
+two cells are stepped by another cell's value (`ADC $148A`), not by a constant.
+
+With the state `certificate.closure` takes (the registers, the stack page and the memory the
+calls store to, as `cells`) the same fibre is slower than none, 26.85 s against 16.32 s at load
+average 9 to 18: the tape is given up four times and runs 30 calls. `closure` therefore sets no
+fibre apart.
+
 Other fibres on the same state, one run each (the tool's `--fibre`, each checked the same way):
 
 | fibre | base period | tape run from | calls run by the tape | calls run to learn | tapes given up | seconds |
