@@ -12,7 +12,6 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
-import networkx as nx
 import numpy as np
 from tqdm import tqdm
 
@@ -275,19 +274,9 @@ def _open(comps, ran):
     """:class:`Open` of ``comps`` on the entries ``ran`` recorded."""
     rows = np.ascontiguousarray(ran.rows(None, comps.persistent))
     col = {c: i for i, c in enumerate(comps.persistent)}
-    g = nx.DiGraph()
-    g.add_nodes_from(comps.feed)
-    g.add_edges_from(
-        (s, c) for c in comps.feed for s in comps.deps.get(c, ()) if s in comps.feed and s != c
-    )
-    cond = nx.condensation(g)
+    cond, closed, _g = C.condensed(comps.deps, comps.feed)
     nodes = list(cond)
-    sets = [
-        set(cond.nodes[n]["members"]).union(
-            *(cond.nodes[a]["members"] for a in nx.ancestors(cond, n))
-        )
-        for n in nodes
-    ]
+    sets = [closed[n] for n in nodes]
     got = periods_of(rows, [sorted(col[c] for c in s) for s in sets]) if sets else ()
     first = {n: p for n, (p, _t) in zip(nodes, got)}
     unrepeated = [
