@@ -189,6 +189,13 @@ returns per column list `((preperiod, period), t)`: the first row equal on those
 earlier one, and the first `t` from the preperiod whose rows `t` and `t + period` agree there
 while rows `t + 1` and `t + 1 + period` do not (None for either where there is none).
 
+The core's `cut_calls(pc, acc, max_cycles, calls, cuts, remap=None, lead=0, free=None,
+values=None)` runs
+`lead` calls and then `calls` calls each cut into segments where it arrives at a PC of `cuts`,
+and returns what each segment reads before writing, stores and leaves, runs reading a `free`
+location made again with its other `values`; `jennings.coverage.segments.cut` unpacks it
+([coverage.md](coverage.md#certificates-by-segments)).
+
 The drivers above run on a memory with nothing mapped or watched (`FlatMemory::plain`) through
 `RamBus`, its RAM without page checks, and `run_to_rts` without stop PCs runs a loop of its own
 checks only; both behave as the general path. See

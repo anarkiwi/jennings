@@ -623,6 +623,7 @@ def cover(
     exclude=(STACK, IO),
     first=CHUNK,
     start=None,
+    comps=None,
 ):
     """``(calls, comps, ran)``: the cover point of ``pc`` called from ``state``, the feed
     locations' first repeat as :func:`cover_calls` settles it, with the :class:`Components`
@@ -636,11 +637,12 @@ def cover(
     calls. ``calls`` is None where the feed locations do not repeat within ``limit`` calls.
 
     ``start(cells)``, where given, is :class:`Calls` recording ``cells`` to take the first of
-    those runs on from, or None to run them anew. Raises :class:`RuntimeError` where a call
-    does not return, or where the feed locations do not settle within ``limit`` calls."""
+    those runs on from, or None to run them anew; ``comps`` the components already learned
+    over ``min(first, limit)`` calls. Raises :class:`RuntimeError` where a call does not
+    return, or where the feed locations do not settle within ``limit`` calls."""
     kw = {"acc": acc, "max_cycles": max_cycles, "remap": remap}
     learned, seen = min(first, limit), set()
-    comps = learn(state, pc, learned, exclude=exclude, **kw)
+    comps = comps or learn(state, pc, learned, exclude=exclude, **kw)
     while True:
         seen.add((comps.feed, learned))
         ran = start(comps.persistent) if start is not None else None

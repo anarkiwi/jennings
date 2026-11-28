@@ -1,0 +1,268 @@
+# Deliberate breaks of the segments of `crates/jennings-core/src/segments.rs` and of their
+# checks in `jennings/coverage/segments.py` and `certificate.py`, each caught by its tests:
+# `python tools/break_check.py tools/breaks/segments.toml` from the repository root, with the
+# extension built (the breaks of Python are tested against it as built).
+
+command = "cargo test -p jennings-core --lib segments"
+
+[[break]]
+name = "a location is fed though the run wrote it first"
+file = "crates/jennings-core/src/segments.rs"
+old = "        if !self.on || self.touched_in[l] >> 1 == self.run {"
+new = "        if !self.on || self.touched_in[l] == self.run << 1 {"
+
+[[break]]
+name = "registers an instruction reads are not fed"
+file = "crates/jennings-core/src/segments.rs"
+old = "            t.read(REG + r, now[r as usize]);"
+new = "            let _ = (r, now);"
+
+[[break]]
+name = "registers an instruction writes are not stored"
+file = "crates/jennings-core/src/segments.rs"
+old = "            t.write(REG + left.trailing_zeros());"
+new = ""
+
+[[break]]
+name = "the test for the call's return feeds on nothing"
+file = "crates/jennings-core/src/segments.rs"
+old = """        t.read(BASE, t.base);
+        t.read(SP, cpu.sp);"""
+new = ""
+
+[[break]]
+name = "what a run leaves is not read where it ends"
+file = "crates/jennings-core/src/segments.rs"
+old = "            if seen(&mut s.left, &mut s.left_value, l, value(loc)) {"
+new = "            if seen(&mut s.left, &mut s.left_value, l, 0) {"
+
+[[break]]
+name = "the runs storing a location are not counted"
+file = "crates/jennings-core/src/segments.rs"
+old = "            s.left_runs[l] += 1;"
+new = ""
+
+[[break]]
+name = "leading calls are cut"
+file = "crates/jennings-core/src/segments.rs"
+old = "        let on = k >= lead;"
+new = "        let on = k >= lead || true;"
+
+[[break]]
+name = "an arrival count that varies stays steady"
+file = "crates/jennings-core/src/segments.rs"
+old = "            self.steady.retain(|&(p, n)| count[p as usize] == n);"
+new = "            let _ = count;"
+
+[[break]]
+name = "memory is not put back as the call's own run left it"
+file = "crates/jennings-core/src/segments.rs"
+old = """    undo(bus, t);
+    for &(addr, v) in &own.memory {
+        bus.poke(addr, v);
+    }"""
+new = "    undo(bus, t);"
+
+[[break]]
+name = "a run is made again from where the last one ended"
+file = "crates/jennings-core/src/segments.rs"
+old = """    undo(bus, t);
+    let mut cpu = t.entry.clone();"""
+new = """    t.log.clear();
+    let mut cpu = t.entry.clone();"""
+
+[[break]]
+name = "what a free location holds where a run ends is not told"
+file = "crates/jennings-core/src/segments.rs"
+old = """        for &loc in &self.free.any {
+            self.values.insert((loc, value(loc)));
+        }"""
+new = ""
+
+[[break]]
+name = "a location a run made again leaves otherwise is not told"
+file = "crates/jennings-core/src/segments.rs"
+old = "            t.differs.insert(Differs { segment, free, loc });"
+new = "            let _ = (segment, free, loc);"
+
+[[break]]
+name = "a free location given and not written is told as left otherwise"
+file = "crates/jennings-core/src/segments.rs"
+old = "        if wrote || given.iter().all(|g| g.0 != loc) {"
+new = "        if wrote || true {"
+
+[[break]]
+name = "where a run made again ends is not compared"
+file = "crates/jennings-core/src/segments.rs"
+old = "    (t.free_read.clone(), exit == own.exit && !cpu.jammed)"
+new = "    (t.free_read.clone(), true)"
+
+[[break]]
+name = "only the first free location a run reads is given other values"
+file = "crates/jennings-core/src/segments.rs"
+old = "                todo.push((at + 1, theirs));"
+new = "                let _ = theirs;"
+
+[[break]]
+name = "a period is looked for over the rows of the first column"
+file = "crates/jennings-core/src/period.rs"
+old = "    let n = used.min().unwrap_or(0);"
+new = """    let _ = used;
+    let n = cols.first().map_or(0, |c| c.len());"""
+command = "cargo test -p jennings-core --lib period"
+
+[[break]]
+name = "held whatever the segments before leave"
+file = "jennings/coverage/segments.py"
+old = """            if left != value:
+                return False
+            if runs == trace.runs[other]:"""
+new = "            if runs == trace.runs[other]:"
+command = "python -m pytest tests/test_segments.py -x -q"
+
+[[break]]
+name = "held by a segment that stores at times"
+file = "jennings/coverage/segments.py"
+old = "            if runs == trace.runs[other]:"
+new = "            if runs:"
+command = "python -m pytest tests/test_segments.py -x -q"
+
+[[break]]
+name = "held whatever the first cut call starts with"
+file = "jennings/coverage/segments.py"
+old = "    return loc != BASE and int(trace.entry[loc]) == value"
+new = "    return loc != BASE"
+command = "python -m pytest tests/test_segments.py -x -q"
+
+[[break]]
+name = "held though its reads found several values"
+file = "jennings/coverage/segments.py"
+old = "        elif value != _VARIES and _holds("
+new = "        elif _holds("
+command = "python -m pytest tests/test_segments.py -x -q"
+
+[[break]]
+name = "a shared location makes no dependence"
+file = "jennings/coverage/segments.py"
+old = "            deps[seg] |= set(by) - {seg}"
+new = "            deps[seg] |= set()"
+command = "python -m pytest tests/test_segments.py -x -q"
+
+[[break]]
+name = "a volatile feed is not refused"
+file = "jennings/coverage/segments.py"
+old = "    if at.any():"
+new = "    if at.any() and not at.any():"
+command = "python -m pytest tests/test_segments.py -x -q"
+
+[[break]]
+name = "calls cut otherwise than the first are not refused as such"
+file = "jennings/coverage/segments.py"
+old = "        raise Refused(\"segments\", how % (trace.lead, was, seg, call, now), call)"
+new = "        del was, now"
+command = "python -m pytest tests/test_segments.py -x -q"
+
+[[break]]
+name = "a run made again that ends elsewhere is not refused as such"
+file = "jennings/coverage/segments.py"
+old = "        if again:"
+new = "        if again and not again:"
+command = "python -m pytest tests/test_segments.py -x -q"
+
+[[break]]
+name = "the segments' longest runs are not held to the cycle limit"
+file = "jennings/coverage/segments.py"
+old = "    if sum(trace.cycles) > max_cycles:"
+new = "    if sum(trace.cycles) > max_cycles + 1:"
+command = "python -m pytest tests/test_segments.py -x -q"
+
+[[break]]
+name = "a free location may hold a value not given"
+file = "jennings/coverage/segments.py"
+old = "        if more:"
+new = "        if more and not more:"
+command = "python -m pytest tests/test_segments.py -x -q"
+
+[[break]]
+name = "a run made again may leave state otherwise"
+file = "jennings/coverage/segments.py"
+old = "        if loc in state:"
+new = "        if loc in state and seg < 0:"
+command = "python -m pytest tests/test_segments.py -x -q"
+
+[[break]]
+name = "a run made again may make an access no call makes"
+file = "jennings/coverage/segments.py"
+old = "        if np.setdiff1d(mine, theirs).size:"
+new = "        if np.setdiff1d(mine, theirs).size < 0:"
+command = "python -m pytest tests/test_segments.py -x -q"
+
+[[break]]
+name = "a state that breaks its period is not refused"
+file = "jennings/coverage/segments.py"
+old = "        if conflict is not None:"
+new = "        if conflict is not None and conflict < 0:"
+command = "python -m pytest tests/test_segments.py -x -q"
+
+[[break]]
+name = "every limit is taken as proved free of repeats"
+file = "jennings/coverage/segments.py"
+old = "    return len(np.unique(total)) == limit + 1"
+new = "    return len(np.unique(total)) <= limit + 1"
+command = "python -m pytest tests/test_segments.py -x -q"
+
+[[break]]
+name = "a state's entry before its cycle is taken to be in it"
+file = "jennings/coverage/segments.py"
+old = "        entry = np.where(calls < mu + lam, calls, mu + (calls - mu) % lam)"
+new = "        entry = calls % (mu + lam)"
+command = "python -m pytest tests/test_segments.py -x -q"
+
+[[break]]
+name = "the segments' starts are not compared with the certificate's"
+file = "jennings/coverage/certificate.py"
+old = "    if trace.starts != cert.starts:"
+new = "    if trace.starts != cert.starts and not trace.starts:"
+command = "python -m pytest tests/test_segments.py -x -q"
+
+[[break]]
+name = "the segments' cycles are not compared with the certificate's"
+file = "jennings/coverage/certificate.py"
+old = "        if got != mine:"
+new = "        if got != mine and got is None:"
+command = "python -m pytest tests/test_segments.py -x -q"
+
+[[break]]
+name = "a state that never repeats is accepted"
+file = "jennings/coverage/certificate.py"
+old = "        if got != mine:"
+new = "        if got != mine and got is not None:"
+command = "python -m pytest tests/test_segments.py -x -q"
+
+[[break]]
+name = "the state locations are not compared with the certificate's feed"
+file = "jennings/coverage/certificate.py"
+old = "    if found.feed != cert.feed:"
+new = "    if found.feed != cert.feed and not cert.feed:"
+command = "python -m pytest tests/test_segments.py -x -q"
+
+[[break]]
+name = "a cycle before the leading calls or of no period is taken as input"
+file = "jennings/coverage/certificate.py"
+old = "        if any(mu < cert.lead or lam < 1 for mu, lam in cert.cycles):"
+new = "        if any(mu < 0 for mu, lam in cert.cycles):"
+command = "python -m pytest tests/test_segments.py -x -q"
+
+[[break]]
+name = "the stack page is taken as volatile"
+file = "jennings/coverage/certificate.py"
+old = "        out += [(lo, min(hi, C.STACK.start)), (max(lo, C.STACK.stop), hi)]"
+new = "        out += [(lo, hi)]"
+command = "python -m pytest tests/test_segments.py -x -q"
+
+[[break]]
+name = "the cover point is not looked for where segments are found"
+file = "jennings/coverage/certificate.py"
+old = "        if not isinstance(cut, str) and S.never_repeats(cut[1], comps.feed, limit):"
+new = "        if not isinstance(cut, str):"
+command = "python -m pytest tests/test_segments.py -x -q"

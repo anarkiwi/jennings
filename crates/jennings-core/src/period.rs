@@ -17,9 +17,10 @@ pub struct Period {
 }
 
 /// The [`Period`] of each column set of `subsets` over the rows whose columns are `cols`,
-/// all of one length.
+/// those of `subsets` all of one length.
 pub fn periods(cols: &[&[u8]], subsets: &[Vec<usize>]) -> Vec<Period> {
-    let n = cols.first().map_or(0, |c| c.len());
+    let used = subsets.iter().flatten().map(|&c| cols[c].len());
+    let n = used.min().unwrap_or(0);
     let mut hash = Vec::new();
     subsets
         .iter()
@@ -86,4 +87,18 @@ fn mismatch(a: &[u8], b: &[u8]) -> Option<usize> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn columns_outside_the_subsets_may_be_left_empty() {
+        let col: Vec<u8> = (0..40).map(|t| t % 5).collect();
+        let got = periods(&[&[], &col], &[vec![1]]);
+        assert_eq!(got[0].first, Some((0, 5)));
+        assert_eq!(got[0].conflict, None);
+        assert_eq!(periods(&[&col], &[]), []);
+    }
 }

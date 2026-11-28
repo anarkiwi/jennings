@@ -13,11 +13,25 @@ from jennings.opcodes import CYCLES, EXTRA, OPCODES, ILLEGAL_OPCODES, MODE_TOKEN
 
 if NATIVE:
     # pylint: disable-next=import-error,no-name-in-module
-    from jennings._core import CONST, REG, Census, Core, Learner, Remap, periods_of
+    from jennings._core import (
+        BASE,
+        CONST,
+        MAX_FORKS,
+        MAX_SEGMENTS,
+        REG,
+        Census,
+        Core,
+        Learner,
+        Remap,
+        periods_of,
+    )
 else:  # pragma: no cover - sdist install without the native core
     Census = Core = Learner = Remap = periods_of = None
     REG = 0x10000
     CONST = 0x20000
+    BASE = REG + 15
+    MAX_SEGMENTS = 256
+    MAX_FORKS = 1 << 24
 
 __all__ = [
     "MPU",
@@ -28,6 +42,9 @@ __all__ = [
     "periods_of",
     "REG",
     "CONST",
+    "BASE",
+    "MAX_SEGMENTS",
+    "MAX_FORKS",
     "ILLEGAL_OPCODES",
 ]
 
