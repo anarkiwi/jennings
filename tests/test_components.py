@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from deity_informant.lifter import template
-from helpers import image
+from helpers import COUNTERS, image
 from jennings.coverage import components as C
 from jennings.coverage.cfg import LEN
 from jennings.dataflow import REGISTERS, flow
@@ -28,23 +28,6 @@ def seen(ram, calls):
     """Distinct data accesses and edges of ``calls`` calls."""
     _end, _states, acc, edges = C.machine(ram).orbit(PLAY, 0, C.MAX_CYCLES, calls)
     return set(acc.tolist()), set(edges.tolist())
-
-
-COUNTERS = """
-    inc c3
-    lda c3
-    cmp #3
-    bne +
-    lda #0
-    sta c3
-+   dec c5
-    bpl +
-    lda #4
-    sta c5
-+   rts
-c3 !byte 0
-c5 !byte 4
-"""
 
 
 def test_two_independent_counters_have_coprime_closures():

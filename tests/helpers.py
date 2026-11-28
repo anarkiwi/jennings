@@ -117,3 +117,21 @@ def image(src, ram=None):
     ram = bytearray(0x10000) if ram is None else bytearray(ram)
     ram[0x1000 : 0x1000 + len(out)] = out
     return ram, syms
+
+
+#: Two independent counters, of periods 3 and 5, for :func:`image`.
+COUNTERS = """
+    inc c3
+    lda c3
+    cmp #3
+    bne +
+    lda #0
+    sta c3
++   dec c5
+    bpl +
+    lda #4
+    sta c5
++   rts
+c3 !byte 0
+c5 !byte 4
+"""
