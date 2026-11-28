@@ -101,6 +101,22 @@ def test_voices_of_coprime_periods_are_certified_each_by_its_own_cycle():
     assert closed.ok and closed.calls == 67 * 71 + 1, "one more: the output is first written"
 
 
+@pytest.mark.parametrize("src", [PEER, LEANS])
+def test_segments_that_do_not_close_cost_at_most_a_few_times_a_late_joint_repeat(src, monkeypatch):
+    ram, _ = image(src, 127, 131)
+    ran, plain = [0], S.cut
+
+    def counted(*a, **kw):
+        trace = plain(*a, **kw)
+        ran[0] += trace.lead + trace.calls + trace.forks
+        return trace
+
+    monkeypatch.setattr(S, "cut", counted)
+    cert = V.certify(ram, PLAY, 1_000_000, learn=64)
+    assert isinstance(cert, V.Certificate) and cert.calls == 127 * 131
+    assert 0 < ran[0] <= 2 * cert.calls, "calls cut and made again, in the joint route's"
+
+
 def test_the_joint_certificate_is_kept_where_the_feed_locations_repeat_within_the_limit():
     ram, _ = image(VOICES, 67, 71)
     cert = V.certify(ram, PLAY, 5000, learn=64)

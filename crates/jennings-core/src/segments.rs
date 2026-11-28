@@ -267,6 +267,7 @@ struct Tracker<'c> {
     fork_accesses: FxSet<u64>,
     fork_edges: FxSet<u64>,
     forks: u64,
+    budget: u64,
     values: FxSet<(u32, u8)>,
     differs: FxSet<Differs>,
     first: Option<Vec<u8>>,
@@ -310,6 +311,7 @@ impl<'c> Tracker<'c> {
             fork_accesses: FxSet::default(),
             fork_edges: FxSet::default(),
             forks: 0,
+            budget: MAX_FORKS,
             values: FxSet::default(),
             differs: FxSet::default(),
             first: None,
@@ -804,7 +806,7 @@ fn explore<B: Bus>(
                 let mut given = read[..at].to_vec();
                 given.push((loc, v));
                 let (theirs, same) = fork(bus, t, &own, &given, entry, end, stopped);
-                alike &= same && t.forks < MAX_FORKS;
+                alike &= same && t.forks < t.budget;
                 if !alike {
                     break;
                 }
@@ -888,9 +890,33 @@ pub fn cut_calls<B: Bus>(
     free: &[(usize, u32)],
     values: &[(u32, u8)],
     remap: Option<&Remap>,
+    stopped: impl FnMut() -> bool,
+) -> (Cut, Stop) {
+    cut_calls_within(
+        cpu, bus, pc, acc, max_cycles, lead, calls, cuts, free, values, remap, MAX_FORKS, stopped,
+    )
+}
+
+/// As [`cut_calls`], making runs again until `forks` of them (at most [`MAX_FORKS`]) are made:
+/// the run then ends at the run that reaches them ([`Cut::odd`]).
+#[allow(clippy::too_many_arguments)]
+pub fn cut_calls_within<B: Bus>(
+    cpu: &mut Cpu,
+    bus: &mut B,
+    pc: u16,
+    acc: u8,
+    max_cycles: u64,
+    lead: usize,
+    calls: usize,
+    cuts: &AddrSet,
+    free: &[(usize, u32)],
+    values: &[(u32, u8)],
+    remap: Option<&Remap>,
+    forks: u64,
     mut stopped: impl FnMut() -> bool,
 ) -> (Cut, Stop) {
     let mut t = Tracker::new(cuts, Free::new(free, values));
+    t.budget = forks.min(MAX_FORKS);
     let mut last = Stop::Sp;
     let entry = Entry {
         pc,
@@ -1401,5 +1427,35 @@ mod tests {
         );
         assert_eq!(cut.forks, 4 * 3, "two values of each: three more runs");
         assert!(cut.values.contains(&(MASK, 4)) && cut.values.contains(&(MASK, 7)));
+    }
+
+    #[test]
+    fn runs_made_again_stop_at_the_number_given() {
+        let free = [(1, MASK), (1, 0x2021)];
+        let known = [(MASK, 0), (MASK, 3), (0x2021, 2), (0x2021, 4)];
+        let cuts: AddrSet = [LOOP].into_iter().collect();
+        let mut cpu = Cpu::new();
+        let mut ram = shared(TOGGLE);
+        let (cut, _) = cut_calls_within(
+            &mut cpu,
+            &mut *ram,
+            PLAY,
+            0,
+            1000,
+            0,
+            4,
+            &cuts,
+            &free,
+            &known,
+            None,
+            5,
+            || false,
+        );
+        assert_eq!(cut.forks, 5);
+        assert!(
+            cut.odd.is_some_and(|o| o.fork),
+            "the run reaching them ends the calls"
+        );
+        assert!(cut.calls < 4);
     }
 }

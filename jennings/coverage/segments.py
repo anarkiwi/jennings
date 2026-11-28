@@ -175,6 +175,7 @@ def cut(
     acc=0,
     max_cycles=C.MAX_CYCLES,
     remap=None,
+    forks=0,
 ):
     """The :class:`Trace` of ``calls`` calls of ``pc`` with ``A = acc`` from ``state`` (see
     :func:`~jennings.coverage.components.machine`): the first ``lead`` whole, each of the
@@ -182,13 +183,14 @@ def cut(
 
     A run that reads a location of ``free`` (``(segment, location)`` pairs) of its segment
     before writing it is made again with each other of its ``values`` (``{location:
-    values}``), and so on for what those runs read."""
+    values}``), and so on for what those runs read, until ``forks`` runs are made again
+    (0: :data:`MAX_FORKS`)."""
     if not 0 <= lead <= calls:
         raise ValueError("the leading calls are among the calls")
     known = [(loc, v) for loc, vals in sorted((values or {}).items()) for v in vals]
     core = C.machine(state)._core
     got = core.cut_calls(
-        pc, acc, max_cycles, calls - lead, sorted(cuts), remap, lead, sorted(free), known
+        pc, acc, max_cycles, calls - lead, sorted(cuts), remap, lead, sorted(free), known, forks
     )
     stored = np.frombuffer(got["stored"], np.uint32).astype(np.int64)
     seg, loc, value = _unpack(got["stores"])
@@ -493,24 +495,43 @@ def _unclosed(found, calls):
 
 # pylint: disable-next=too-many-arguments
 def propose(
-    state, pc, limit, *, acc=0, max_cycles=C.MAX_CYCLES, remap=None, volatile=(), learn=C.CHUNK
+    state,
+    pc,
+    limit,
+    *,
+    acc=0,
+    max_cycles=C.MAX_CYCLES,
+    remap=None,
+    volatile=(),
+    learn=C.CHUNK,
+    afford=None,
 ):
     """``(cuts, free, values, found)``: cuts and free locations under which every segment's
     state repeats within ``limit`` calls of ``pc`` from ``state``, with their closed
     :class:`Found`. A heuristic: :func:`examine` alone says what holds.
 
     The cuts are chosen among :func:`candidates` of the later half of ``learn`` calls, which
-    double to ``limit``, their first half left whole; then fewer are left whole.
+    double to ``limit``, their first half left whole; then fewer are left whole. Given
+    ``afford``, the calls cut and made again until every state repeats are held to it, as
+    :class:`Spent` takes it.
 
     Raises:
-        Refused: what the cuts chosen met, where none is found.
+        Refused: what the cuts chosen met, where none is found, or what ``afford`` raised.
     """
     kw = {"acc": acc, "max_cycles": max_cycles, "remap": remap}
+    spent = Spent(afford)
 
     def look(cuts, calls, lead, free, values):
         if isinstance(calls, tuple):
             return _examined(state, pc, *calls, (values, volatile), kw)
-        trace = cut(state, pc, calls, cuts, lead=lead, free=free, values=values, **kw)
+        while True:
+            forks = spent.left(calls)
+            trace = cut(
+                state, pc, calls, cuts, lead=lead, free=free, values=values, forks=forks, **kw
+            )
+            spent.calls += trace.forks
+            if not forks or trace.forks < forks:
+                break
         _replayed(trace, calls, max_cycles)
         return trace, classify(trace, free)
 
@@ -518,6 +539,7 @@ def propose(
         return isinstance(found, Found) and found.closed
 
     calls, tried = min(learn, limit), {}
+    spent.left(calls)
     whole = cut(state, pc, calls, (), lead=calls // 2, **kw)
     _replayed(whole, calls, max_cycles)
 
@@ -536,6 +558,7 @@ def propose(
             progress.update(calls - progress.n)
     if not closed(found):
         raise _unclosed(found, calls)
+    spent.afford = spent.budget = None
     for lead in (0, calls // 16, calls // 8, calls // 4):
         fewer = _freed(look, cuts, calls, lead, (free, values))
         if closed(fewer[2]):
@@ -548,6 +571,22 @@ def propose(
             break
         free, values, found = fewer
     return cuts, tuple(sorted(free)), values, found
+
+
+class Spent:
+    """Calls run (``calls``), held to ``afford(calls)``: the calls they may run to, at least
+    ``calls``, or None for any; it raises to stop them. None for ``afford`` is any calls."""
+
+    def __init__(self, afford=None):
+        self.afford, self.calls = afford, 0
+        self.budget = None if afford is None else afford(0)
+
+    def left(self, calls):
+        """Counts ``calls`` more: the runs they may make again (0: any)."""
+        self.calls += calls
+        while self.budget is not None and self.budget <= self.calls:
+            self.budget = self.afford(self.calls + 1)
+        return 0 if self.budget is None else self.budget - self.calls
 
 
 def _hashed(rows):
