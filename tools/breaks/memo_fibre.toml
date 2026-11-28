@@ -1,0 +1,182 @@
+# Deliberate breaks of the tape of `crates/jennings-core/src/memo/fibre.rs`, each caught by its
+# tests: `python tools/break_check.py tools/breaks/memo_fibre.toml` from the repository root.
+
+command = "cargo test -p jennings-core --lib memo::fibre -- --skip a_fibre_changes_nothing_found"
+
+[[break]]
+name = "a segment's fibre writes are not applied"
+file = "crates/jennings-core/src/memo/fibre.rs"
+old = """            for &w in writes {
+                poke(memo.bus, w);
+            }
+            for &w in &writes[out..] {"""
+new = """            for &w in &writes[out..] {
+                poke(memo.bus, w);
+            }
+            for &w in &writes[out..] {"""
+
+[[break]]
+name = "a segment is looked up without the fibre bytes"
+file = "crates/jennings-core/src/memo/fibre.rs"
+old = "    buf.extend(uses.iter().map(value));"
+new = "    let _ = (uses, value);"
+
+[[break]]
+name = "a segment is looked up without the registers it reads"
+file = "crates/jennings-core/src/memo/fibre.rs"
+old = "    buf.extend((0..16).filter(|&r| reads >> r & 1 != 0).map(|r| regs[r]));"
+new = "    let _ = regs;"
+
+[[break]]
+name = "a context is numbered without the near bytes"
+file = "crates/jennings-core/src/memo/fibre.rs"
+old = "        key.extend(near.cells.iter().map(|&a| self.shadow[a as usize]));"
+new = "        let _ = near;"
+
+[[break]]
+name = "the base is not compared where a segment rejoins"
+file = "crates/jennings-core/src/memo/fibre.rs"
+old = "        same && over.iter().all(held)"
+new = """        let _ = (same, held);
+        true"""
+
+[[break]]
+name = "the base is not compared where a tape is joined"
+file = "crates/jennings-core/src/memo/fibre.rs"
+old = "        (same && frame.into_iter().all(|(&a, &v)| memo.bus.peek(a) == v)).then_some(stale)"
+new = """        let _ = frame;
+        same.then_some(stale)"""
+
+[[break]]
+name = "live registers are not tested where a held segment ends"
+file = "crates/jennings-core/src/memo/fibre.rs"
+old = """            if after.mask & ends.must != 0 {
+                held = false;
+                break;
+            }"""
+new = ""
+
+[[break]]
+name = "live registers are not tested where a learned segment ends"
+file = "crates/jennings-core/src/memo/fibre.rs"
+old = """            if stale.mask & ends.must != 0 {
+                rejoined = false;
+                break;
+            }"""
+new = ""
+
+[[break]]
+name = "the registers the last call leaves are not carried to the first"
+file = "crates/jennings-core/src/memo/fibre.rs"
+old = "            self.stale.mask |= ((now != tape.wrap.was[r]) as u16) << r;"
+new = ""
+
+[[break]]
+name = "registers written between segments stay stale"
+file = "crates/jennings-core/src/memo/fibre.rs"
+old = "            fx.stale.mask &= seg.kept;"
+new = ""
+
+[[break]]
+name = "fibre writes between segments are not applied"
+file = "crates/jennings-core/src/memo/fibre.rs"
+old = """            for &w in tape.lists.get(seg.pre) {
+                poke(memo.bus, w);
+            }"""
+new = ""
+command = "cargo test -p jennings-core --lib memo::fibre"
+
+[[break]]
+name = "a call not held leaves the fibre writes made before it was found so"
+file = "crates/jennings-core/src/memo/fibre.rs"
+old = """            for &(addr, old) in fx.undo.iter().rev() {
+                memo.bus.poke(addr, old);
+            }"""
+new = ""
+
+[[break]]
+name = "a tape given up is tried again at once"
+file = "crates/jennings-core/src/memo/fibre.rs"
+old = "<< fx.fails.min(24);"
+new = "<< 0;"
+
+[[break]]
+name = "equal states of calls run by the tape hash apart"
+file = "crates/jennings-core/src/memo/fibre.rs"
+old = "        let h = tape.hb[fx.phase].wrapping_add(fx.hash);"
+new = "        let h = tape.hb[fx.phase].wrapping_add(fx.hash).wrapping_add(fx.k as u64);"
+
+[[break]]
+name = "a candidate repeat run by the tape is compared without its state put back"
+file = "crates/jennings-core/src/memo.rs"
+old = "            if taped && run.settle(cpu, k).is_some() {"
+new = "            if false && run.settle(cpu, k).is_some() {"
+
+[[break]]
+name = "a run ending under a tape does not put the last state back"
+file = "crates/jennings-core/src/memo/fibre.rs"
+old = """        if self.fx.taped() {
+            self.settle(cpu, k);
+        }"""
+new = ""
+
+[[break]]
+name = "the cycle limit is not applied to a call run by the tape"
+file = "crates/jennings-core/src/memo/fibre.rs"
+old = "            held = cpu.cycles < end;"
+new = "            held = cpu.cycles < end || true;"
+
+[[break]]
+name = "a frame's base is not put back"
+file = "crates/jennings-core/src/memo/fibre.rs"
+old = """            for (&a, &v) in tape.w.iter().zip(&tape.frames[from.at * n..][..n]) {
+                memo.bus.poke(a, v);
+            }"""
+new = "            let _ = n;"
+
+[[break]]
+name = "the registers of the call put back are not"
+file = "crates/jennings-core/src/memo/fibre.rs"
+old = """        *cpu = from.cpu.clone().expect("anchored");"""
+new = """        cpu.pc = from.cpu.as_ref().expect("anchored").pc;"""
+
+[[break]]
+name = "a frame's last writes outside the tracked state are not put back"
+file = "crates/jennings-core/src/memo/fibre.rs"
+old = """                {
+                    memo.bus.poke(a, v);
+                }"""
+new = """                {
+                    let _ = (a, v);
+                }"""
+
+[[break]]
+name = "a segment's writes outside the tracked state are not timed"
+file = "crates/jennings-core/src/memo/fibre.rs"
+old = "                fx.wrote[a] = (fx.k as u64) << 8 | (2 * s as u64 + 1);"
+new = ""
+
+[[break]]
+name = "a first write does not end the tape"
+file = "crates/jennings-core/src/memo.rs"
+old = "            self.fib.dead = true;"
+new = ""
+
+[[break]]
+name = "registers live at a call's entry are not looked for"
+file = "crates/jennings-core/src/memo/fibre.rs"
+old = "        if live[0] & !self.guess != 0 {"
+new = "        if false {"
+command = "cargo test -p jennings-core --lib memo::fibre"
+
+[[break]]
+name = "a segment's end is counted from its first unit"
+file = "crates/jennings-core/src/memo.rs"
+old = "                        if at == pc && !first {"
+new = "                        if at == pc {"
+
+[[break]]
+name = "the PC a segment ends the call at is not compared"
+file = "crates/jennings-core/src/memo/fibre.rs"
+old = "                None => stop == Stop::Sp && cpu.pc == shape.last,"
+new = "                None => stop == Stop::Sp,"
