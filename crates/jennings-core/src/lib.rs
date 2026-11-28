@@ -5,7 +5,8 @@
 //! entry's calls until its state repeats, and [`memo`] does without emulating what it has
 //! seen; [`taint`] learns how a call's state depends on the
 //! state before it, from the classes of calls a [`census`] finds; [`period`] finds where a
-//! trajectory repeats.
+//! trajectory repeats; [`segments`] cuts calls at chosen PCs and says what each part reads
+//! before writing and what it leaves.
 
 pub mod access;
 pub mod bus;
@@ -21,6 +22,7 @@ pub mod memo;
 pub mod orbit;
 pub mod period;
 pub mod run;
+pub mod segments;
 pub mod taint;
 
 pub use access::{access_key, base_of, Accesses, Base, Redirect, Remap, AS_IS, ZERO};
@@ -32,4 +34,7 @@ pub use memo::{memo_orbit, memo_orbit_fibre, Grain, MemoStats};
 pub use orbit::{orbit, End, Orbit};
 pub use period::{periods, Period};
 pub use run::{run_to_rts, run_until, AddrSet, Periodic, Stop, Trace, Until};
+pub use segments::{
+    cut_calls, Cut, Differs, Fed, Left, Odd, Segment, BASE, MAX_FORKS, MAX_SEGMENTS,
+};
 pub use taint::{cells_digest, learn, trajectory, Learn, Learned, CONST, REG, STATE_REGS};

@@ -11,9 +11,10 @@ use std::ffi::{c_int, c_void};
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering};
 
 use jennings_core::{
-    cells_digest, memo_orbit, memo_orbit_fibre, orbit, periods, run_to_rts, run_until, trajectory,
-    Access, Accesses, AddrSet, Bus, Census, Cpu, End, FlatBus, FlatMemory, Grain, Hooks, Learn,
-    Periodic, RamBus, Remap, Stop, Trace, Until, CONST, REG,
+    cells_digest, cut_calls, memo_orbit, memo_orbit_fibre, orbit, periods, run_to_rts, run_until,
+    trajectory, Access, Accesses, AddrSet, Bus, Census, Cpu, End, FlatBus, FlatMemory, Grain,
+    Hooks, Learn, Periodic, RamBus, Remap, Segment, Stop, Trace, Until, BASE, CONST, MAX_FORKS,
+    MAX_SEGMENTS, REG,
 };
 use pyo3::buffer::PyBuffer;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -1310,6 +1311,101 @@ impl Core {
         ))
     }
 
+    /// `calls` calls of `pc` with `acc` (each as `run_to_rts`, `remap` applied), after `lead`
+    /// calls of it, cut into segments where they arrive at a PC of `cuts`, runs reading a
+    /// `free` `(segment, location)` made again with each of its `values`
+    /// (`jennings_core::cut_calls`). A dict of `stop` ("sp" unless the last call run ended
+    /// otherwise), `calls`, `odd` (None or `(call, segment, pc, fork)`), `forks`, per segment
+    /// `starts`, `runs` and `cycles`, `entry` (a byte per location), little-endian uint64
+    /// `feed` and `stores` (`segment << 32 | loc << 9 | varies << 8 | value`), uint32 `stored`
+    /// (the runs storing each of `stores`), `accesses`, `edges`, `fork_accesses`, `fork_edges`
+    /// (as `orbit` gives them), `arrivals` (`pc << 32 | n`), and lists `values`
+    /// (`(location, value)`) and `differs` (`(segment, free, location)`).
+    #[pyo3(signature = (pc, acc, max_cycles, calls, cuts, remap=None, lead=0, free=None, values=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn cut_calls<'py>(
+        &self,
+        py: Python<'py>,
+        pc: u16,
+        acc: i64,
+        max_cycles: u64,
+        calls: usize,
+        cuts: Vec<u16>,
+        remap: Option<&Bound<'py, PyRemap>>,
+        lead: usize,
+        free: Option<Vec<(usize, u32)>>,
+        values: Option<Vec<(u32, u8)>>,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let (free, values) = (free.unwrap_or_default(), values.unwrap_or_default());
+        locations(free.iter().map(|f| f.1).collect())?;
+        locations(values.iter().map(|v| v.0).collect())?;
+        if free.iter().any(|f| f.0 >= MAX_SEGMENTS) {
+            return Err(PyValueError::new_err(
+                "a segment is numbered below MAX_SEGMENTS",
+            ));
+        }
+        let cuts: AddrSet = cuts.into_iter().collect();
+        let rm = remap.map(|r| &r.get().0);
+        let (cut, stop) = self.drive(py, true, |cpu, bus, stop| {
+            on_ram!(bus, |b| cut_calls(
+                cpu,
+                b,
+                pc,
+                acc as u8,
+                max_cycles,
+                lead,
+                calls,
+                &cuts,
+                &free,
+                &values,
+                rm,
+                || stop.load(Ordering::Relaxed) && stop.swap(false, Ordering::Relaxed),
+            ))
+        })?;
+        let key = |seg: usize, loc: u32, value: Option<u8>| {
+            (seg as u64) << 32
+                | (loc as u64) << 9
+                | (value.is_none() as u64) << 8
+                | value.unwrap_or(0) as u64
+        };
+        let segs = cut.segments.iter().enumerate();
+        let feed: Vec<u64> = segs
+            .clone()
+            .flat_map(|(n, s)| s.feed.iter().map(move |f| key(n, f.loc, f.value)))
+            .collect();
+        let stores: Vec<u64> = segs
+            .flat_map(|(n, s)| s.stores.iter().map(move |f| key(n, f.loc, f.value)))
+            .collect();
+        let stored = cut.segments.iter().flat_map(|s| &s.stores);
+        let stored: Vec<u8> = stored.flat_map(|f| f.runs.to_le_bytes()).collect();
+        let arrivals = cut.arrivals.iter();
+        let arrivals: Vec<u64> = arrivals
+            .map(|&(p, n)| (p as u64) << 32 | n as u64)
+            .collect();
+        let per = |f: fn(&Segment) -> u64| cut.segments.iter().map(f).collect::<Vec<u64>>();
+        let differs = cut.differs.iter().map(|d| (d.segment, d.free, d.loc));
+        let d = PyDict::new(py);
+        d.set_item("stop", reason(stop))?;
+        d.set_item("calls", cut.calls)?;
+        d.set_item("odd", cut.odd.map(|o| (o.call, o.segment, o.pc, o.fork)))?;
+        d.set_item("forks", cut.forks)?;
+        d.set_item("starts", per(|s| s.pc as u64))?;
+        d.set_item("runs", per(|s| s.runs as u64))?;
+        d.set_item("cycles", per(|s| s.cycles))?;
+        d.set_item("entry", PyBytes::new(py, &cut.entry))?;
+        d.set_item("feed", PyBytes::new(py, &le(&feed)))?;
+        d.set_item("stores", PyBytes::new(py, &le(&stores)))?;
+        d.set_item("stored", PyBytes::new(py, &stored))?;
+        d.set_item("accesses", PyBytes::new(py, &le(&cut.accesses)))?;
+        d.set_item("edges", PyBytes::new(py, &le(&cut.edges)))?;
+        d.set_item("fork_accesses", PyBytes::new(py, &le(&cut.fork_accesses)))?;
+        d.set_item("fork_edges", PyBytes::new(py, &le(&cut.fork_edges)))?;
+        d.set_item("arrivals", PyBytes::new(py, &le(&arrivals)))?;
+        d.set_item("values", cut.values)?;
+        d.set_item("differs", differs.collect::<Vec<_>>())?;
+        Ok(d)
+    }
+
     /// `calls` calls of `pc` with `acc` (each as `run_to_rts`, `remap` applied), each preceded
     /// by the values of `cells` (locations as `orbit` takes them): `(stop, rows)`, `rows` one
     /// byte per cell per call and `stop` "sp" unless a call ended otherwise (it is the last).
@@ -1718,5 +1814,8 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(periods_of, m)?)?;
     m.add("REG", REG)?;
     m.add("CONST", CONST)?;
+    m.add("BASE", BASE)?;
+    m.add("MAX_SEGMENTS", MAX_SEGMENTS)?;
+    m.add("MAX_FORKS", MAX_FORKS)?;
     Ok(())
 }

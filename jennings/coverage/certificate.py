@@ -1,8 +1,9 @@
 """A cover claim as a certificate, and its check by replay (``docs/coverage.md``).
 
-:func:`certify` records what :func:`~jennings.coverage.components.cover_calls` claims,
-:func:`verify` checks it from the certificate alone and :func:`closure` runs on to the first
-repeat of the whole state.
+:func:`certify` records what :func:`~jennings.coverage.components.cover_calls` claims, or
+where the feed locations do not repeat what :func:`~jennings.coverage.segments.propose` finds;
+:func:`verify` checks either from the certificate alone and :func:`closure` runs on to the
+first repeat of the whole state.
 """
 
 import hashlib
@@ -10,17 +11,19 @@ import math
 import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, replace
 
 import numpy as np
 from tqdm import tqdm
 
 from jennings import memo
 from jennings.coverage import components as C
+from jennings.coverage import segments as S
 from jennings.devices.mpu6502 import REG, Census, Learner, periods_of
 
 __all__ = [
     "Certificate",
+    "Segmented",
     "Open",
     "Verdict",
     "Closure",
@@ -29,6 +32,8 @@ __all__ = [
     "TAINTS",
     "state_digest",
     "remap_digest",
+    "from_dict",
+    "by_segments",
     "certify",
     "verify",
     "closure",
@@ -39,13 +44,39 @@ CARRIED = (REG + 3, REG + 12)
 #: Every register a call hands the next (A is set at each call): X, Y, SP and the flags.
 REGISTERS = tuple(REG + i for i in (1, 2, 3, 8, 9, 10, 11, 12, 13, 14))
 _STAGE = 4
+#: The calls, in those the components are learned over, that the feed locations are looked for
+#: a repeat in before segments are tried.
+_PROBE = 4
 _LOAD, _STORE = C.ACCESSES.index("load"), C.ACCESSES.index("store")
 _SITE = {0: "address", 1: "address", 2: "control"}
 _WHAT = {0: "the address of the load", 1: "the address of the store", 2: "where control goes"}
 
 
+def _nested(value, kind):
+    """``value`` with every list or tuple in it, at any depth, made a ``kind``."""
+    if isinstance(value, (list, tuple)):
+        return kind(_nested(v, kind) for v in value)
+    return value
+
+
+class _Claim:
+    """A certificate's fields to and from JSON-serialisable values."""
+
+    def to_dict(self):
+        """This certificate as JSON-serialisable values."""
+        held = {f.name: getattr(self, f.name) for f in fields(self)}
+        acc = [[pc, kind, list(at)] for (pc, kind), at in sorted(held["accesses"].items())]
+        return {**{k: _nested(v, list) for k, v in held.items()}, "accesses": acc}
+
+    @classmethod
+    def from_dict(cls, d):
+        """The certificate :meth:`to_dict` gave ``d`` of."""
+        acc = {(pc, kind): tuple(at) for pc, kind, at in d["accesses"]}
+        return cls(**{**{k: _nested(v, tuple) for k, v in d.items()}, "accesses": acc})
+
+
 @dataclass(frozen=True)
-class Certificate:
+class Certificate(_Claim):
     """What a cover claim asserts for one state and entry.
 
     Attributes:
@@ -81,38 +112,59 @@ class Certificate:
         """The calls claimed to make every access and take every edge."""
         return self.preperiod + self.period
 
-    def to_dict(self):
-        """This certificate as JSON-serialisable values."""
-        return {
-            "state": self.state,
-            "pc": self.pc,
-            "acc": self.acc,
-            "max_cycles": self.max_cycles,
-            "exclude": [list(r) for r in self.exclude],
-            "remap": self.remap,
-            "feed": list(self.feed),
-            "preperiod": self.preperiod,
-            "period": self.period,
-            "accesses": [[pc, kind, list(at)] for (pc, kind), at in sorted(self.accesses.items())],
-            "edges": [list(e) for e in self.edges],
-        }
 
-    @classmethod
-    def from_dict(cls, d):
-        """The certificate :meth:`to_dict` gave ``d`` of."""
-        return cls(
-            state=d["state"],
-            pc=d["pc"],
-            acc=d["acc"],
-            max_cycles=d["max_cycles"],
-            exclude=tuple((lo, hi) for lo, hi in d["exclude"]),
-            remap=d["remap"],
-            feed=tuple(d["feed"]),
-            preperiod=d["preperiod"],
-            period=d["period"],
-            accesses={(pc, kind): tuple(at) for pc, kind, at in d["accesses"]},
-            edges=tuple((a, b) for a, b in d["edges"]),
-        )
+@dataclass(frozen=True)
+class Segmented(_Claim):
+    """What a cover claim by segments asserts for one state and entry.
+
+    Attributes:
+        state, pc, acc, max_cycles, remap, accesses, edges: as :class:`Certificate` has them.
+        volatile: ``(lo, hi)`` half-open address ranges no segment reads before writing.
+        cuts: the PCs a call is cut at where it arrives at one after its first instruction.
+        lead: the calls before the first one cut.
+        free: ``(segment, location)``: locations other segments store that the segment's
+            state does not depend on, whichever of their values they hold.
+        values: ``(location, values)``: every value each of those holds where a segment ends.
+        starts: the PC each segment of a call starts at.
+        cycles: per segment the ``(preperiod, period)`` of its state: the entries of calls
+            ``preperiod`` and ``preperiod + period`` are the first two from call ``lead`` on
+            that are alike on it.
+        feed: the locations of any segment's state, ascending.
+        calls: the calls claimed to make every access and take every edge: every segment's
+            state has repeated within them.
+    """
+
+    state: str
+    pc: int
+    acc: int
+    max_cycles: int
+    remap: str | None
+    volatile: tuple
+    cuts: tuple
+    lead: int
+    free: tuple
+    values: tuple
+    starts: tuple
+    cycles: tuple
+    feed: tuple
+    calls: int
+    accesses: dict = field(repr=False)
+    edges: tuple = field(repr=False)
+
+    @property
+    def preperiod(self):
+        """The first call from whose entry on every segment's state is in its cycle."""
+        return max(mu for mu, _ in self.cycles)
+
+    @property
+    def period(self):
+        """The calls after which the segments' states are all together as they were."""
+        return math.lcm(*(lam for _, lam in self.cycles))
+
+
+def from_dict(d):
+    """The :class:`Certificate` or :class:`Segmented` whose ``to_dict`` gave ``d``."""
+    return (Segmented if "cuts" in d else Certificate).from_dict(d)
 
 
 @dataclass(frozen=True)
@@ -127,12 +179,14 @@ class Open:
             with the locations they depend on repeated at no entry although those did.
         period: the least common multiple of the periods of the sets that did repeat with the
             locations they depend on; the feed locations' period is a multiple of it.
+        segments: why no :class:`Segmented` was found either; not compared.
     """
 
     calls: int
     feed: tuple
     unrepeated: tuple
     period: int
+    segments: str = field(default="", compare=False)
 
 
 @dataclass(frozen=True)
@@ -146,7 +200,12 @@ class Verdict:
             ``"repeat"`` (the feed locations at ``preperiod`` and ``preperiod + period`` differ,
             or repeat before), ``"accesses"``, ``"edges"`` (the replay makes one the certificate
             lacks), ``"address"``, ``"control"`` (a location outside the feed set taints one)
-            or ``"autonomy"`` (one taints a feed location's end-of-call value).
+            or ``"autonomy"`` (one taints a feed location's end-of-call value). Of a
+            :class:`Segmented`, ``"repeat"`` is a segment's state not repeating as certified,
+            ``"autonomy"`` one not going on as its repeat has it, and there are
+            ``"segments"`` (the calls are not cut alike, or not as certified), ``"volatile"``
+            (a segment reads a volatile address before writing it) and ``"cycles"`` (the
+            segments' longest runs could together pass ``max_cycles``).
         detail: that failure in words.
         calls: the calls replayed.
         accesses: ``(pc, kind)`` to the addresses the certificate lists that no replayed call
@@ -154,7 +213,9 @@ class Verdict:
         edges: the edges the certificate lists that no replayed call takes.
         assumed: locations in the certificate's ``exclude`` ranges that some call reads before
             writing, some call writes, and that taint an address, a control transfer or a feed
-            location: the claim holds where they carry no state.
+            location: the claim holds where they carry no state. Of a :class:`Segmented`, the
+            ``volatile`` addresses a segment loads after storing to them: the claim holds
+            where they read back what was stored.
     """
 
     ok: bool
@@ -288,6 +349,59 @@ def _open(comps, ran):
     return Open(len(rows), tuple(sorted(comps.feed)), tuple(sorted(unrepeated)), period)
 
 
+def _volatile(spans):
+    """``spans`` less the stack page, which a :class:`Segmented` takes as it is."""
+    out = []
+    for lo, hi in spans:
+        out += [(lo, min(hi, C.STACK.start)), (max(lo, C.STACK.stop), hi)]
+    return tuple((lo, hi) for lo, hi in out if lo < hi)
+
+
+# pylint: disable-next=too-many-arguments
+def by_segments(
+    state,
+    pc,
+    limit,
+    *,
+    acc=0,
+    max_cycles=C.MAX_CYCLES,
+    remap=None,
+    remap_id=None,
+    exclude=(C.STACK, C.IO),
+    learn=C.CHUNK,
+):
+    """``(certificate, found)``: the :class:`Segmented` of the cuts
+    :func:`~jennings.coverage.segments.propose` finds for ``pc`` called from ``state``, and
+    their :class:`~jennings.coverage.segments.Found`; arguments as :func:`certify` takes them.
+
+    Raises:
+        jennings.coverage.segments.Refused: no cuts are found within ``limit`` calls.
+    """
+    remap_id, volatile = _remap_id(remap, remap_id), _volatile(_spans(exclude))
+    kw = {"acc": acc, "max_cycles": max_cycles}
+    cuts, free, values, found = S.propose(
+        state, pc, limit, volatile=volatile, learn=learn, remap=remap, **kw
+    )
+    cert = Segmented(
+        state=state_digest(state),
+        pc=pc,
+        remap=remap_id,
+        volatile=volatile,
+        cuts=tuple(cuts),
+        lead=found.trace.lead,
+        free=tuple(free),
+        values=tuple(sorted(values.items())),
+        starts=found.trace.starts,
+        cycles=found.cycles,
+        feed=found.feed,
+        calls=found.trace.lead + found.trace.calls,
+        accesses=_accesses(found.trace.accesses),
+        edges=_edges(found.trace.edges),
+        **kw,
+    )
+    return cert, found
+
+
 # pylint: disable-next=too-many-arguments
 def certify(
     state,
@@ -302,30 +416,57 @@ def certify(
     learn=C.CHUNK,
 ):
     """The :class:`Certificate` of the cover point of ``pc`` called from ``state``, as
-    :func:`~jennings.coverage.components.cover` finds it; an :class:`Open` where the feed
-    locations do not repeat within ``limit`` calls. Raises :class:`RuntimeError` where a call
-    does not return or the feed locations do not settle.
+    :func:`~jennings.coverage.components.cover` finds it. Where the feed locations do not
+    repeat within ``limit`` calls, the :class:`Segmented` of the cuts
+    :func:`~jennings.coverage.segments.propose` finds, else an :class:`Open`.
 
     Args:
         state: as :func:`~jennings.coverage.components.machine` takes it.
         acc, max_cycles, remap, exclude: as
-            :func:`~jennings.coverage.components.cover` takes them.
+            :func:`~jennings.coverage.components.cover` takes them. For a :class:`Segmented`
+            the ranges of ``exclude`` outside the stack page are its ``volatile``.
         remap_id: the :func:`remap_digest` of ``remap``, given with it.
         learn: the calls the components are first learned over (``cover``'s ``first``).
+
+    Raises:
+        RuntimeError: a call does not return or the feed locations do not settle.
     """
     remap_id, spans = _remap_id(remap, remap_id), _spans(exclude)
+    kw = {"acc": acc, "max_cycles": max_cycles, "remap": remap}
+    exclude = tuple(range(lo, hi) for lo, hi in spans)
+    learned = min(learn, limit)
+    comps = C.learn(state, pc, learned, exclude=exclude, **kw)
+    ran = C.Calls(state, pc, comps.persistent, **kw)
+
+    def segmented():
+        try:
+            return by_segments(
+                state, pc, limit, remap_id=remap_id, exclude=spans, learn=learn, **kw
+            )
+        except S.Refused as e:
+            return "%s: %s" % (e.failed, e.detail)
+
+    cut = None
+    probe = min(limit, _PROBE * learned)
+    if probe < limit and ran.repeat(comps.feed, probe, learned) is None and ran.failed is None:
+        cut = segmented()
+        if not isinstance(cut, str) and S.never_repeats(cut[1], comps.feed, limit):
+            return cut[0]
     calls, comps, ran = C.cover(
         state,
         pc,
         limit,
-        acc=acc,
-        max_cycles=max_cycles,
-        remap=remap,
-        exclude=tuple(range(lo, hi) for lo, hi in spans),
+        exclude=exclude,
         first=learn,
+        start=lambda cells: ran if tuple(cells) == ran.cells else None,
+        comps=comps,
+        **kw,
     )
     if calls is None:
-        return _open(comps, ran)
+        cut = cut or segmented()
+        if isinstance(cut, str):
+            return replace(_open(comps, ran), segments=cut)
+        return cut[0]
     feed = tuple(sorted(comps.feed))
     preperiod = _first_repeat(ran.rows(calls + 1, feed), calls)
     return Certificate(
@@ -349,7 +490,12 @@ def _mismatch(state, cert, remap_id):
         return "the state is not the one certified"
     if remap_id != cert.remap:
         return "the remap is not the one certified"
-    if cert.preperiod < 0 or cert.period < 1:
+    if isinstance(cert, Segmented):
+        if len(cert.cycles) != len(cert.starts) or not 0 <= cert.lead < cert.calls:
+            return "a cycle per segment, and a cut call"
+        if any(mu < cert.lead or lam < 1 for mu, lam in cert.cycles):
+            return "a preperiod is at least the leading calls and a period at least 1"
+    elif cert.preperiod < 0 or cert.period < 1:
         return "a preperiod is at least 0 and a period at least 1"
     return None
 
@@ -510,11 +656,76 @@ def _uncertified(name, key):
     return how + " is not certified"
 
 
+def _lacking(acc, edges, mine, theirs):
+    """``(condition, detail)`` of the first access or edge key of ``acc`` and ``edges`` that
+    the certificate's ``mine`` and ``theirs`` lack, None where they lack none."""
+    for name, new in (
+        ("accesses", np.setdiff1d(acc, mine)),
+        ("edges", np.setdiff1d(edges, theirs)),
+    ):
+        if new.size:
+            return name, _uncertified(name, int(new[0]))
+    return None
+
+
+def _claimed(cert, found):
+    """``(condition, detail)`` of the first of ``cert``'s claims of its segments that
+    ``found`` does not bear out, None where it bears out all."""
+    trace = found.trace
+    if trace.starts != cert.starts:
+        how = "the calls have %d segments, from %s, not those certified"
+        return "segments", how % (len(trace.starts), " ".join("$%04X" % p for p in trace.starts))
+    for seg, (got, mine) in enumerate(zip(found.cycles, cert.cycles)):
+        if got != mine:
+            cells = " ".join(C.location(c) for c in found.parts.cells[seg][:8])
+            how = "no entry within the calls" if got is None else "the entries of calls %d and %d"
+            how %= () if got is None else (got[0], sum(got))
+            which = "segment %d (from $%04X)" % (seg, trace.starts[seg])
+            return "repeat", "the state of %s (%s) repeats at %s" % (which, cells, how)
+    if found.feed != cert.feed:
+        odd = sorted(set(found.feed) ^ set(cert.feed))[0]
+        return "repeat", "%s is of a segment's state or of the feed, not both" % C.location(odd)
+    return None
+
+
+def _verify_segments(state, cert, remap):
+    """The :class:`Verdict` on the :class:`Segmented` ``cert`` for ``state``."""
+    try:
+        found = S.examine(
+            state,
+            cert.pc,
+            cert.calls,
+            cert.cuts,
+            lead=cert.lead,
+            free=cert.free,
+            values=dict(cert.values),
+            acc=cert.acc,
+            max_cycles=cert.max_cycles,
+            remap=remap,
+            volatile=cert.volatile,
+        )
+    except RuntimeError as e:
+        return Verdict(False, "replay", str(e), calls=cert.calls)
+    except S.Refused as e:
+        return Verdict(False, e.failed, e.detail, calls=cert.calls)
+    acc, edges = found.trace.accesses, found.trace.edges
+    mine, theirs = _access_keys(cert.accesses), _edge_keys(cert.edges)
+    seen = {
+        "calls": cert.calls,
+        "accesses": _accesses(np.setdiff1d(mine, acc)),
+        "edges": _edges(np.setdiff1d(theirs, edges)),
+        "assumed": found.assumed,
+    }
+    failure = _claimed(cert, found) or _lacking(acc, edges, mine, theirs)
+    return Verdict(False, *failure, **seen) if failure else Verdict(True, **seen)
+
+
 def verify(state, certificate, *, remap=None, remap_id=None, taint="calls"):
     """The :class:`Verdict` on ``certificate`` for ``state``, by replay of its calls.
 
     Checked in the order :attr:`Verdict.failed` lists; the taint is by data alone, of every
-    location some replayed call writes.
+    location some replayed call writes. A :class:`Segmented` is checked without a taint,
+    by :func:`~jennings.coverage.segments.examine` of its calls.
 
     Args:
         remap, remap_id: the remap certified under and its :func:`remap_digest`, if any.
@@ -525,6 +736,8 @@ def verify(state, certificate, *, remap=None, remap_id=None, taint="calls"):
     why = _mismatch(state, cert, _remap_id(remap, remap_id))
     if why:
         return Verdict(False, "input", why)
+    if isinstance(cert, Segmented):
+        return _verify_segments(state, cert, remap)
     failure, acc, edges = _replay(state, cert, remap)
     if failure:
         return Verdict(False, *failure, calls=cert.calls)
@@ -534,12 +747,9 @@ def verify(state, certificate, *, remap=None, remap_id=None, taint="calls"):
         "accesses": _accesses(np.setdiff1d(mine, acc)),
         "edges": _edges(np.setdiff1d(theirs, edges)),
     }
-    for name, new in (
-        ("accesses", np.setdiff1d(acc, mine)),
-        ("edges", np.setdiff1d(edges, theirs)),
-    ):
-        if new.size:
-            return Verdict(False, name, _uncertified(name, int(new[0])), **found)
+    lacking = _lacking(acc, edges, mine, theirs)
+    if lacking:
+        return Verdict(False, *lacking, **found)
     stores = acc[acc >> 16 & 1 == 1] & 0xFFFF
     written = np.union1d(stores, np.arange(C.STACK.start, C.STACK.stop))
     got = _TAINT[taint](state, cert, written.tolist(), remap).learned()

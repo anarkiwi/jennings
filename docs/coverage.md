@@ -662,9 +662,9 @@ learner that made it.
 ```python
 from jennings.coverage import certificate as V
 
-cert = V.certify(ram, play, 2_000_000)       # a Certificate, or an Open
+cert = V.certify(ram, play, 2_000_000)       # a Certificate, a Segmented (below), or an Open
 verdict = V.verify(ram, cert)                # Verdict: ok, failed, detail, ...
-json.dumps(cert.to_dict()); V.Certificate.from_dict(d)
+json.dumps(cert.to_dict()); V.from_dict(d)   # Certificate.from_dict or Segmented.from_dict
 V.closure(ram, cert, 20_000_000).ok          # opt-in: run to the whole state's first repeat
 ```
 
@@ -754,7 +754,8 @@ closure of the feed locations by the calls that first write it, and exceed
 `tools/memo_orbit.py`'s count, whose state is all RAM outside the volatile ranges and no
 registers.
 
-**Open** is what `certify` returns where the feed locations do not repeat within `limit`:
+**Open** is what `certify` returns where the feed locations do not repeat within `limit`
+and no [certificate by segments](#certificates-by-segments) is found (`segments` says why):
 `calls` entries seen without a repeat, `unrepeated` the sets of mutually dependent feed
 locations that did not repeat although everything they depend on did, and `period` the least
 common multiple of the periods of the sets that did (with their dependences), which the feed
@@ -762,4 +763,169 @@ locations' period is a multiple of. Feed locations that each repeat but not yet 
 give no `unrepeated` set and a `period` to set the limit by.
 
 `tools/cover_verify.py --pc ADDR STATE...` certifies and verifies 64 KiB state dumps and
-prints calls, seconds and verdicts (`--taint`, `--closure LIMIT`, `--save`).
+prints calls, seconds and verdicts (`--taint`, `--closure LIMIT`, `--save`; `--segments`
+certifies by segments alone, `certificate.by_segments`).
+
+### Certificates by segments
+
+A routine that runs one piece of code once per voice has feed locations that repeat voice by
+voice, each with its own period, and together only after the least common multiple of the
+periods. `certify` then returns a `Segmented`: the claim that every part of a call has shown
+all it can do, each part by a repeat of its own state. It rests on determinism alone: no taint
+is used to make it or to check it.
+
+```python
+cert = V.certify(ram, play, 2_000_000)       # a Certificate, a Segmented, or an Open
+V.verify(ram, cert)                          # checks either
+cert.calls, cert.accesses, cert.edges        # as a Certificate has them
+cert.cuts, cert.lead, cert.cycles            # where a call is cut, calls left whole, (preperiod, period) per segment
+```
+
+**Segments.** A call is cut where it arrives at a PC of `cuts` after its first instruction,
+so it is a sequence of segments: from the entry to the first arrival, from each arrival to
+the next, from the last to the return. The first `lead` calls are left whole (a routine may
+start with calls unlike the rest); every later call must have the same number of segments,
+each starting at the same PC, so segment `n` is the same code in every call.
+
+A segment's *feed* is every location some run of it reads before writing: memory by any
+access (opcode and operand fetches, data, stack, vectors, the source of a remapped read),
+registers and flags as `flow_gen.rs` names each opcode's reads, and what the driver reads to
+tell that the call has returned: SP before each instruction, and `BASE`, the SP the call was
+entered with (location `REG + 15`, stored by the first segment of each call, which also
+pushes the return and sets A). A run is a function of the values its feed holds when it
+starts: two runs of a segment that find the same values there execute the same instructions,
+make the same accesses and stores and end alike.
+
+`jennings.coverage.segments.cut` runs the calls natively (`jennings_core::cut_calls`) and
+gives, per segment, each feed location with the one value every such read found (or that
+they differ), each location it stores with the number of runs storing it and the one value
+those runs left (or that they differ), and the most cycles a run took; with them the calls'
+accesses and edges and every location's value at the entry of call `lead`. `classify` sorts
+each feed location of a segment by who stores it:
+
+| | |
+|---|---|
+| constant | no segment stores it |
+| own | only this segment stores it |
+| held | others store it, and it holds one value `c` whenever the segment starts |
+| free | others store it, and it is given as free for the segment (below) |
+| shared | the rest: the segment *depends on* every other segment that stores it |
+
+A location is held at `c` where every read of it before a write found `c` and one of these
+holds, both read off the stores alone: going back from the segment through the segments
+before it in the call, then those after it in the call before, every segment that stores the
+location leaves `c` there in every run that stores it, up to one that stores it in every
+run; or every segment that stores it leaves `c` in every run that stores it, and it held `c`
+at the entry of call `lead`.
+
+A segment's *group* is the segment with every segment it depends on, directly or through
+others, and its *state* is the own and shared locations of the group's segments. `examine`
+records the state locations at the entry of every call (`trajectory`) and finds, per segment,
+the first two entries from call `lead` on that are alike on its state: its `(preperiod,
+period)`. `Found.calls` is the largest `preperiod + period`.
+
+**Free locations.** A cell that several voices read and write (a filter routing byte each
+voice sets its own bits of, a self-modified operand a table read runs into) would make every
+voice depend on every other. Given as free for a segment, it is instead taken to hold any of
+a set of `values`, and that is checked by running: a run that reads a free location of its
+segment before writing it is made again from its entry state with each other value, and so
+on for the free locations those runs read, so every run the segment can make from that entry
+state, whatever its free locations hold, is made. The runs made again count as runs of the
+segment (in what is fed, stored and left, and in the cycles), and `examine` requires that
+
+- wherever a call's run or a run made again ends, each free location holds one of its
+  `values`, as it does at the entry of call `lead`;
+- no run made again leaves a state location otherwise than the call's own run did (a free
+  location it was given and did not write is as it was given);
+- each ends where the call's own run did, and makes no access and takes no edge that no call
+  makes.
+
+**What a `Segmented` holds.** `state`, `pc`, `acc`, `max_cycles`, `remap`, `accesses` and
+`edges` as a `Certificate`; `volatile` (ranges no segment may feed on); `cuts`, `lead`,
+`free` (`(segment, location)` pairs) and `values`; and the claims `starts` (the PC of each
+segment), `cycles` (per segment), `feed` (the state locations) and `calls`. `preperiod` and
+`period` are the largest preperiod and the least common multiple of the periods: what the
+joint state would need.
+
+**verify** takes nothing else from it. It runs `examine` on `calls` calls with the
+certificate's `cuts`, `lead`, `free` and `values`, and returns the first condition that fails:
+
+| `failed` | condition |
+|---|---|
+| `input` | the state's digest and the remap's are the certificate's; a cycle per segment, each from call `lead` on |
+| `replay` | every call returns, and no more than `MAX_FORKS` runs are made again |
+| `segments` | every call from `lead` on has the first one's segments, at most `MAX_SEGMENTS`; every run made again ends where the call's did; the segments start at `starts` |
+| `cycles` | the segments' longest runs take at most `max_cycles` together |
+| `volatile` | no segment's feed has an address of `volatile` |
+| `values`, `accesses`, `edges`, `autonomy` | the requirements on runs made again, above |
+| `autonomy` | each state, from its first repeat on, goes on with that period to the last call |
+| `repeat` | each segment's state first repeats as `cycles` says, within `calls`; the state locations are `feed` |
+| `accesses`, `edges` | every access and edge of the calls is in the certificate |
+
+`Verdict.assumed` lists the `volatile` addresses a segment loads after storing to them: the
+claim holds where they read back what was stored, as flat RAM does.
+
+**Why these conditions give the claim.** Say a run is *seen* if a call from `lead` to
+`calls` made it, or it was made again. The claim is that every run of every segment in every
+later call is a seen run of that segment, by induction over the runs in the order they
+happen. Assume it of every run before run `R` of segment `j` in call `k`.
+
+- *What has been stored.* Every earlier run stored where a seen run of its segment did and
+  left what that run left. So memory no seen run stores still holds what it did; each
+  segment has stored only locations it is counted as storing, and left them with a value
+  counted for it; and each free location holds one of its `values`, since it did at the
+  entry of call `lead` and every seen run left one.
+- *Held locations.* If the location was held by the first rule, the last store to it before
+  `R` was by a segment in the walk back, at or after the one that stores it in every run
+  (that run exists: `k` is past the calls seen), and each of them leaves `c`. If by the
+  second, it held `c` at the entry of call `lead` and every store since left `c`. A read of
+  it in a call seen found `c` by the check on reads.
+- *The group's state.* Let `G` be the group of `j` and `x(k)` its state at the entry of call
+  `k`. Only segments of `G` store a location of that state: an own location is stored by its
+  segment alone, and a shared one makes every segment storing it a dependence. Within a
+  call, each run of a segment of `G` finds its own and shared locations as `x(k)` and the
+  earlier runs of `G`'s segments in the call left them. Those runs leave state locations as
+  the call's own run from the same entry does, whatever the free locations held, so `x(k+1)`
+  is a function of `x(k)`. `verify` saw `x` repeat with its period up to call `calls`, so
+  `x(k) = x(k')` for a call `k'` seen, with period `p` back from `k`.
+- *The run.* `R` therefore starts with the own and shared locations the run `R'` of `j` in
+  call `k'` started with, held locations at their values, constants as they were, and free
+  locations at some of their `values`. The runs made again from the entry state of `R'`
+  branch on every value of every free location read, so one of them (or `R'`) reads exactly
+  what `R` finds, and `R` is that run.
+
+So every later run is a seen run: its accesses and edges within the segment are among those
+seen, which are those of the calls; an edge from one segment into the next is from the last
+instruction of a seen run to the next segment's start; and the call returns within
+`max_cycles`, each run taking at most its segment's longest. Nothing is stored anywhere new,
+and the segments of every call are those of call `lead`.
+
+What is assumed is what a `Certificate` assumes of the machine and of having no input, but
+not of the stack page or of `exclude`: a stack byte a segment reads before writing is a feed
+location like any other, and a feed on `volatile` is refused, not assumed.
+
+**certify** learns the components and looks for a repeat of the feed locations in
+`_PROBE` (4) times the calls learned over. Where it finds one, or where no `Segmented` is
+found, it goes on as before, so a routine with a cover point gets the `Certificate` it got.
+Otherwise `segments.propose` looks for cuts: among the instructions every call of the later
+half of the calls arrives at the same number of times, more than once, by a backward edge or
+a `JSR` (`candidates`), it takes those that set most states apart; it makes every shared
+location free unless a run made again then leaves state otherwise, with the values seen where
+runs end, running the calls again until neither grows; and it doubles the calls, half of them
+left whole, until every state repeats, then tries fewer whole. That is a heuristic, checked
+by `examine` as `verify` would. A `Segmented` is returned without the cover point being
+looked for further only where it proves there is none within the limit
+(`segments.never_repeats`): the feed locations that are of a segment's state are, at the
+entry of call `k`, what they were at the matching entry of that state's cycle, and a hash of
+them that differs at every two entries up to the limit shows no two alike. Otherwise the
+cover point is looked for as before and its `Certificate` returned if found.
+
+`python tools/break_check.py tools/breaks/segments.toml` breaks each of these checks, and the
+bookkeeping of `cut_calls` under them, on purpose, one at a time, and checks that the tests
+then fail. `tools/cover_compare.py STATE --pc ADDR --orbit CALLS` certifies a state both ways
+and counts what a plain orbit to the whole state's first repeat adds to each certificate.
+
+`tools/cover_segments.py --pc ADDR STATE...` prints the cuts found (or given with `--cut`) and
+a row per segment: its start, what it depends on, what is held and free, its state and its
+cycle. `tools/cover_sites.py STATE --pc ADDR CELL...` lists and disassembles the instructions
+that load or store given cells.

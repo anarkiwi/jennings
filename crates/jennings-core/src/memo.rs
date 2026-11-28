@@ -158,7 +158,7 @@ pub struct MemoStats {
 }
 
 /// The registers (bit `r` for `PcodeVM` register `r`) opcode `op` reads and those it writes.
-fn reg_use(op: u8) -> (u16, u16) {
+pub(crate) fn reg_use(op: u8) -> (u16, u16) {
     let f = &FLOW[op as usize];
     let ins = f.outs.iter().map(|o| o.1);
     let all = ins
@@ -177,7 +177,7 @@ fn reg_use(op: u8) -> (u16, u16) {
 
 /// The registers by `PcodeVM` index.
 #[inline(always)]
-fn regs(cpu: &Cpu) -> [u8; 16] {
+pub(crate) fn regs(cpu: &Cpu) -> [u8; 16] {
     [
         cpu.a, cpu.x, cpu.y, cpu.sp, 0, 0, 0, 0, cpu.c, cpu.z, cpu.i, cpu.d, cpu.b, cpu.v, cpu.n, 0,
     ]
@@ -190,7 +190,7 @@ fn reg(cpu: &Cpu, r: u32) -> u8 {
 
 /// Set the registers of `mask` (bit `r` for index `r`, B never) from `to` and leave the rest.
 #[inline(always)]
-fn set_regs(cpu: &mut Cpu, mask: u32, to: [u8; 16]) {
+pub(crate) fn set_regs(cpu: &mut Cpu, mask: u32, to: [u8; 16]) {
     let pick = |r: usize, now: u8| if mask >> r & 1 != 0 { to[r] } else { now };
     cpu.a = pick(0, cpu.a);
     cpu.x = pick(1, cpu.x);

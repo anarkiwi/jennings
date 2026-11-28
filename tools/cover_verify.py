@@ -31,9 +31,13 @@ def _row(path, args):
     with open(path, "rb") as f:
         state = f.read()
     exclude = args.exclude or (STACK, IO)
-    cert, took = _timed(V.certify, state, args.pc, args.limit, exclude=exclude)
+    if args.segments:
+        (cert, _), took = _timed(V.by_segments, state, args.pc, args.limit, exclude=exclude)
+    else:
+        cert, took = _timed(V.certify, state, args.pc, args.limit, exclude=exclude)
     if isinstance(cert, V.Open):
         unrepeated = ["+".join("%04X" % c for c in cells) for cells in cert.unrepeated]
+        print("%s: no segments: %s" % (path, cert.segments), file=sys.stderr)
         return [path, "open at %d" % cert.calls, "%.1f" % took, "", unrepeated, cert.period]
     if args.save:
         with open(path + ".cert.json", "w", encoding="utf-8") as f:
@@ -62,6 +66,7 @@ def main(argv=None):
     ap.add_argument("--taint", action="append", choices=V.TAINTS, help="default calls")
     ap.add_argument("--closure", type=int, metavar="LIMIT", help="also run to state closure")
     ap.add_argument("--save", action="store_true", help="write STATE.cert.json")
+    ap.add_argument("--segments", action="store_true", help="certify by segments only")
     args = ap.parse_args(argv)
     args.taint = args.taint or ["calls"]
     head = ["state", "calls", "certify s"]
