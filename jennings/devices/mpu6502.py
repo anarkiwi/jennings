@@ -500,8 +500,9 @@ class NativeMPU(MPU):
         them) at each call's entry; ``stop`` ``"sp"`` unless the last call ended otherwise."""
         import numpy as np  # pylint: disable=import-outside-toplevel
 
-        stop, rows = self._core.trajectory(pc, acc, max_cycles, calls, list(cells), remap)
-        return stop, np.frombuffer(rows, np.uint8).reshape(-1, len(cells))
+        cells = list(cells)
+        stop, rows = self._core.trajectory(pc, acc, max_cycles, calls, cells or [0], remap)
+        return stop, np.frombuffer(rows, np.uint8).reshape(-1, len(cells) or 1)[:, : len(cells)]
 
     # pylint: disable-next=too-many-arguments,too-many-positional-arguments
     def learn(self, learner, pc, acc, max_cycles, calls, remap=None, census=None):

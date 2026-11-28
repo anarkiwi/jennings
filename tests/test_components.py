@@ -614,11 +614,26 @@ st  inc $0402
     assert (s["st"], C.VALUE) not in flows.sites
 
 
-def test_closures_are_sink_sccs_with_their_ancestors():
-    deps = {1: {2}, 2: {1, 3}, 3: {3}, 4: {3}, 5: set()}
-    cls, g = C.closures(deps, [1, 2, 3, 4, 5])
-    assert cls == (frozenset({5}), frozenset({3, 4}), frozenset({1, 2, 3}))
+def test_closures_are_the_sinks_of_a_condensation_closed_under_ancestors():
+    deps = {1: {2}, 2: {1, 3}, 3: {3}, 4: {3}, 5: set(), 6: {9}}
+    cells = [1, 2, 3, 4, 5, 6]
+    cond, sets, g = C.condensed(deps, cells)
+    assert {frozenset(cond.nodes[n]["members"]): sets[n] for n in cond} == {
+        frozenset({1, 2}): frozenset({1, 2, 3}),
+        frozenset({3}): frozenset({3}),
+        frozenset({4}): frozenset({3, 4}),
+        frozenset({5}): frozenset({5}),
+        frozenset({6}): frozenset({6}),
+    }
     assert set(g.edges) == {(2, 1), (1, 2), (3, 2), (3, 4)}
+    cls, graph = C.closures(deps, cells)
+    assert cls == (
+        frozenset({5}),
+        frozenset({6}),
+        frozenset({3, 4}),
+        frozenset({1, 2, 3}),
+    )
+    assert set(graph.edges) == set(g.edges)
 
 
 # A Python reference of the native taint run, from dataflow.flow per executed instruction.

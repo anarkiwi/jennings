@@ -88,6 +88,23 @@ def test_run_to_rts_returns_on_balancing_rts():
     assert mpu.run_to_rts_until(0x1000, 0, {0x2000}, 1000) and mpu.pc == 0x2000
 
 
+def _jams_on_third_call():
+    mem = NativeMemory()
+    # INC $10; LDA $10; CMP #3; BNE +1; JAM; RTS
+    mem[0x1000:0x100A] = [0xE6, 0x10, 0xA5, 0x10, 0xC9, 0x03, 0xD0, 0x01, 0x02, 0x60]
+    return MPU(memory=mem)
+
+
+@pytest.mark.parametrize("calls, stop, rows", [(2, "sp", 2), (5, "jam", 3)])
+def test_trajectory_has_a_row_per_call_run_for_any_cells(calls, stop, rows):
+    got = _jams_on_third_call().trajectory(0x1000, 0, 1000, calls, [0x10])
+    assert got[0] == stop and got[1].tolist() == [[k] for k in range(rows)]
+    mpu = _jams_on_third_call()
+    got = mpu.trajectory(0x1000, 0, 1000, calls, [])
+    assert got[0] == stop and got[1].shape == (rows, 0) and got[1].dtype == np.uint8
+    assert mpu.memory[0x10] == min(calls, 3)
+
+
 def test_run_until_reasons():
     mem = NativeMemory()
     mem[0x1000:0x1003] = [0x4C, 0x00, 0x10]  # JMP $1000

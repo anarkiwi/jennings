@@ -40,6 +40,7 @@ __all__ = [
     "Calls",
     "learn",
     "explicit",
+    "condensed",
     "closures",
     "trajectory",
     "cycles",
@@ -210,21 +211,28 @@ def spans(exclude):
     return tuple(sorted(out))
 
 
-def closures(deps, cells):
-    """``(closures, graph)``: each sink SCC of the ``deps`` graph (``src -> loc``) over
-    ``cells`` with its ancestors, smallest first, and the graph."""
+def condensed(deps, cells):
+    """``(cond, sets, graph)``: the condensation of the ``deps`` graph (``src -> loc``) over
+    ``cells``, each of its nodes' members with its ancestors', and the graph."""
     cells = set(cells)
     g = nx.DiGraph()
     g.add_nodes_from(cells)
     g.add_edges_from((s, c) for c in cells for s in deps.get(c, ()) if s in cells and s != c)
     cond = nx.condensation(g)
-    out = []
-    for n in cond:
-        if cond.out_degree(n) == 0:
-            members = set(cond.nodes[n]["members"])
-            for a in nx.ancestors(cond, n):
-                members |= cond.nodes[a]["members"]
-            out.append(frozenset(members))
+    sets = {
+        n: frozenset(cond.nodes[n]["members"]).union(
+            *(cond.nodes[a]["members"] for a in nx.ancestors(cond, n))
+        )
+        for n in cond
+    }
+    return cond, sets, g
+
+
+def closures(deps, cells):
+    """``(closures, graph)``: each sink SCC of the ``deps`` graph (``src -> loc``) over
+    ``cells`` with its ancestors, smallest first, and the graph."""
+    cond, sets, g = condensed(deps, cells)
+    out = [sets[n] for n in cond if cond.out_degree(n) == 0]
     return tuple(sorted(out, key=lambda c: (len(c), min(c)))), g
 
 
