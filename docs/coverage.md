@@ -920,6 +920,17 @@ entry of call `k`, what they were at the matching entry of that state's cycle, a
 them that differs at every two entries up to the limit shows no two alike. Otherwise the
 cover point is looked for as before and its `Certificate` returned if found.
 
+The two advance together, so that a routine whose cover point comes late does not wait on
+segments that never close. `propose` counts every call it cuts and every run it makes again
+until every state repeats (trying fewer whole calls after that is not counted), and may run
+`_SPEND` (1) times the calls the repeat has been looked for in; to go past them, the repeat
+is looked for in twice as many calls first. Where it is found there, `propose` stops
+(`Refused("budget")`) and the `Certificate` is made as before, so segments cost at most
+about the cover point's calls; a cut that would pass the budget is given only the runs made
+again left under it (`cut(forks=)`), and run again under the larger one. Where segments
+close first, the repeat has been looked for in about as many calls as they took. Where the
+repeat is not found within the limit, `propose` runs on without a budget.
+
 `python tools/break_check.py tools/breaks/segments.toml` breaks each of these checks, and the
 bookkeeping of `cut_calls` under them, on purpose, one at a time, and checks that the tests
 then fail. `tools/cover_compare.py STATE --pc ADDR --orbit CALLS` certifies a state both ways

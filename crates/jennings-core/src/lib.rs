@@ -35,6 +35,7 @@ pub use orbit::{orbit, End, Orbit};
 pub use period::{periods, Period};
 pub use run::{run_to_rts, run_until, AddrSet, Periodic, Stop, Trace, Until};
 pub use segments::{
-    cut_calls, Cut, Differs, Fed, Left, Odd, Segment, BASE, MAX_FORKS, MAX_SEGMENTS,
+    cut_calls, cut_calls_within, Cut, Differs, Fed, Left, Odd, Segment, BASE, MAX_FORKS,
+    MAX_SEGMENTS,
 };
 pub use taint::{cells_digest, learn, trajectory, Learn, Learned, CONST, REG, STATE_REGS};

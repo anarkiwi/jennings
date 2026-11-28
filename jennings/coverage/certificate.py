@@ -47,6 +47,9 @@ _STAGE = 4
 #: The calls, in those the components are learned over, that the feed locations are looked for
 #: a repeat in before segments are tried.
 _PROBE = 4
+#: The calls segments may be cut and made again over, in those the feed locations have been
+#: looked for a repeat in; past them, the repeat is looked for in twice as many.
+_SPEND = 1
 _LOAD, _STORE = C.ACCESSES.index("load"), C.ACCESSES.index("store")
 _SITE = {0: "address", 1: "address", 2: "control"}
 _WHAT = {0: "the address of the load", 1: "the address of the store", 2: "where control goes"}
@@ -369,10 +372,12 @@ def by_segments(
     remap_id=None,
     exclude=(C.STACK, C.IO),
     learn=C.CHUNK,
+    afford=None,
 ):
     """``(certificate, found)``: the :class:`Segmented` of the cuts
     :func:`~jennings.coverage.segments.propose` finds for ``pc`` called from ``state``, and
-    their :class:`~jennings.coverage.segments.Found`; arguments as :func:`certify` takes them.
+    their :class:`~jennings.coverage.segments.Found`; ``afford`` as ``propose`` takes it, the
+    rest as :func:`certify` takes them.
 
     Raises:
         jennings.coverage.segments.Refused: no cuts are found within ``limit`` calls.
@@ -380,7 +385,7 @@ def by_segments(
     remap_id, volatile = _remap_id(remap, remap_id), _volatile(_spans(exclude))
     kw = {"acc": acc, "max_cycles": max_cycles}
     cuts, free, values, found = S.propose(
-        state, pc, limit, volatile=volatile, learn=learn, remap=remap, **kw
+        state, pc, limit, volatile=volatile, learn=learn, remap=remap, afford=afford, **kw
     )
     cert = Segmented(
         state=state_digest(state),
@@ -438,19 +443,33 @@ def certify(
     comps = C.learn(state, pc, learned, exclude=exclude, **kw)
     ran = C.Calls(state, pc, comps.persistent, **kw)
 
-    def segmented():
+    def segmented(afford=None):
         try:
             return by_segments(
-                state, pc, limit, remap_id=remap_id, exclude=spans, learn=learn, **kw
+                state, pc, limit, remap_id=remap_id, exclude=spans, learn=learn, afford=afford, **kw
             )
         except S.Refused as e:
-            return "%s: %s" % (e.failed, e.detail)
+            return None if e.failed == "budget" else "%s: %s" % (e.failed, e.detail)
+
+    bound, repeats = min(limit, _PROBE * learned), [False]
+
+    def afford(calls):
+        nonlocal bound
+        while not repeats[0] and int(_SPEND * bound) < calls:
+            if bound >= limit:
+                return None
+            bound = min(limit, 2 * bound)
+            repeats[0] = (
+                ran.repeat(comps.feed, bound, learned) is not None or ran.failed is not None
+            )
+        if repeats[0]:
+            raise S.Refused("budget", "the feed locations repeat within %d calls" % bound)
+        return int(_SPEND * bound)
 
     cut = None
-    probe = min(limit, _PROBE * learned)
-    if probe < limit and ran.repeat(comps.feed, probe, learned) is None and ran.failed is None:
-        cut = segmented()
-        if not isinstance(cut, str) and S.never_repeats(cut[1], comps.feed, limit):
+    if bound < limit and ran.repeat(comps.feed, bound, learned) is None and ran.failed is None:
+        cut = segmented(afford)
+        if isinstance(cut, tuple) and S.never_repeats(cut[1], comps.feed, limit):
             return cut[0]
     calls, comps, ran = C.cover(
         state,

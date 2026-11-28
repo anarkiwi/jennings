@@ -11,10 +11,10 @@ use std::ffi::{c_int, c_void};
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering};
 
 use jennings_core::{
-    cells_digest, cut_calls, memo_orbit, memo_orbit_fibre, orbit, periods, run_to_rts, run_until,
-    trajectory, Access, Accesses, AddrSet, Bus, Census, Cpu, End, FlatBus, FlatMemory, Grain,
-    Hooks, Learn, Periodic, RamBus, Remap, Segment, Stop, Trace, Until, BASE, CONST, MAX_FORKS,
-    MAX_SEGMENTS, REG,
+    cells_digest, cut_calls_within, memo_orbit, memo_orbit_fibre, orbit, periods, run_to_rts,
+    run_until, trajectory, Access, Accesses, AddrSet, Bus, Census, Cpu, End, FlatBus, FlatMemory,
+    Grain, Hooks, Learn, Periodic, RamBus, Remap, Segment, Stop, Trace, Until, BASE, CONST,
+    MAX_FORKS, MAX_SEGMENTS, REG,
 };
 use pyo3::buffer::PyBuffer;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -1320,8 +1320,9 @@ impl Core {
     /// `feed` and `stores` (`segment << 32 | loc << 9 | varies << 8 | value`), uint32 `stored`
     /// (the runs storing each of `stores`), `accesses`, `edges`, `fork_accesses`, `fork_edges`
     /// (as `orbit` gives them), `arrivals` (`pc << 32 | n`), and lists `values`
-    /// (`(location, value)`) and `differs` (`(segment, free, location)`).
-    #[pyo3(signature = (pc, acc, max_cycles, calls, cuts, remap=None, lead=0, free=None, values=None))]
+    /// (`(location, value)`) and `differs` (`(segment, free, location)`). Runs are made again
+    /// until `forks` are (0: `MAX_FORKS`).
+    #[pyo3(signature = (pc, acc, max_cycles, calls, cuts, remap=None, lead=0, free=None, values=None, forks=0))]
     #[allow(clippy::too_many_arguments)]
     fn cut_calls<'py>(
         &self,
@@ -1335,8 +1336,10 @@ impl Core {
         lead: usize,
         free: Option<Vec<(usize, u32)>>,
         values: Option<Vec<(u32, u8)>>,
+        forks: u64,
     ) -> PyResult<Bound<'py, PyDict>> {
         let (free, values) = (free.unwrap_or_default(), values.unwrap_or_default());
+        let forks = if forks == 0 { MAX_FORKS } else { forks };
         locations(free.iter().map(|f| f.1).collect())?;
         locations(values.iter().map(|v| v.0).collect())?;
         if free.iter().any(|f| f.0 >= MAX_SEGMENTS) {
@@ -1347,7 +1350,7 @@ impl Core {
         let cuts: AddrSet = cuts.into_iter().collect();
         let rm = remap.map(|r| &r.get().0);
         let (cut, stop) = self.drive(py, true, |cpu, bus, stop| {
-            on_ram!(bus, |b| cut_calls(
+            on_ram!(bus, |b| cut_calls_within(
                 cpu,
                 b,
                 pc,
@@ -1359,6 +1362,7 @@ impl Core {
                 &free,
                 &values,
                 rm,
+                forks,
                 || stop.load(Ordering::Relaxed) && stop.swap(false, Ordering::Relaxed),
             ))
         })?;
